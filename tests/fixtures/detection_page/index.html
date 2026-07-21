@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>baas-crawlpilot detection fixture</title>
+    <script src="detect.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Sample Article</h1>
+      <p>
+        This is the first paragraph of substantive body content, long enough
+        and distinct enough from surrounding chrome that trafilatura should
+        treat it as the main article rather than boilerplate noise.
+      </p>
+      <p>
+        A second paragraph continues the article with different wording, so
+        extraction tests have real multi-paragraph content to check against.
+      </p>
+    </article>
+    <nav>
+      <a href="#">Home</a>
+      <a href="#">About</a>
+    </nav>
+    <button id="probe-button">Click me</button>
+    <footer>Copyright 2026 Example Corp.</footer>
+    <pre id="baas-detection-result" style="display: none"></pre>
+  </body>
+</html>

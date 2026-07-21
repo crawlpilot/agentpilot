@@ -1,0 +1,94 @@
+[project]
+name = "baas-crawlpilot"
+version = "0.1.0"
+description = "Multi-tenant Browser-as-a-Service platform"
+requires-python = ">=3.12"
+dependencies = [
+    "patchright>=1.61.2",
+    "re-cdp-patches>=0.9.1",
+    "trafilatura>=2.1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "prometheus-client>=0.21",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-httpserver>=1.1",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["baas"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+
+[[tool.mypy.overrides]]
+module = ["baas.spi.*", "baas.driver.*"]
+strict = true
+
+[tool.importlinter]
+root_package = "baas"
+
+# P1/P2 packages (baas.session/identity/placement/control) don't exist yet in
+# P0 -- wrapped in parentheses per import-linter's "optional layer" syntax so
+# these contracts are already correct once those packages land, without
+# breaking `lint-imports` today.
+[[tool.importlinter.contracts]]
+name = "gateway -> session -> identity -> spi"
+type = "layers"
+layers = ["baas.gateway", "(baas.session)", "(baas.identity)", "baas.spi"]
+
+[[tool.importlinter.contracts]]
+name = "gateway -> placement -> spi"
+type = "layers"
+layers = ["baas.gateway", "(baas.placement)", "baas.spi"]
+
+[[tool.importlinter.contracts]]
+name = "gateway -> control -> spi"
+type = "layers"
+layers = ["baas.gateway", "(baas.control)", "baas.spi"]
+
+[[tool.importlinter.contracts]]
+name = "driver -> {extraction, egress} -> spi"
+type = "layers"
+layers = ["baas.driver", "baas.extraction | baas.egress", "baas.spi"]
+
+# "session/identity/control/placement never import driver" (a `forbidden`
+# contract) is deferred until P1 (session/identity) and P2 (control/placement)
+# actually create those packages -- `forbidden` contracts, unlike `layers`,
+# have no optional-module syntax and error hard on a missing module.
+
+[[tool.importlinter.contracts]]
+name = "only the composition root imports the concrete driver"
+type = "forbidden"
+source_modules = ["baas.gateway.routes", "baas.gateway.schemas", "baas.gateway.app"]
+forbidden_modules = ["baas.driver"]
+# routes/app reach the driver only *through* baas.gateway.wiring (the
+# composition root) -- that's the intended indirection, so only a *direct*
+# `import baas.driver` from these modules should trip this contract.
+allow_indirect_imports = true
