@@ -11,20 +11,35 @@ services:
     ports:
       - "8090:8090"
 
-  # gateway+worker (each with a purpose-built image) is the only topology
-  # this file offers -- `monolith` (one process, no HTTP hop to itself) is
-  # still a valid `BAAS_ROLE` for non-Docker use (`uv run uvicorn` locally,
-  # and this repo's own test suite), just no longer a compose service.
+  # gateway+worker (each with a purpose-built image) is the only process
+  # topology this file offers -- `monolith` (one process, no HTTP hop to
+  # itself) is still a valid `BAAS_ROLE` for non-Docker use (this repo's own
+  # test suite), just no longer a compose service.
   #
-  # Neither Redis nor Postgres is a service in this file. Both are run by
-  # the operator on their own host machine -- exactly how Firecrawl treats
-  # Supabase (a connection-string env var, no container) -- reached from
-  # inside these containers via `host.docker.internal`. Bring up your own
-  # before `docker compose up`, e.g.:
-  #   brew install redis postgresql@16 && brew services start redis postgresql@16
-  # then set BAAS_REDIS_URL / BAAS_DATABASE_URL below (a real `.env` file in
-  # the repo root, gitignored, is picked up automatically by compose's
-  # `${VAR:-}` substitution -- see `.env.example`).
+  # Redis and Postgres run as compose services too (below), each on its own
+  # named volume -- not host-installed. Reaching host-bound services from
+  # inside a container needs either the host's application firewall opened
+  # up per-process or a non-default bind address, both of which are a worse
+  # tradeoff for local dev than just running them here, on the same internal
+  # network as worker/gateway, with no host exposure at all.
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:6379:6379" # loopback-only, so you can still redis-cli/psql from the host for debugging/migrations
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: baas
+      POSTGRES_PASSWORD: baas
+      POSTGRES_DB: baas
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432" # loopback-only, so you can still redis-cli/psql from the host for debugging/migrations
 
   worker:
     build:
@@ -47,20 +62,15 @@ services:
     volumes:
       - profiles:/var/lib/baas/profiles
       - vault:/var/lib/baas/vault
-    extra_hosts:
-      - "host.docker.internal:host-gateway" # lets Linux Docker hosts resolve it too
     environment:
       BAAS_ROLE: worker
       BAAS_PROFILES_DIR: /var/lib/baas/profiles
-      # Registry/proxy-pinning degrade to in-memory/disabled if left unset,
-      # but the split topology only makes sense with a real, shared Redis
-      # both worker and gateway point at, e.g.:
-      #   BAAS_REDIS_URL=redis://host.docker.internal:6379/0
-      BAAS_REDIS_URL: ${BAAS_REDIS_URL:-}
+      BAAS_REDIS_URL: redis://redis:6379/0
       BAAS_VAULT_DIR: /var/lib/baas/vault
       BAAS_VAULT_KEY: ${BAAS_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
     depends_on:
       - detection-page
+      - redis
     # No published port -- internal-only, VPC-bound, never tenant-exposed
     # per plan.md's topology; only the `gateway` service talks to it.
 
@@ -71,30 +81,21 @@ services:
     # No `platform: linux/amd64` pin -- no Chrome, runs natively on arm64.
     ports:
       - "8000:8000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
       BAAS_ROLE: gateway
-      # Required, not optional, for this role -- _init_gateway() already
-      # raises if unset, since the cross-process session-routing table has
-      # no fallback. Same operator-run-Redis expectation as worker above.
-      BAAS_REDIS_URL: ${BAAS_REDIS_URL:-}
+      BAAS_REDIS_URL: redis://redis:6379/0
       BAAS_WORKER_URL: http://worker:8000
       # Gates `/v1/api-keys` (issuing/revoking tenant API keys) and nothing
       # else -- unset means that control-plane surface 401s unconditionally
       # (fails closed), not that auth is disabled fleet-wide.
       BAAS_ADMIN_TOKEN: ${BAAS_ADMIN_TOKEN:-}
-      # No `postgres` service exists here by design -- Postgres is an
-      # external, unmanaged-by-compose dependency you run yourself, exactly
-      # how Firecrawl treats Supabase. Unset -> falls back to an in-memory
-      # key store (dev-only, doesn't survive a restart, not shared across
-      # replicas). Point at a real Postgres you've already run `alembic
-      # upgrade head` against:
-      #   BAAS_DATABASE_URL=postgresql://baas:baas@host.docker.internal:5432/baas
-      BAAS_DATABASE_URL: ${BAAS_DATABASE_URL:-}
+      BAAS_DATABASE_URL: postgresql://baas:baas@postgres:5432/baas
     depends_on:
       - worker
+      - postgres
 
 volumes:
   profiles:
   vault:
+  redis-data:
+  postgres-data:
