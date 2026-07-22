@@ -35,8 +35,23 @@ export function LiveViewCanvas({ frameUrl, mode, onInputEvent }: Props) {
       e.preventDefault()
       onInputEvent({ kind: 'wheel', ...toImageCoords(e), deltaX: e.deltaX, deltaY: e.deltaY })
     }
-    const onKeyDown = (e: KeyboardEvent) => onInputEvent({ kind: 'keydown', key: e.key })
-    const onKeyUp = (e: KeyboardEvent) => onInputEvent({ kind: 'keyup', key: e.key })
+    // Keyboard listeners are on `window` (there's no way to focus the `img`
+    // element itself), so anything else focusable on the page -- the live
+    // view's own URL bar, a dialog input, etc. -- would otherwise leak every
+    // keystroke into the remote page too, on top of the local field doing
+    // its own thing with it. Only forward when nothing editable has focus.
+    const isEditableTarget = (target: EventTarget | null) =>
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return
+      onInputEvent({ kind: 'keydown', key: e.key })
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return
+      onInputEvent({ kind: 'keyup', key: e.key })
+    }
 
     img.addEventListener('mousemove', onMouseMove)
     img.addEventListener('mousedown', onMouseDown)

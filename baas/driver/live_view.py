@@ -25,6 +25,24 @@ from baas.spi.streaming import (
 
 SCREENCAST_START_PARAMS = {"format": "jpeg", "quality": 80, "everyNthFrame": 1}
 
+_SPECIAL_KEY_CODES: dict[str, int] = {
+    "Enter": 13,
+    "Tab": 9,
+    "Backspace": 8,
+    "Escape": 27,
+    " ": 32,
+    "ArrowLeft": 37,
+    "ArrowUp": 38,
+    "ArrowRight": 39,
+    "ArrowDown": 40,
+    "Delete": 46,
+}
+"""Windows virtual-key codes for the handful of non-printable keys interact
+mode actually needs (form submission, navigation, editing) -- CDP wants
+these regardless of host OS. Not a full USKeyboardLayout table: printable
+characters don't need one, since `Input.dispatchKeyEvent`'s `text` field
+alone is enough for Chrome to insert them (see below)."""
+
 
 def parse_screencast_frame(params: dict[str, Any]) -> LiveViewFrame:
     metadata = params["metadata"]
@@ -61,5 +79,20 @@ def to_cdp_input_params(event: InputEvent) -> tuple[str, dict[str, Any]]:
         }
     if isinstance(event, KeyEvent):
         cdp_type = "keyDown" if event.action == "down" else "keyUp"
-        return "Input.dispatchKeyEvent", {"type": cdp_type, "key": event.key}
+        params: dict[str, Any] = {"type": cdp_type, "key": event.key}
+        code = _SPECIAL_KEY_CODES.get(event.key)
+        if code is not None:
+            # Without a virtual-key-code, Chrome dispatches a DOM keydown
+            # event but page code checking `e.key === 'Enter'`-style handlers
+            # (most form-submit-on-Enter logic) never actually fires --
+            # observed directly as "typed a URL, pressed Enter, nothing
+            # happened" before this was added.
+            params["windowsVirtualKeyCode"] = code
+            params["nativeVirtualKeyCode"] = code
+        elif event.action == "down" and len(event.key) == 1:
+            # A single-character `key` (letters/digits/punctuation) is
+            # Chrome's own signal to actually insert that character --
+            # no virtual-key-code table needed for the printable case.
+            params["text"] = event.key
+        return "Input.dispatchKeyEvent", params
     raise NotImplementedError(f"unhandled input event type: {type(event).__name__}")
