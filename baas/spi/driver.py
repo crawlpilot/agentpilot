@@ -29,6 +29,7 @@ class BrowserDriver(Protocol):
         headful: bool,
         egress: EgressPolicy,
         block_popups: bool = False,
+        enable_cdp: bool = False,
     ) -> ContextRef: ...
 
     async def close(self, ctx: ContextRef) -> None: ...

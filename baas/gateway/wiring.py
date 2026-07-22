@@ -40,6 +40,7 @@ class Session:
     tier: str
     headful: bool
     block_popups: bool
+    enable_cdp: bool
 
 
 def _parse_proxy_pool(raw: str) -> list[ProxyEndpoint]:
@@ -65,6 +66,9 @@ class Wiring:
         self.role: Role = get_role()
         self.sessions: dict[str, Session] = {}
         self.lease_ttl_seconds = float(os.environ.get("BAAS_LEASE_TTL_SECONDS", "300"))
+        self.cdp_max_connection_seconds = float(
+            os.environ.get("BAAS_CDP_MAX_CONNECTION_SECONDS", "14400")
+        )
 
         redis_url = os.environ.get("BAAS_REDIS_URL")
         self.redis: Redis | None = Redis.from_url(redis_url) if redis_url else None
@@ -132,6 +136,10 @@ class Wiring:
         )
         assert isinstance(self.driver, BrowserDriver)
 
+        # Loopback-only fetches (a session's own local CDP `/json/version`)
+        # -- fail fast, not the gateway's 90s cross-network timeout.
+        self.cdp_http_client = httpx.AsyncClient(timeout=5.0)
+
         self.profiles_root = Path(os.environ.get("BAAS_PROFILES_DIR", "/var/lib/baas/profiles"))
 
         self.registry: RegistryProtocol
@@ -166,6 +174,7 @@ class Wiring:
             for session in list(self.sessions.values()):
                 await self.driver.close(session.ctx)
             await self.launcher.close()
+            await self.cdp_http_client.aclose()
         if isinstance(self.api_keys, PostgresApiKeyStore):
             await self.api_keys.close()
         if self.redis is not None:

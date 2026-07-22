@@ -10,8 +10,11 @@ mocked browser, never an external site (browser-use discipline).
 from __future__ import annotations
 
 import asyncio
+import json
 
+import httpx
 import pytest
+import websockets
 from pytest_httpserver import HTTPServer
 
 from baas.driver.patchright_driver import PatchrightDriver
@@ -323,3 +326,29 @@ async def test_health_reflects_a_crashed_context(driver: PatchrightDriver, tmp_p
     health = await driver.health(ctx)
     assert health.alive is False
     assert health.reason == "page_crash"
+
+
+async def test_cdp_http_base_is_none_when_not_enabled(
+    driver: PatchrightDriver, open_ctx: ContextRef
+) -> None:
+    assert await driver.cdp_http_base(open_ctx) is None
+
+
+async def test_cdp_endpoint_accepts_real_devtools_connection(
+    driver: PatchrightDriver, cdp_ctx: ContextRef
+) -> None:
+    base = await driver.cdp_http_base(cdp_ctx)
+    assert base is not None
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{base}/json/version")
+    resp.raise_for_status()
+    info = resp.json()
+    assert info["webSocketDebuggerUrl"].startswith("ws://127.0.0.1")
+
+    async with websockets.connect(info["webSocketDebuggerUrl"], max_size=None) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Browser.getVersion"}))
+        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+        reply = json.loads(raw)
+        assert reply["id"] == 1
+        assert "product" in reply["result"]

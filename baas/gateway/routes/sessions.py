@@ -177,7 +177,13 @@ async def open_session(
 
         proxy = await wiring.proxy_pinner.get_or_assign(identity) if wiring.proxy_pinner else None
         ctx = await wiring.driver.open(
-            identity, profile_dir, proxy, req.headful, EgressPolicy(), req.block_popups
+            identity,
+            profile_dir,
+            proxy,
+            req.headful,
+            EgressPolicy(),
+            req.block_popups,
+            req.enable_cdp,
         )
 
         if is_fresh and wiring.vault is not None:
@@ -201,6 +207,7 @@ async def open_session(
         tier=req.tier,
         headful=req.headful,
         block_popups=req.block_popups,
+        enable_cdp=req.enable_cdp,
     )
 
     return SessionOpenResponse(
@@ -254,6 +261,7 @@ async def list_sessions(
                 name=session.identity.name,
                 tier=session.tier,
                 headful=session.headful,
+                enable_cdp=session.enable_cdp,
                 node_id=session.ctx.node_id,
                 pid=session.ctx.pid,
                 rss_mb=rss_mb,

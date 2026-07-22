@@ -32,6 +32,7 @@ class ErrorCode(StrEnum):
     CONTEXT_CRASHED = "CONTEXT_CRASHED"
     EGRESS_BLOCKED = "EGRESS_BLOCKED"
     STALE_REF = "STALE_REF"
+    CDP_NOT_AVAILABLE = "CDP_NOT_AVAILABLE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -48,6 +49,10 @@ _DRIVER_ERROR_MAPPING: dict[type[Exception], tuple[int, ErrorCode]] = {
     # client-side "you're acting on a stale snapshot" error (re-snapshot and
     # retry), not a server fault -- 409, same family as SESSION_LEASE_CONFLICT.
     spi_errors.StaleRefError: (409, ErrorCode.STALE_REF),
+    # Not found in the strict sense -- the session exists, but this specific
+    # deployment/session can't do CDP. 409 ("retry differently"), same family
+    # as SESSION_LEASE_CONFLICT/STALE_REF, not a bare 404.
+    spi_errors.CdpNotAvailable: (409, ErrorCode.CDP_NOT_AVAILABLE),
 }
 
 _RETRY_AFTER_CODES = (ErrorCode.SESSION_LEASE_CONFLICT, ErrorCode.CAPACITY_EXHAUSTED)

@@ -54,3 +54,11 @@ class CapacityExhausted(DriverError):
 
 class EgressBlocked(DriverError):
     pass
+
+
+class CdpNotAvailable(DriverError):
+    """No CDP endpoint exists for this session: either the deployed driver
+    doesn't implement `CdpEndpointCapable` at all, or this session's
+    underlying context wasn't opened with `enable_cdp=True`. Same "this
+    specific thing isn't available" family as `TabNotFound`/`StaleRefError`,
+    not a server fault."""

@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, assert_never, cast
 
+import httpx
 import structlog
 
 # Not re-exported from `patchright.async_api` (unlike upstream Playwright,
@@ -149,6 +151,10 @@ class _Context:
     alive: bool = True
     death_reason: str | None = None
     block_popups: bool = False
+    cdp_http_base: str | None = None
+    """Local (loopback-only) CDP HTTP base, e.g. `'http://127.0.0.1:9222'`,
+    set only when this context was opened with `enable_cdp=True` -- see
+    `CdpEndpointCapable` at the bottom of this class."""
     page_changed: bool = False
     """Set when `_on_new_page` auto-focuses a new tab (see multi-tab plan's
     "New-tab focus" decision: real-browser semantics, matching Browser4's
@@ -162,6 +168,43 @@ class _Context:
     without this flag, `_on_new_page` and `_create_tab` would each mint a
     separate `_Page` for the same underlying Playwright `Page`, which is
     exactly what caused "clicking + once opens two identical tabs"."""
+
+
+def _find_free_port() -> int:
+    """Picks our own ephemeral port up front, rather than passing
+    `--remote-debugging-port=0` and discovering what Chrome chose after the
+    fact -- avoids coupling to Chrome's `DevToolsActivePort` file format
+    (its one alternative discovery mechanism; parsing subprocess stderr, the
+    other alternative, isn't an option since `launch_persistent_context`
+    doesn't surface the child process's stdout/stderr to Python code at
+    all). Same idiom the `browser-use` project's own local launcher uses.
+    Accepts the standard, small TOCTOU race between closing this socket and
+    Chrome binding the same port -- a non-issue in this single-process-per-
+    worker-container setup."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port: int = s.getsockname()[1]
+        return port
+
+
+async def _wait_for_cdp_ready(port: int, timeout: float = 5.0) -> None:
+    """Polls Chrome's own DevTools HTTP server rather than just the TCP port
+    accepting connections -- a bound port doesn't guarantee the `/json/
+    version` endpoint is actually serving yet. Mirrors `browser-use`'s own
+    `_wait_for_cdp_url()` polling loop."""
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    async with httpx.AsyncClient(timeout=1.0) as client:
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                resp = await client.get(f"http://127.0.0.1:{port}/json/version")
+                if resp.status_code == 200:
+                    return
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(0.1)
+    raise RuntimeError(f"CDP debug port {port} did not become ready within {timeout}s")
 
 
 def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
@@ -245,10 +288,25 @@ class PatchrightDriver:
         headful: bool,
         egress: EgressPolicy,
         block_popups: bool = False,
+        enable_cdp: bool = False,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
             self._launcher.ensure_xvfb()
+
+        cdp_port: int | None = None
+        launch_args: list[str] = []
+        if enable_cdp:
+            cdp_port = _find_free_port()
+            # Additive to Playwright/Patchright's own private
+            # `--remote-debugging-pipe` control channel, not a replacement --
+            # Chrome accepts both simultaneously. Loopback-only by default
+            # (never pass `--remote-debugging-address`); no
+            # `--remote-allow-origins` either, since our own relay connects
+            # via the `websockets` library, which sends no `Origin` header,
+            # so Chrome's origin-check middleware (which only blocks WS
+            # upgrades carrying a *mismatched* `Origin`) never triggers.
+            launch_args.append(f"--remote-debugging-port={cdp_port}")
 
         playwright = await self._launcher.get_playwright()
         context = await playwright.chromium.launch_persistent_context(
@@ -257,7 +315,11 @@ class PatchrightDriver:
             headless=not headful,
             no_viewport=True,
             proxy=_proxy_settings(proxy),
+            args=launch_args,
         )
+        if enable_cdp:
+            assert cdp_port is not None
+            await _wait_for_cdp_ready(cdp_port)
         page = context.pages[0] if context.pages else await context.new_page()
 
         context_id = str(uuid.uuid4())
@@ -268,6 +330,7 @@ class PatchrightDriver:
             active_page_id=page_id,
             max_tabs=self._max_tabs_per_session,
             block_popups=block_popups,
+            cdp_http_base=f"http://127.0.0.1:{cdp_port}" if enable_cdp else None,
         )
 
         def _wire_page(pid: str, pg: Page) -> None:
@@ -690,3 +753,12 @@ class PatchrightDriver:
             raise ContextCrashed("live view is not active for this tab")
         method, params = to_cdp_input_params(event)
         await live.cdp_session.send(method, params)
+
+    # --- CdpEndpointCapable (optional capability; see spi.cdp) ---
+    # Deliberately NOT subject to LiveViewCapable's "Page/Input only, never
+    # Runtime" rule above -- an enable_cdp=True session opts out of
+    # Patchright's anti-detection guarantee entirely, by design.
+
+    async def cdp_http_base(self, ctx: ContextRef) -> str | None:
+        cctx = self._require_context(ctx)
+        return cctx.cdp_http_base

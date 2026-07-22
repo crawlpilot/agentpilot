@@ -25,7 +25,7 @@ from baas.auth.models import AuthedTenant
 from baas.gateway.wiring import Wiring, get_wiring
 
 
-def _bearer_token(authorization: str | None) -> str | None:
+def bearer_token(authorization: str | None) -> str | None:
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     return authorization.split(" ", 1)[1].strip()
@@ -44,7 +44,7 @@ async def require_tenant_auth(
     authorization: str | None = Header(default=None),
     wiring: Wiring = Depends(get_wiring),
 ) -> AuthedTenant:
-    authed = await _resolve_token(wiring, _bearer_token(authorization))
+    authed = await _resolve_token(wiring, bearer_token(authorization))
     if authed is None:
         raise HTTPException(status_code=401, detail="missing or invalid api key")
     return authed
@@ -54,7 +54,7 @@ async def require_admin(
     authorization: str | None = Header(default=None),
     wiring: Wiring = Depends(get_wiring),
 ) -> None:
-    token = _bearer_token(authorization)
+    token = bearer_token(authorization)
     if not token or not wiring.admin_token or not hmac.compare_digest(token, wiring.admin_token):
         raise HTTPException(status_code=401, detail="invalid admin token")
 
@@ -66,7 +66,7 @@ async def optional_authed_tenant(request: Request, wiring: Wiring) -> AuthedTena
     rejected the request otherwise; callers on the internal mount treat `None`
     as "trust the caller", exactly matching pre-auth behavior."""
 
-    return await _resolve_token(wiring, _bearer_token(request.headers.get("authorization")))
+    return await _resolve_token(wiring, bearer_token(request.headers.get("authorization")))
 
 
 async def resolve_query_api_key(wiring: Wiring, api_key: str | None) -> AuthedTenant | None:

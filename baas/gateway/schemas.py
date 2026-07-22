@@ -24,6 +24,7 @@ class SessionOpenRequest(BaseModel):
     headful: bool = False
     block_popups: bool = False
     live_view: bool = False
+    enable_cdp: bool = False
 
 
 class SessionMetadata(BaseModel):
@@ -247,6 +248,7 @@ class SessionOut(BaseModel):
     name: str
     tier: str
     headful: bool
+    enable_cdp: bool
     node_id: str
     pid: int | None
     rss_mb: float | None

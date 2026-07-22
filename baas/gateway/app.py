@@ -32,6 +32,8 @@ from baas.gateway.errors import register_exception_handlers
 from baas.gateway.role import get_role
 from baas.gateway.routes import (
     api_keys,
+    cdp,
+    cdp_proxy,
     gateway_proxy,
     health,
     live_view,
@@ -56,17 +58,27 @@ _role = get_role()
 if _role in ("monolith", "worker"):
     app.include_router(sessions.router, prefix="/internal/sessions")
     app.include_router(live_view.router, prefix="/internal/sessions")
+    app.include_router(cdp.router, prefix="/internal/sessions")
 if _role == "monolith":
     app.include_router(
         sessions.router, prefix="/v1/sessions", dependencies=[Depends(require_tenant_auth)]
     )
     app.include_router(live_view.router, prefix="/v1/sessions")
+    app.include_router(cdp.router, prefix="/v1/sessions")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
 if _role == "gateway":
     app.include_router(gateway_proxy.router, prefix="/v1/sessions")
     app.include_router(live_view_proxy.router, prefix="/v1/sessions")
+    # No router-level `require_tenant_auth` dependency here (unlike
+    # `gateway_proxy.router`): this router mixes a plain HTTP route (which
+    # already declares `Depends(require_tenant_auth)` per-route, exactly
+    # like `gateway_proxy.py`'s routes) with a WebSocket route, which can't
+    # carry an `Authorization` header on its handshake and validates via its
+    # own `?api_key=` check instead -- see `routes/cdp_proxy.py`. A
+    # router-level dependency would apply to both and break the WS route.
+    app.include_router(cdp_proxy.router, prefix="/v1/sessions")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )

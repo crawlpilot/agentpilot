@@ -30,3 +30,18 @@ async def open_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
     )
     yield ctx
     await driver.close(ctx)
+
+
+@pytest_asyncio.fixture
+async def cdp_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
+    identity = IdentityKey(tenant="t", domain="example.com", name="cdp-test")
+    ctx = await driver.open(
+        identity,
+        tmp_path / "profile",
+        None,
+        headful=False,
+        egress=EgressPolicy(),
+        enable_cdp=True,
+    )
+    yield ctx
+    await driver.close(ctx)
