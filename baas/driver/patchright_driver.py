@@ -77,6 +77,11 @@ log = structlog.get_logger(__name__)
 
 _REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
 
+_BOUNDING_BOX_TIMEOUT_MS = 3_000
+"""Bounded well below Playwright's 30s default -- see `_resolve_ref`'s and
+`_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
+real observed hang, not a hypothetical one."""
+
 _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
     "down": (0, 600),
     "up": (0, -600),
@@ -317,10 +322,20 @@ class PatchrightDriver:
         """Resolves via `RefCache`, then enforces visibility: a ref that
         resolves to a zero-size box (`display:none`, collapsed, off-canvas)
         is treated the same as a ref that failed to resolve at all -- both
-        mean "don't dispatch a click/fill nobody would see land"."""
+        mean "don't dispatch a click/fill nobody would see land".
+
+        `bounding_box()`'s own actionability wait can take its full default
+        30s to time out when a ref genuinely can't be resolved (observed
+        directly: `aria-ref=` locators sometimes hang the entire default
+        timeout rather than failing fast) -- a bounded timeout here means
+        that failure surfaces as a typed `StaleRefError` in ~3s instead of
+        stalling the whole `execute()` batch for 30s."""
 
         locator = await live.ref_cache.resolve(live.page, ref)
-        box = await locator.bounding_box()
+        try:
+            box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+        except PlaywrightTimeoutError as exc:
+            raise StaleRefError(ref, epoch_superseded=False) from exc
         if box is None or box["width"] <= 0 or box["height"] <= 0:
             raise StaleRefError(ref, epoch_superseded=False)
         return locator
@@ -333,7 +348,12 @@ class PatchrightDriver:
         bounding boxes are resolved concurrently (`asyncio.gather`) so CDP
         pipelines the round trips instead of paying N sequential ones --
         the whole reason `viewport_only` exists is to shrink an otherwise
-        enormous snapshot, so serializing this would defeat the point."""
+        enormous snapshot, so serializing this would defeat the point.
+        Each `bounding_box()` gets `_BOUNDING_BOX_TIMEOUT_MS`, not
+        Playwright's 30s default -- observed directly during testing:
+        `aria-ref=` locators occasionally hang the full default timeout
+        rather than failing fast, which would otherwise make a single
+        snapshot call take 30s per unresolvable ref."""
 
         leaf_refs = collect_leaf_refs(root)
         if not leaf_refs:
@@ -347,7 +367,12 @@ class PatchrightDriver:
             viewport = metrics["cssVisualViewport"]
             vw, vh = viewport["clientWidth"], viewport["clientHeight"]
             boxes = await asyncio.gather(
-                *(live.page.locator(f"aria-ref={ref}").bounding_box() for ref in leaf_refs),
+                *(
+                    live.page.locator(f"aria-ref={ref}").bounding_box(
+                        timeout=_BOUNDING_BOX_TIMEOUT_MS
+                    )
+                    for ref in leaf_refs
+                ),
                 return_exceptions=True,
             )
         finally:
