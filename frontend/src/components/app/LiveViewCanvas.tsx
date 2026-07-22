@@ -19,11 +19,23 @@ export function LiveViewCanvas({ frameUrl, mode, onInputEvent }: Props) {
     const img = imgRef.current
     if (!img) return
 
+    // The `<img>` box now always fills its container (`object-contain`
+    // sizing, see the render below) rather than shrinking to exactly match
+    // the frame's own pixels, so unlike before, the element's bounding rect
+    // and the actual visible (letterboxed) image content can now differ --
+    // the click math has to account for `object-contain`'s own centering
+    // and scale-to-fit, not just naively rescale against the outer box.
     const toImageCoords = (e: MouseEvent) => {
       const rect = img.getBoundingClientRect()
-      const scaleX = img.naturalWidth / rect.width
-      const scaleY = img.naturalHeight / rect.height
-      return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY }
+      const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight)
+      const renderedWidth = img.naturalWidth * scale
+      const renderedHeight = img.naturalHeight * scale
+      const offsetX = (rect.width - renderedWidth) / 2
+      const offsetY = (rect.height - renderedHeight) / 2
+      return {
+        x: (e.clientX - rect.left - offsetX) / scale,
+        y: (e.clientY - rect.top - offsetY) / scale,
+      }
     }
 
     const onMouseMove = (e: MouseEvent) => onInputEvent({ kind: 'mousemove', ...toImageCoords(e) })
@@ -77,7 +89,14 @@ export function LiveViewCanvas({ frameUrl, mode, onInputEvent }: Props) {
           ref={imgRef}
           src={frameUrl}
           alt="live view"
-          className="max-h-full max-w-full select-none"
+          // `object-contain`, not `max-h-full max-w-full`: `max-*` only ever
+          // shrinks an oversized image, it never scales a *smaller* one up
+          // to fill the box -- the screencast frame's natural resolution can
+          // easily be smaller than the viewport, which is exactly what left
+          // it floating small inside the black letterbox instead of filling
+          // the screen. `h-full w-full object-contain` always fills the
+          // container in both directions, still without cropping/distorting.
+          className="h-full w-full select-none object-contain"
           draggable={false}
         />
       ) : (

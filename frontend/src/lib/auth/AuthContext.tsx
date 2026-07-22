@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   getStoredAdminToken,
   getStoredApiKey,
@@ -6,6 +6,7 @@ import {
   setStoredAdminToken,
   setStoredApiKey,
   setStoredTenant,
+  TOKEN_STORAGE_KEYS,
 } from './tokenStorage'
 
 interface AuthContextValue {
@@ -25,6 +26,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [apiKey, setApiKeyState] = useState<string | null>(() => getStoredApiKey())
   const [tenant, setTenantState] = useState<string | null>(() => getStoredTenant())
   const [adminToken, setAdminTokenState] = useState<string | null>(() => getStoredAdminToken())
+
+  // `localStorage` is shared across tabs, but a `storage` event only fires
+  // in *other* tabs when it changes -- this is what makes a login/logout in
+  // one tab take effect live in every other already-open tab, not just ones
+  // opened afterward (which would pick it up from `useState`'s initializer
+  // above regardless).
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.key !== null && !TOKEN_STORAGE_KEYS.includes(e.key as (typeof TOKEN_STORAGE_KEYS)[number])) {
+        return
+      }
+      setApiKeyState(getStoredApiKey())
+      setTenantState(getStoredTenant())
+      setAdminTokenState(getStoredAdminToken())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   const value = useMemo<AuthContextValue>(
     () => ({

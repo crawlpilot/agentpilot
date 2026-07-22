@@ -1,21 +1,27 @@
-// `sessionStorage`, not `localStorage` or an httpOnly cookie: a cookie would
-// make the credential invisible to the Playground's copy-pasteable
-// curl/Python snippets (the whole point of that screen), and sessionStorage
-// bounds exposure to the tab's lifetime -- an acceptable tradeoff for what
-// is, in v1, a single shared operator credential rather than a per-user
-// session (see the enterprise-UI plan's "Frontend architecture" section).
+// `localStorage`, not an httpOnly cookie: a cookie would make the credential
+// invisible to the Playground's copy-pasteable curl/Python snippets (the
+// whole point of that screen). Not `sessionStorage` either (the original
+// choice here) -- that bounded exposure to one tab's lifetime, but meant
+// every new tab required signing in again, since sessionStorage is per-tab
+// even for the same origin. `localStorage` is shared across tabs and
+// survives restarts, so a stolen token (XSS) stays valid longer/more widely
+// than sessionStorage would have -- an accepted trade for the UX win here,
+// since this is v1's single shared operator credential, not per-user auth
+// with a real threat model that trade would undermine. `AuthContext.tsx`
+// listens for the browser's `storage` event to pick up login/logout that
+// happened in another tab without needing a reload.
 
 const API_KEY_STORAGE_KEY = 'baas.apiKey'
 const TENANT_STORAGE_KEY = 'baas.tenant'
 const ADMIN_TOKEN_STORAGE_KEY = 'baas.adminToken'
 
 export function getStoredApiKey(): string | null {
-  return sessionStorage.getItem(API_KEY_STORAGE_KEY)
+  return localStorage.getItem(API_KEY_STORAGE_KEY)
 }
 
 export function setStoredApiKey(value: string | null): void {
-  if (value) sessionStorage.setItem(API_KEY_STORAGE_KEY, value)
-  else sessionStorage.removeItem(API_KEY_STORAGE_KEY)
+  if (value) localStorage.setItem(API_KEY_STORAGE_KEY, value)
+  else localStorage.removeItem(API_KEY_STORAGE_KEY)
 }
 
 // The backend resolves tenant from the api key server-side; the client
@@ -23,19 +29,25 @@ export function setStoredApiKey(value: string | null): void {
 // gateway 403s -- see `auth_deps.py`'s tenant-mismatch check), so it's
 // captured once at login time alongside the key rather than guessed.
 export function getStoredTenant(): string | null {
-  return sessionStorage.getItem(TENANT_STORAGE_KEY)
+  return localStorage.getItem(TENANT_STORAGE_KEY)
 }
 
 export function setStoredTenant(value: string | null): void {
-  if (value) sessionStorage.setItem(TENANT_STORAGE_KEY, value)
-  else sessionStorage.removeItem(TENANT_STORAGE_KEY)
+  if (value) localStorage.setItem(TENANT_STORAGE_KEY, value)
+  else localStorage.removeItem(TENANT_STORAGE_KEY)
 }
 
 export function getStoredAdminToken(): string | null {
-  return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
+  return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY)
 }
 
 export function setStoredAdminToken(value: string | null): void {
-  if (value) sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, value)
-  else sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
+  if (value) localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, value)
+  else localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY)
 }
+
+export const TOKEN_STORAGE_KEYS = [
+  API_KEY_STORAGE_KEY,
+  TENANT_STORAGE_KEY,
+  ADMIN_TOKEN_STORAGE_KEY,
+] as const
