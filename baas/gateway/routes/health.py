@@ -27,12 +27,16 @@ async def readiness(wiring: Wiring = Depends(get_wiring)) -> dict:
 
 @router.get("/metrics")
 async def metrics(wiring: Wiring = Depends(get_wiring)) -> Response:
-    active = idle = 0
-    for _identity, ctx, _lease, _released_at in await wiring.registry.snapshot():
-        if ctx.state is ContextState.ACTIVE:
-            active += 1
-        elif ctx.state is ContextState.IDLE:
-            idle += 1
-    contexts_active.set(active)
-    contexts_idle.set(idle)
+    # A gateway-role Wiring has no registry at all (never opens contexts) --
+    # request/error counters (already in the process-global registry) are
+    # still meaningful there, just not the pool gauges.
+    if wiring.role != "gateway":
+        active = idle = 0
+        for _identity, ctx, _lease, _released_at in await wiring.registry.snapshot():
+            if ctx.state is ContextState.ACTIVE:
+                active += 1
+            elif ctx.state is ContextState.IDLE:
+                idle += 1
+        contexts_active.set(active)
+        contexts_idle.set(idle)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

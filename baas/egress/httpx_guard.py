@@ -47,7 +47,7 @@ def _is_blocked(ip: IPAddress, policy: EgressPolicy) -> bool:
 
 def resolve_all_ips(host: str) -> list[str]:
     infos = socket.getaddrinfo(host, None)
-    return sorted({info[4][0] for info in infos})
+    return sorted({str(info[4][0]) for info in infos})
 
 
 def assert_host_allowed(host: str, policy: EgressPolicy) -> None:

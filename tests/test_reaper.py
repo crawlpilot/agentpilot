@@ -121,5 +121,7 @@ async def test_memory_pressure_evicts_oldest_idle_first(monkeypatch: pytest.Monk
     await reaper.scan_once()
 
     assert driver.closed == [older.context_id]
-    remaining_ids = [ctx.context_id for _identity, ctx, _lease, _released_at in await registry.snapshot()]
+    remaining_ids = [
+        ctx.context_id for _identity, ctx, _lease, _released_at in await registry.snapshot()
+    ]
     assert remaining_ids == [newer.context_id]

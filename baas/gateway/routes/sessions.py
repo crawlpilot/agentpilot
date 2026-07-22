@@ -1,9 +1,15 @@
-"""Session lifecycle: open -> execute (batched) -> release.
+"""The real session-lifecycle implementation: open -> execute (batched) ->
+release. No baked-in path prefix -- `app.py` mounts this same router at
+`/v1/sessions` (`monolith`/`worker`-serving-itself-in-tests) and at
+`/internal/sessions` (`worker`'s VPC-internal surface), per
+`baas.gateway.role`. A `gateway`-role process never mounts this router at
+all; it mounts `routes/gateway_proxy.py` at `/v1/sessions` instead, which
+proxies to a worker's `/internal/sessions` copy of these exact routes.
 
-`POST /v1/sessions` (open) -> `POST /v1/sessions/{id}/execute` (batched Action
-list, renewing the P1 lease each call) -> `DELETE /v1/sessions/{id}` (release
-to IDLE -- the `session.Reaper` is what actually destroys IDLE contexts now,
-on its own schedule, not this route).
+`POST` (open) -> `POST /{id}/execute` (batched Action list, renewing the P1
+lease each call) -> `DELETE /{id}` (release to IDLE -- the `session.Reaper`
+is what actually destroys IDLE contexts now, on its own schedule, not this
+route).
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import base64
 import time
 import uuid
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from baas.gateway.schemas import (
@@ -38,6 +45,7 @@ from baas.gateway.schemas import (
     WaitActionIn,
 )
 from baas.gateway.wiring import Session, Wiring, get_wiring
+from baas.identity.profile_store import resolve_profile_dir
 from baas.observability.metrics import (
     execute_duration_seconds,
     requests_total,
@@ -49,7 +57,9 @@ from baas.spi.errors import NodeLost
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef
 
-router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
+log = structlog.get_logger(__name__)
+
+router = APIRouter(tags=["sessions"])
 
 _ACTION_CONVERTERS = {
     NavigateActionIn: lambda a: spi_actions.NavigateAction(url=a.url, timeout_ms=a.timeout_ms),
@@ -127,9 +137,23 @@ async def open_session(
     requests_total.labels(tenant=req.tenant, route="open_session").inc()
 
     async def _opener() -> ContextRef:
-        profile_dir = wiring.profiles_root / identity.slug()
+        profile_dir = resolve_profile_dir(wiring.profiles_root, identity)
+        # A profile dir existing *before* this call is exactly "warm dir" in
+        # vault.py's restore-trigger sense -- restore_state() must never run
+        # against it (see Vault's module docstring on the persistent-dir
+        # conflict). Checked before mkdir(), since mkdir() would otherwise
+        # make every open look "already existed".
+        is_fresh = not profile_dir.exists()
         profile_dir.mkdir(parents=True, exist_ok=True)
-        return await wiring.driver.open(identity, profile_dir, None, req.headful, EgressPolicy())
+
+        proxy = await wiring.proxy_pinner.get_or_assign(identity) if wiring.proxy_pinner else None
+        ctx = await wiring.driver.open(identity, profile_dir, proxy, req.headful, EgressPolicy())
+
+        if is_fresh and wiring.vault is not None:
+            state = wiring.vault.load(identity)
+            if state is not None:
+                await wiring.driver.restore_state(ctx, state)
+        return ctx
 
     started = time.monotonic()
     with session_open_duration_seconds.time():
@@ -179,6 +203,18 @@ async def execute_session(
 async def release_session(session_id: str, wiring: Wiring = Depends(get_wiring)) -> dict:
     session = _get_session(wiring, session_id)
     requests_total.labels(tenant=session.identity.tenant, route="release_session").inc()
+
+    if wiring.vault is not None:
+        # Checkpoint on release-to-IDLE (not only at destroy) bounds
+        # node-loss staleness to one session's delta -- plan.md's vault
+        # trigger #2. Best-effort: a vault write failure must not block the
+        # release itself (the context still needs to go IDLE either way).
+        try:
+            state = await wiring.driver.export_state(session.ctx)
+            wiring.vault.save(session.identity, state)
+        except Exception:
+            log.warning("sessions.vault_checkpoint_failed", session_id=session_id)
+
     await wiring.registry.release(session.lease_id)
     wiring.sessions.pop(session_id, None)
     return {"success": True, "state": "idle"}

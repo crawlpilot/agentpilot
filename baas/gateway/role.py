@@ -35,4 +35,4 @@ def get_role() -> Role:
     raw = os.environ.get("BAAS_ROLE", "monolith")
     if raw not in _VALID_ROLES:
         raise ValueError(f"BAAS_ROLE={raw!r} must be one of {_VALID_ROLES}")
-    return raw  # type: ignore[return-value]
+    return raw
