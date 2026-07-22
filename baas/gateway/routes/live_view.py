@@ -51,7 +51,7 @@ def _parse_input_event(msg: dict[str, Any]) -> InputEvent | None:
     return None
 
 
-async def _send_frames(websocket: WebSocket, queue: "asyncio.Queue[Any]") -> None:
+async def _send_frames(websocket: WebSocket, queue: asyncio.Queue[Any]) -> None:
     while True:
         frame = await queue.get()
         await websocket.send_bytes(frame.data)
