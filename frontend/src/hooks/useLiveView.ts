@@ -19,11 +19,9 @@ export function useLiveView(sessionId: string, initialMode: LiveViewMode = 'view
       onStatusChange: setStatus,
       onFrame: (blob) => {
         const url = URL.createObjectURL(blob)
-        setFrameUrl((prev) => {
-          if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current)
-          currentUrlRef.current = url
-          return url
-        })
+        if (currentUrlRef.current) URL.revokeObjectURL(currentUrlRef.current)
+        currentUrlRef.current = url
+        setFrameUrl(url)
       },
     })
     socketRef.current = socket

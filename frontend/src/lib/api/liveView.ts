@@ -19,12 +19,14 @@ interface LiveViewSocketOptions {
 }
 
 export class LiveViewSocket {
+  private readonly opts: LiveViewSocketOptions
   private ws: WebSocket | null = null
   private mode: LiveViewMode
   private deliberateClose = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(private readonly opts: LiveViewSocketOptions) {
+  constructor(opts: LiveViewSocketOptions) {
+    this.opts = opts
     this.mode = opts.mode
     this.connect()
   }

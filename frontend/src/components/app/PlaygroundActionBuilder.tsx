@@ -1,5 +1,4 @@
 import { Plus } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PlaygroundActionRow } from '@/components/app/PlaygroundActionRow'
 import { ACTION_TYPES, type ActionIn } from '@/lib/api/types'
