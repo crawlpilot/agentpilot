@@ -145,6 +145,14 @@ class _Context:
     "New-tab focus" decision: real-browser semantics, matching Browser4's
     unconditional `onWindowOpen` -> `newDriver` auto-follow). Read once per
     `execute()` call and reset, same lifecycle as before."""
+    expecting_explicit_tab: bool = False
+    """Set around `_create_tab`'s own `context.new_page()` call.
+    `new_page()` fires the exact same context-level `"page"` event an
+    organic popup does (confirmed empirically: the handler runs and
+    registers the page *before* `new_page()`'s own await even resolves) --
+    without this flag, `_on_new_page` and `_create_tab` would each mint a
+    separate `_Page` for the same underlying Playwright `Page`, which is
+    exactly what caused "clicking + once opens two identical tabs"."""
 
 
 def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
@@ -268,6 +276,16 @@ class PatchrightDriver:
             cctx.death_reason = cctx.death_reason or "context_closed"
 
         def _on_new_page(new_page: Page) -> None:
+            if cctx.expecting_explicit_tab:
+                # `_create_tab`'s own `context.new_page()` call -- register
+                # plainly and let it take over from here (navigate, resolve
+                # the page_id by identity); none of the popup-blocking/cap/
+                # auto-focus policy below applies to a tab the caller
+                # explicitly asked for via `NewTabAction`.
+                new_page_id = str(uuid.uuid4())
+                cctx.pages[new_page_id] = _Page(page=new_page)
+                _wire_page(new_page_id, new_page)
+                return
             if cctx.block_popups:
                 asyncio.create_task(new_page.close())
                 return
@@ -422,22 +440,22 @@ class PatchrightDriver:
 
     async def _create_tab(self, cctx: _Context, url: str | None) -> str:
         """Explicit `NewTabAction` counterpart to `open()`'s `_on_new_page`
-        auto-tracking -- same cap enforcement, same crash-handler wiring, no
-        popup-blocking check (a caller-requested tab isn't a popup)."""
+        auto-tracking -- same cap enforcement, no popup-blocking check (a
+        caller-requested tab isn't a popup). Registration and crash-handler
+        wiring happen inside `_on_new_page` itself, not here: `context.
+        new_page()` fires that same context-level `"page"` event an organic
+        popup does, so `expecting_explicit_tab` routes it through the one
+        real registration path instead of this method minting a second,
+        duplicate `_Page` for the same underlying Playwright `Page`."""
 
         if len(cctx.pages) >= cctx.max_tabs:
             raise CapacityExhausted(f"session already has {cctx.max_tabs} tabs open")
-        new_page = await cctx.context.new_page()
-        page_id = str(uuid.uuid4())
-        cctx.pages[page_id] = _Page(page=new_page)
-
-        def _on_crash(_page: Page) -> None:
-            live_page = cctx.pages.get(page_id)
-            if live_page is not None:
-                live_page.alive = False
-                live_page.death_reason = "page_crash"
-
-        new_page.on("crash", _on_crash)
+        cctx.expecting_explicit_tab = True
+        try:
+            new_page = await cctx.context.new_page()
+        finally:
+            cctx.expecting_explicit_tab = False
+        page_id = next(pid for pid, p in cctx.pages.items() if p.page is new_page)
         if url is not None:
             await new_page.goto(url)
         return page_id
