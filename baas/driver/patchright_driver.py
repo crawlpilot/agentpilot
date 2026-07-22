@@ -567,10 +567,23 @@ class PatchrightDriver:
         await cctx.context.set_storage_state(_to_playwright_storage_state(state))
 
     async def health(self, ctx: ContextRef) -> HealthStatus:
+        """A context can now outlive any *one* of its tabs crashing (that's
+        the whole point of multi-tab), so `cctx.alive` alone -- only ever
+        flipped by the whole browser context closing -- isn't sufficient
+        anymore: a context every one of whose tabs has crashed is just as
+        dead as one that closed outright, even though nothing set
+        `cctx.alive = False` for that case. Still healthy as long as at
+        least one tracked tab survives, matching real multi-tab semantics."""
+
         cctx = self._contexts.get(ctx.context_id)
         if cctx is None:
             return HealthStatus(alive=False, reason="context_not_found")
-        return HealthStatus(alive=cctx.alive, reason=cctx.death_reason)
+        if not cctx.alive:
+            return HealthStatus(alive=False, reason=cctx.death_reason)
+        if any(p.alive for p in cctx.pages.values()):
+            return HealthStatus(alive=True, reason=None)
+        death_reason = next((p.death_reason for p in cctx.pages.values() if p.death_reason), None)
+        return HealthStatus(alive=False, reason=death_reason)
 
     # --- LiveViewCapable (optional capability; see spi.streaming) ---
     # Page and Input domains only -- never Runtime, to preserve Patchright's

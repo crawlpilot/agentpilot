@@ -312,7 +312,8 @@ async def test_health_reflects_a_crashed_context(driver: PatchrightDriver, tmp_p
         identity, tmp_path / "profile", None, headful=False, egress=EgressPolicy()
     )
 
-    live = driver._live[ctx.context_id]
+    cctx = driver._contexts[ctx.context_id]
+    live = cctx.pages[cctx.active_page_id]
     try:
         await live.page.goto("chrome://crash", timeout=3_000)
     except Exception:
