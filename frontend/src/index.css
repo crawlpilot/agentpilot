@@ -2,56 +2,33 @@
 @import 'tw-animate-css';
 
 /*
- * Neutral-with-one-accent palette: dense tables, live thumbnails, and code
- * snippets need low-chroma surfaces to stay legible; the accent (kept at the
- * same red hue as the original operator console, for continuity) is
- * reserved for primary actions and destructive affordances only -- it must
- * never fill a whole panel/topbar, or it stops meaning anything.
+ * White-and-red palette, Target.com-inspired: bright white surfaces, a
+ * single saturated red accent, desaturated neutrals everywhere else. Light
+ * only, by design -- no dark variant. Red is reserved for primary actions,
+ * active nav, and destructive affordances; it must never fill a whole
+ * panel/topbar, or it stops meaning anything.
  */
 :root {
-  --background: 0 0% 100%;
+  --background: 0 0% 98%;
   --foreground: 240 10% 12%;
   --card: 0 0% 100%;
   --card-foreground: 240 10% 12%;
-  --muted: 240 5% 96%;
+  --muted: 240 5% 95%;
   --muted-foreground: 240 4% 40%;
   --border: 240 6% 88%;
   --input: 240 6% 88%;
-  --ring: 0 72% 40%;
-  --accent: 0 72% 40%;
+  --ring: 0 85% 45%;
+  --accent: 0 85% 45%;
   --accent-foreground: 0 0% 100%;
-  --accent-tint: 0 72% 96%;
-  --destructive: 0 72% 40%;
+  --accent-tint: 0 100% 97%;
+  --destructive: 0 85% 45%;
   --destructive-foreground: 0 0% 100%;
   --success: 142 71% 32%;
   --success-foreground: 0 0% 100%;
   --warning: 38 92% 40%;
   --warning-foreground: 0 0% 100%;
   --radius: 0.5rem;
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: 240 8% 8%;
-    --foreground: 0 0% 96%;
-    --card: 240 8% 11%;
-    --card-foreground: 0 0% 96%;
-    --muted: 240 6% 16%;
-    --muted-foreground: 240 4% 65%;
-    --border: 240 6% 20%;
-    --input: 240 6% 22%;
-    --ring: 0 72% 55%;
-    --accent: 0 72% 55%;
-    --accent-foreground: 0 0% 100%;
-    --accent-tint: 0 40% 16%;
-    --destructive: 0 72% 55%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 142 60% 45%;
-    --success-foreground: 0 0% 8%;
-    --warning: 38 92% 55%;
-    --warning-foreground: 0 0% 8%;
-  }
+  color-scheme: light;
 }
 
 @theme inline {

@@ -10,20 +10,16 @@ export function TopBar() {
   const healthy = !isError && data?.status === 'ok'
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card px-4">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+    <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <span
-          className={cn('size-2 rounded-full', healthy ? 'bg-success' : 'bg-destructive')}
+          className={cn('size-1.5 rounded-full', healthy ? 'bg-success' : 'bg-destructive')}
           aria-hidden
         />
         {healthy ? 'Gateway healthy' : 'Gateway unreachable'}
       </div>
-      <div className="flex items-center gap-3">
-        {tenant && (
-          <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
-            tenant: {tenant}
-          </span>
-        )}
+      <div className="flex items-center gap-2">
+        {tenant && <span className="text-xs text-muted-foreground">{tenant}</span>}
         <Button variant="ghost" size="sm" onClick={logout}>
           <LogOut className="size-4" />
           Sign out

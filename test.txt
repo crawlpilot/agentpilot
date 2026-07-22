@@ -1,0 +1,30 @@
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/v1/sessions -H "Authorization: Bearer bk_live_08ABFmTFK9LPPXvsxrg2g3fPRTGlaRuU"
+
+
+
+KEY_JSON=$(curl -s -X POST http://localhost:8000/v1/api-keys \
+  -H "Authorization: Bearer dev-admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant": "dev", "name": "local-dev"}')
+echo "$KEY_JSON"
+API_KEY=$(echo "$KEY_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")
+
+
+
+echo "---opening session---"
+curl -s -w "\nHTTP_CODE:%{http_code}\n" -m 60 -X POST http://localhost:8000/v1/sessions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant":"dev","domain":"example.com","name":"test-identity","tier":"auto","headful":false,"live_view":true}'
+
+
+
+
+  {"key_id":"7676090f-056b-4621-8d89-cd157d44c8c3","tenant":"dev","name":"local-dev-persistent","prefix":"bk_live_mW3x4KkR","created_at":"2026-07-22T09:14:32.315563+00:00","last_used_at":null,"revoked_at":null,"api_key":"bk_live_mW3x4KkRkiAJt7D35pCVp0ie9oRmlFBL"}
+---open session---
+{"session_id":"3ece48ae-7a46-4c2c-8dbf-b4834a753ed9","metadata":{"tier_used":"auto","node_id":"local","duration_ms":2225.6109160371125}}
+HTTP_CODE:200
+
+
+tenant:  dev
+api key: bk_live_mW3x4KkRkiAJt7D35pCVp0ie9oRmlFBL

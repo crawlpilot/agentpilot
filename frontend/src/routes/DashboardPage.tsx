@@ -1,9 +1,6 @@
-import { Link } from 'react-router-dom'
-import { KeyRound, PlaySquare } from 'lucide-react'
 import { useSessionsList } from '@/hooks/useSessionsList'
 import { StatCard } from '@/components/app/StatCard'
 import { OpenSessionSheet } from '@/components/app/OpenSessionSheet'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 
 export function DashboardPage() {
@@ -38,31 +35,6 @@ export function DashboardPage() {
           <StatCard label="Opened, last hour" value={openedLastHour} />
         </div>
       )}
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Link to="/playground">
-          <Card className="transition-colors hover:border-accent">
-            <CardHeader className="flex-row items-center gap-3">
-              <PlaySquare className="size-5 text-accent" />
-              <CardTitle>Playground</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              Build and run an action sequence interactively.
-            </CardContent>
-          </Card>
-        </Link>
-        <Link to="/api-keys">
-          <Card className="transition-colors hover:border-accent">
-            <CardHeader className="flex-row items-center gap-3">
-              <KeyRound className="size-5 text-accent" />
-              <CardTitle>API Keys</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
-              Issue and revoke tenant API keys.
-            </CardContent>
-          </Card>
-        </Link>
-      </div>
     </div>
   )
 }
