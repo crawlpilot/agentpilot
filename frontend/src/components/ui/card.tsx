@@ -21,8 +21,4 @@ function CardContent({ className, ...props }: React.ComponentProps<'div'>) {
   return <div className={cn('p-4 pt-0', className)} {...props} />
 }
 
-function CardFooter({ className, ...props }: React.ComponentProps<'div'>) {
-  return <div className={cn('flex items-center p-4 pt-0', className)} {...props} />
-}
-
-export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
+export { Card, CardHeader, CardTitle, CardDescription, CardContent }

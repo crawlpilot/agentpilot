@@ -6,7 +6,6 @@ import { cn } from '@/lib/utils'
 
 const Sheet = DialogPrimitive.Root
 const SheetTrigger = DialogPrimitive.Trigger
-const SheetClose = DialogPrimitive.Close
 const SheetPortal = DialogPrimitive.Portal
 
 function SheetOverlay({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
@@ -75,7 +74,6 @@ function SheetFooter({ className, ...props }: React.ComponentProps<'div'>) {
 export {
   Sheet,
   SheetTrigger,
-  SheetClose,
   SheetContent,
   SheetHeader,
   SheetTitle,

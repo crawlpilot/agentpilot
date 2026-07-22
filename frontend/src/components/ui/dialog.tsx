@@ -5,7 +5,6 @@ import { cn } from '@/lib/utils'
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
-const DialogClose = DialogPrimitive.Close
 const DialogPortal = DialogPrimitive.Portal
 
 function DialogOverlay({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
@@ -67,7 +66,6 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
 export {
   Dialog,
   DialogTrigger,
-  DialogClose,
   DialogContent,
   DialogHeader,
   DialogTitle,
