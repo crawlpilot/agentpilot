@@ -108,7 +108,9 @@ def test_full_session_lifecycle(auth_headers: dict[str, str]) -> None:
                     {"type": "extract", "format": "markdown"},
                     {
                         "type": "execute_js",
-                        "script": 'document.getElementById("agentpilot-detection-result").textContent',
+                        "script": (
+                            'document.getElementById("agentpilot-detection-result").textContent'
+                        ),
                     },
                 ]
             },

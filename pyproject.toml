@@ -28,8 +28,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/RahulBisht/agentpilot"
-Issues = "https://github.com/RahulBisht/agentpilot/issues"
+Repository = "https://github.com/crawlpilot/agentpilot"
+Issues = "https://github.com/crawlpilot/agentpilot/issues"
 
 [project.optional-dependencies]
 # Chrome-adjacent packages -- only ever imported by agentpilot.driver,
