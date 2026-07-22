@@ -37,6 +37,10 @@ services:
       BAAS_REDIS_URL: redis://redis:6379/0
       BAAS_VAULT_DIR: /var/lib/baas/vault
       BAAS_VAULT_KEY: ${BAAS_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
+      # Gates `/v1/api-keys` (issuing/revoking tenant API keys) and nothing
+      # else -- unset means that control-plane surface 401s unconditionally
+      # (fails closed), not that auth is disabled fleet-wide.
+      BAAS_ADMIN_TOKEN: ${BAAS_ADMIN_TOKEN:-}
     depends_on:
       - detection-page
       - redis
@@ -93,6 +97,7 @@ services:
       BAAS_ROLE: gateway
       BAAS_REDIS_URL: redis://redis:6379/0
       BAAS_WORKER_URL: http://worker:8000
+      BAAS_ADMIN_TOKEN: ${BAAS_ADMIN_TOKEN:-}
     depends_on:
       - worker
       - redis

@@ -1,9 +1,22 @@
-"""`GET /v1/sessions/{id}/live-view` (WebSocket) -- gateway-proxied CDP
-screencast. `mode=view` streams frames only; `mode=interact` also accepts
-inbound `InputEvent` JSON messages and dispatches them via the driver.
+"""`GET /{id}/live-view` (WebSocket) -- CDP screencast. `mode=view` streams
+frames only; `mode=interact` also accepts inbound `InputEvent` JSON messages
+and dispatches them via the driver.
 
-Same tenant-facing auth surface as `routes/sessions.py` (P0 has no real
-tenant auth yet -- this only checks the session exists, matching that route).
+No baked-in path prefix, same reasoning as `routes/sessions.py`: `app.py`
+mounts this router at both `/v1/sessions` (monolith, tenant-facing) and
+`/internal/sessions` (worker/monolith-internal). Browsers can't set custom
+headers on a WS handshake, so the tenant credential travels as `?api_key=...`
+instead of `Authorization: Bearer` -- checked here, unconditionally, on
+every mount, not gated per-mount like the HTTP routes. This means the
+internal mount is slightly more locked-down than `sessions.py`'s internal
+surface (which trusts network position alone): a `gateway`-role process's
+`live_view_proxy.py` forwards the *same* `api_key` it validated from the
+browser through to the worker, rather than the worker trusting the proxy
+implicitly, since this is the one route a browser reaches (almost) directly
+through the proxy. If `api_key` is absent entirely, the call is trusted as
+before (covers the `test_seam_e2e.py`/pre-auth compatibility path and any
+same-process caller that has no key at all).
+
 `LiveViewCapable` is an *optional* capability: a driver without it simply
 gets a clean close here rather than a route that was never wired up, per
 the plan's composition-root check.
@@ -17,6 +30,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from baas.gateway.auth_deps import resolve_query_api_key
 from baas.gateway.wiring import get_wiring
 from baas.spi.streaming import (
     InputEvent,
@@ -28,6 +42,7 @@ from baas.spi.streaming import (
 )
 
 router = APIRouter(tags=["live-view"])
+_UNAUTHORIZED = 4401
 
 _NOT_FOUND = 4404
 _UNSUPPORTED = 4501
@@ -72,13 +87,21 @@ async def _receive_input(websocket: WebSocket, driver: LiveViewCapable, ctx: Any
             await driver.dispatch_input(ctx, event)
 
 
-@router.websocket("/v1/sessions/{session_id}/live-view")
-async def live_view(websocket: WebSocket, session_id: str, mode: str = "view") -> None:
+@router.websocket("/{session_id}/live-view")
+async def live_view(
+    websocket: WebSocket, session_id: str, mode: str = "view", api_key: str | None = None
+) -> None:
     wiring = await get_wiring()
     session = wiring.sessions.get(session_id)
     if session is None:
         await websocket.close(code=_NOT_FOUND, reason="no such session")
         return
+
+    if api_key is not None:
+        authed = await resolve_query_api_key(wiring, api_key)
+        if authed is None or authed.tenant != session.identity.tenant:
+            await websocket.close(code=_UNAUTHORIZED, reason="invalid api key")
+            return
 
     driver = wiring.driver
     if not isinstance(driver, LiveViewCapable):

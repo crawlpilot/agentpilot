@@ -4,11 +4,16 @@ contexts directly; only this module needs the containers.
 
 Skipped automatically when the compose stack isn't reachable, so a plain
 `pytest tests/` doesn't require Docker -- run `docker compose up -d` first
-to exercise this module.
+to exercise this module. The auth-gated tests additionally need
+`BAAS_ADMIN_TOKEN` set to whatever value the compose stack itself was started
+with (`BAAS_ADMIN_TOKEN=some-secret docker compose up -d`) -- this test
+bootstraps a real tenant API key through `/v1/api-keys` using that token,
+exactly as an operator would, rather than hardcoding a backdoor.
 """
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import httpx
@@ -16,6 +21,8 @@ import pytest
 
 GATEWAY = "http://127.0.0.1:8000"
 DETECTION_PAGE_INTERNAL = "http://detection-page:8090/"
+
+_ADMIN_TOKEN = os.environ.get("BAAS_ADMIN_TOKEN")
 
 
 def _unique_name(label: str) -> str:
@@ -37,14 +44,34 @@ def _gateway_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _gateway_reachable(),
-    reason="gateway not reachable at :8000 -- run `docker compose up -d` first",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _gateway_reachable(),
+        reason="gateway not reachable at :8000 -- run `docker compose up -d` first",
+    ),
+    pytest.mark.skipif(
+        not _ADMIN_TOKEN,
+        reason="set BAAS_ADMIN_TOKEN to the same value the compose stack was started with",
+    ),
+]
 
 
-def test_full_session_lifecycle() -> None:
-    client = httpx.Client(base_url=GATEWAY, timeout=30.0)
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """Bootstraps one real tenant API key via the admin-gated control plane,
+    the same path a real operator/UI would take -- not a test-only bypass."""
+
+    admin_client = httpx.Client(
+        base_url=GATEWAY, timeout=10.0, headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"}
+    )
+    created = admin_client.post("/v1/api-keys", json={"tenant": "e2e", "name": "seam-e2e"})
+    assert created.status_code == 200
+    api_key = created.json()["api_key"]
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def test_full_session_lifecycle(auth_headers: dict[str, str]) -> None:
+    client = httpx.Client(base_url=GATEWAY, timeout=30.0, headers=auth_headers)
 
     name = _unique_name("seam-test")
     resp = client.post(
@@ -60,6 +87,10 @@ def test_full_session_lifecycle() -> None:
         assert conflict.status_code == 409
         assert conflict.json()["code"] == "SESSION_LEASE_CONFLICT"
         assert "Retry-After" in conflict.headers
+
+        listed = client.get("/v1/sessions")
+        assert listed.status_code == 200
+        assert session_id in {s["session_id"] for s in listed.json()["sessions"]}
 
         exec_resp = client.post(
             f"/v1/sessions/{session_id}/execute",
@@ -100,8 +131,8 @@ def test_full_session_lifecycle() -> None:
         assert release.json()["state"] == "idle"
 
 
-def test_egress_blocks_metadata_endpoint() -> None:
-    client = httpx.Client(base_url=GATEWAY, timeout=30.0)
+def test_egress_blocks_metadata_endpoint(auth_headers: dict[str, str]) -> None:
+    client = httpx.Client(base_url=GATEWAY, timeout=30.0, headers=auth_headers)
 
     resp = client.post(
         "/v1/sessions",

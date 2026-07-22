@@ -190,3 +190,57 @@ class ActionResultOut(BaseModel):
     downloads: list[ArtifactRefOut] = Field(default_factory=list)
     sequence_aborted: bool = False
     page_changed: bool = False
+
+
+# --- sessions list (enterprise UI) ---
+
+
+class SessionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: str
+    tenant: str
+    domain: str
+    name: str
+    tier: str
+    headful: bool
+    node_id: str
+    pid: int | None
+    rss_mb: float | None
+    state: Literal["active", "expired"]
+    lease_expires_at: float | None
+    """Unix timestamp; `None` when `state == "expired"` (no live lease)."""
+
+
+class SessionListOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sessions: list[SessionOut]
+
+
+# --- API keys (enterprise UI control plane, admin-gated) ---
+
+
+class ApiKeyCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    name: str
+
+
+class ApiKeyOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key_id: str
+    tenant: str
+    name: str
+    prefix: str
+    created_at: str
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class ApiKeyCreateOut(ApiKeyOut):
+    api_key: str
+    """Plaintext, returned exactly once -- never retrievable again."""
+
+
+class ApiKeyListOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_keys: list[ApiKeyOut]

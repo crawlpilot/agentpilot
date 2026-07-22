@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 from redis.asyncio import Redis
 
+from baas.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, RedisApiKeyStore
 from baas.gateway.role import Role, get_role
 from baas.identity.proxy_pinning import ProxyPinner
 from baas.identity.vault import Vault
@@ -68,6 +69,16 @@ class Wiring:
 
         redis_url = os.environ.get("BAAS_REDIS_URL")
         self.redis: Redis | None = Redis.from_url(redis_url) if redis_url else None
+
+        # Both roles need the API-key store: `monolith`/`gateway` authenticate
+        # tenant-facing requests against it, and `/v1/api-keys` (mounted on
+        # whichever role serves `/v1/...`) issues/revokes through it. `worker`
+        # constructs it too for uniformity even though it never mounts either
+        # surface -- cheap, and avoids a third conditional branch.
+        self.api_keys: ApiKeyStoreProtocol = (
+            RedisApiKeyStore(self.redis) if self.redis is not None else InMemoryApiKeyStore()
+        )
+        self.admin_token = os.environ.get("BAAS_ADMIN_TOKEN")
 
         if self.role == "gateway":
             self._init_gateway()
