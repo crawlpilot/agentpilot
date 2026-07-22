@@ -12,6 +12,9 @@ dependencies = [
     "pydantic>=2.9",
     "prometheus-client>=0.21",
     "structlog>=24.4",
+    "redis>=5.0",
+    "cryptography>=43.0",
+    "httpx>=0.27",
 ]
 
 [dependency-groups]
@@ -22,7 +25,8 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-httpserver>=1.1",
-    "httpx>=0.27",
+    "fakeredis>=2.26",
+    "lupa>=2.1",
 ]
 
 [build-system]
@@ -52,21 +56,21 @@ python_version = "3.12"
 strict = false
 
 [[tool.mypy.overrides]]
-module = ["baas.spi.*", "baas.driver.*"]
+module = ["baas.spi.*", "baas.driver.*", "baas.identity.*", "baas.session.*"]
 strict = true
 
 [tool.importlinter]
 root_package = "baas"
 
-# baas.identity/placement/control are still P2 packages that don't exist yet
+# baas.placement/control are still P3+/future packages that don't exist yet
 # -- wrapped in parentheses per import-linter's "optional layer" syntax so
 # these contracts are already correct once those packages land, without
-# breaking `lint-imports` today. baas.session landed in P1, so it's no longer
-# parenthesized.
+# breaking `lint-imports` today. baas.session landed in P1 and baas.identity
+# lands in P2, so neither is parenthesized anymore.
 [[tool.importlinter.contracts]]
 name = "gateway -> session -> identity -> spi"
 type = "layers"
-layers = ["baas.gateway", "baas.session", "(baas.identity)", "baas.spi"]
+layers = ["baas.gateway", "baas.session", "baas.identity", "baas.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> placement -> spi"
@@ -83,10 +87,10 @@ name = "driver -> {extraction, egress} -> spi"
 type = "layers"
 layers = ["baas.driver", "baas.extraction | baas.egress", "baas.spi"]
 
-# "identity/control/placement never import driver" is still deferred until
-# those P2 packages exist -- `forbidden` contracts, unlike `layers`, have no
-# optional-module syntax and error hard on a missing module. session.py
-# landed in P1, so its own forbidden-import rule is live now.
+# "control/placement never import driver" is still deferred until those
+# future packages exist -- `forbidden` contracts, unlike `layers`, have no
+# optional-module syntax and error hard on a missing module. session.py and
+# identity.py are real now, so their forbidden-import rules are live.
 
 [[tool.importlinter.contracts]]
 name = "only the composition root imports the concrete driver"
@@ -96,6 +100,7 @@ source_modules = [
     "baas.gateway.schemas",
     "baas.gateway.app",
     "baas.session",
+    "baas.identity",
 ]
 forbidden_modules = ["baas.driver"]
 # routes/app reach the driver only *through* baas.gateway.wiring (the

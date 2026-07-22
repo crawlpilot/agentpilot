@@ -13,6 +13,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from baas.session.lease import new_lease
 from baas.session.lease import renew as _renew_lease
@@ -21,6 +22,29 @@ from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 Opener = Callable[[], Awaitable[ContextRef]]
+
+
+@runtime_checkable
+class RegistryProtocol(Protocol):
+    """The shared shape `Registry` (in-memory, this file) and
+    `session.redis_registry.RedisRegistry` (P2) both implement -- `Reaper`
+    and the gateway/worker routes depend on this Protocol, never on the
+    concrete in-memory class, so swapping backends is a one-line wiring
+    change, not a rewrite of everything that uses a registry."""
+
+    async def acquire(
+        self, identity: IdentityKey, owner: str, ttl_seconds: float, opener: Opener
+    ) -> tuple[ContextRef, Lease]: ...
+
+    async def renew(self, lease_id: LeaseId) -> Lease: ...
+
+    async def release(self, lease_id: LeaseId) -> None: ...
+
+    async def snapshot(self) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]: ...
+
+    async def evict(self, identity: IdentityKey) -> ContextRef | None: ...
+
+    async def force_release(self, identity: IdentityKey) -> None: ...
 
 
 @dataclass
@@ -102,10 +126,12 @@ class Registry:
             entry.lease = None
             entry.released_at = time.monotonic()
 
-    def snapshot(self) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]:
+    async def snapshot(self) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]:
         """Read-only view for the reaper/metrics. Safe without a lock: callers
         only read `ContextRef`/`Lease` (never mutate), and the identity-level
-        locks only ever protect registry bookkeeping, not these reads."""
+        locks only ever protect registry bookkeeping, not these reads.
+        `async def` only to match `RegistryProtocol` (the Redis backend's
+        equivalent is real I/O); this implementation has nothing to await."""
 
         return [
             (identity, e.context_ref, e.lease, e.released_at)

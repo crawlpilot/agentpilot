@@ -28,7 +28,7 @@ async def readiness(wiring: Wiring = Depends(get_wiring)) -> dict:
 @router.get("/metrics")
 async def metrics(wiring: Wiring = Depends(get_wiring)) -> Response:
     active = idle = 0
-    for _identity, ctx, _lease, _released_at in wiring.registry.snapshot():
+    for _identity, ctx, _lease, _released_at in await wiring.registry.snapshot():
         if ctx.state is ContextState.ACTIVE:
             active += 1
         elif ctx.state is ContextState.IDLE:

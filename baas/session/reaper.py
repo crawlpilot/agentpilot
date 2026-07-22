@@ -17,9 +17,15 @@ so they share the same read of registry state:
 A fourth pass reclaims (not destroys) ACTIVE leases nobody renewed in time --
 see `force_release`'s docstring on `Registry` for why that's IDLE, not gone.
 
-Vault save-before-destroy (`plan.md`'s "checkpoint on release-to-IDLE, not
-only at destroy") is stubbed until P2's `vault.py` exists; noted at the one
-call site below rather than silently skipped.
+Vault checkpointing (`plan.md`'s "checkpoint on release-to-IDLE, not only
+at destroy") happens at *release* time (the gateway/worker's release-session
+call site, via `baas.identity.vault.Vault.save`), not here -- by the time
+the reaper destroys an IDLE context, its vault entry should already be
+current, so destroy() itself has nothing further to checkpoint.
+
+`self._registry` is typed against `RegistryProtocol`, not the concrete
+in-memory `Registry`, so this reaper runs unmodified against P2's
+`RedisRegistry` too -- same reasoning as `BrowserDriver` being a Protocol.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from baas.observability.metrics import (
     reaper_lease_reclaimed_total,
 )
 from baas.session.lease import is_expired
-from baas.session.registry import Registry
+from baas.session.registry import RegistryProtocol
 from baas.spi.driver import BrowserDriver
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef, ContextState
@@ -81,7 +87,7 @@ def _read_pid_rss_mb(pid: int) -> float | None:
 class Reaper:
     def __init__(
         self,
-        registry: Registry,
+        registry: RegistryProtocol,
         driver: BrowserDriver,
         *,
         idle_ttl_seconds: float = 300.0,
@@ -123,7 +129,7 @@ class Reaper:
         await self._reap_memory_pressure()
 
     async def _reclaim_expired_leases(self) -> None:
-        now_monotonic_entries = self._registry.snapshot()
+        now_monotonic_entries = await self._registry.snapshot()
         for identity, ctx, lease, _released_at in now_monotonic_entries:
             if lease is None or ctx.state is not ContextState.ACTIVE:
                 continue
@@ -133,7 +139,7 @@ class Reaper:
                 await self._registry.force_release(identity)
 
     async def _enforce_per_process_ceiling(self) -> None:
-        for identity, ctx, _lease, _released_at in self._registry.snapshot():
+        for identity, ctx, _lease, _released_at in await self._registry.snapshot():
             if ctx.pid is None:
                 continue
             rss = _read_pid_rss_mb(ctx.pid)
@@ -148,7 +154,7 @@ class Reaper:
 
     async def _reap_idle_ttl(self) -> None:
         now = time.monotonic()
-        for identity, ctx, _lease, released_at in self._registry.snapshot():
+        for identity, ctx, _lease, released_at in await self._registry.snapshot():
             if ctx.state is not ContextState.IDLE or released_at is None:
                 continue
             if now - released_at >= self.idle_ttl_seconds:
@@ -162,7 +168,7 @@ class Reaper:
         idle_oldest_first = sorted(
             (
                 (identity, ctx, released_at)
-                for identity, ctx, _lease, released_at in self._registry.snapshot()
+                for identity, ctx, _lease, released_at in await self._registry.snapshot()
                 if ctx.state is ContextState.IDLE and released_at is not None
             ),
             key=lambda row: row[2],
