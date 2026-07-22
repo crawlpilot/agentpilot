@@ -5,11 +5,11 @@ Browser4's press/fill/mouseWheel/batch backport). `execute()` dispatches a
 `list[Action]` in one round trip and returns one `ActionResult` carrying
 per-type correlated output lists -- the thing that matters at millions/hour.
 
-P0 implements dispatch for the navigate/read/extract verbs below. The
-interaction verbs (Click/Fill/SelectOption/Hover/Press/Scroll) are defined now
-for a stable closed set -- so gateway schemas and `spi.driver.BrowserDriver`
-never need a breaking shape change -- but are undispatched (`NotImplementedError`)
-until P1's `ref_cache` can resolve a `ref` to a live element.
+P0 dispatched the navigate/read/extract verbs. The interaction verbs
+(Click/Fill/SelectOption/Hover/Press/Scroll) were defined from P0 for a
+stable closed set -- so gateway schemas and `spi.driver.BrowserDriver` never
+needed a breaking shape change -- and now dispatch for real in P1 via
+`baas.driver.ref_cache`.
 """
 
 from __future__ import annotations
@@ -130,18 +130,6 @@ Action = (
     | PressAction
     | ScrollAction
 )
-
-# Actions P0's driver actually dispatches; the rest raise NotImplementedError.
-P0_DISPATCHABLE: tuple[type, ...] = (
-    NavigateAction,
-    GoBackAction,
-    SnapshotAction,
-    ExtractAction,
-    ScreenshotAction,
-    WaitAction,
-    ExecuteJsAction,
-)
-
 
 @dataclass
 class ActionResult:

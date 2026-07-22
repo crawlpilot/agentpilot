@@ -159,9 +159,43 @@ unique identity per test run; **P1's reaper is the real fix** and this is a
 concrete argument for landing it promptly rather than letting the compose
 demo silently mask how quickly unclaimed IDLE contexts pile up.
 
+## P1 update: interaction verbs shipped without touching the Xvfb question
+
+Finding #1 above flagged giving each headful session its own Xvfb display as
+a **must-fix-before-P1-ships-Click** item, on the assumption that clicking
+would dispatch through `cdp_patches.AsyncInput` (XTEST, display-global). P1's
+actual `ref_cache.py` + `patchright_driver.py` dispatch Click/Fill/
+SelectOption/Hover/Press/Scroll through Playwright/Patchright's own native
+`Locator` methods instead -- CDP `Input.dispatchMouseEvent`/
+`dispatchKeyEvent` scoped to that page's own session, not the X server's
+single shared pointer. `cdp_patches.AsyncInput` is still never constructed
+anywhere in this codebase. **Finding #1's shared-Xvfb hazard is therefore
+still real but still not yet triggered** -- it only applies once/if a future
+phase adds OS-level XTEST-based input for extra stealth on top of the
+native dispatch that ships in P1. Tracked, not resolved, not currently a P1
+blocker.
+
+The `aria-ref=` spike (plan.md's "does Patchright's binary support resolving
+`aria_snapshot(mode="ai")` refs" question) resolves **yes** --
+`page.locator(f"aria-ref={ref}")` works against this image's Patchright/
+Chrome build; see `driver/ref_cache.py`'s module docstring.
+
+## P1 reaper
+
+P0 finding #5 (IDLE Chrome processes/profile locks never reaped) is fixed:
+`baas.session.registry.Registry` reuses a released identity's still-warm
+context on reopen (no second Chrome onto the same profile dir), and
+`baas.session.reaper.Reaper` destroys genuinely-idle contexts past
+`BAAS_IDLE_TTL_SECONDS` (default 300s), evicts oldest-IDLE-first under node
+memory pressure (`/proc/meminfo`, default 85% watermark), and kills any
+single context whose Chrome process RSS exceeds `BAAS_PER_PROCESS_CEILING_MB`
+(default 4096MB) regardless of TTL.
+
 ## Refinement plan
 
-P1 replaces every estimate above with a measured number from real P0
-containers (`docker stats` for RAM/CPU per context, wall-clock sampling for
-`active_render_fraction`), and resolves the Xvfb-per-context question
-concretely before any interaction verb ships.
+Every estimate above is still first-pass; replacing them with measured
+numbers from `docker stats` (RAM/CPU per context) and wall-clock sampling
+for `active_render_fraction` remains open, now trackable via the P1
+`/metrics` endpoint (`baas_contexts_active`/`baas_contexts_idle`,
+`baas_execute_duration_seconds`, `baas_session_open_duration_seconds`)
+instead of only ad hoc `docker stats` snapshots.

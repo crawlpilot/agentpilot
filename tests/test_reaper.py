@@ -27,7 +27,9 @@ def _identity(name: str) -> IdentityKey:
     return IdentityKey(tenant="t", domain="example.com", name=name)
 
 
-async def _make_idle_entry(registry: Registry, identity: IdentityKey, pid: int | None = None) -> ContextRef:
+async def _make_idle_entry(
+    registry: Registry, identity: IdentityKey, pid: int | None = None
+) -> ContextRef:
     async def opener() -> ContextRef:
         return ContextRef(
             context_id=f"ctx-{identity.name}", identity=identity, state=ContextState.ACTIVE, pid=pid
@@ -83,7 +85,9 @@ async def test_lease_expiry_force_releases_without_destroying() -> None:
     assert ctx.state is ContextState.IDLE
 
 
-async def test_per_process_ceiling_destroys_regardless_of_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_per_process_ceiling_destroys_regardless_of_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry = Registry()
     driver = FakeDriver()
 

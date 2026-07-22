@@ -1,8 +1,12 @@
-"""The one concrete `BrowserDriver` implementation for P0.
+"""The one concrete `BrowserDriver` implementation.
 
 Playwright/Patchright objects never leave this module -- everything returned
 to callers is a `baas.spi` dataclass. `execute()` is the single dispatch loop
-batching a whole `list[Action]` into one `ActionResult`.
+batching a whole `list[Action]` into one `ActionResult`. P1 adds real
+dispatch for the interaction verbs (via `driver/ref_cache.py`), snapshot
+token-budget filtering (`roles`/`max_nodes`/`viewport_only`), and the
+view-only live-view screencast (`LiveViewCapable`, at the bottom of this
+class).
 """
 
 from __future__ import annotations

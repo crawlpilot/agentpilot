@@ -105,7 +105,9 @@ async def test_evict_removes_entry_and_forgets_lease() -> None:
 
     # A fresh acquire after eviction must open a *new* context, not reuse.
     calls: list[int] = []
-    ctx2, _lease2 = await registry.acquire(IDENTITY, "owner", 300.0, lambda: _opener_counting(calls))
+    ctx2, _lease2 = await registry.acquire(
+        IDENTITY, "owner", 300.0, lambda: _opener_counting(calls)
+    )
     assert len(calls) == 1
     assert ctx2 is not ctx
 
@@ -121,6 +123,8 @@ async def test_force_release_reclaims_active_lease_to_idle() -> None:
 
     # Warm context is still reusable afterward.
     calls: list[int] = []
-    ctx2, _lease2 = await registry.acquire(IDENTITY, "owner", 300.0, lambda: _opener_counting(calls))
+    ctx2, _lease2 = await registry.acquire(
+        IDENTITY, "owner", 300.0, lambda: _opener_counting(calls)
+    )
     assert ctx2 is ctx
     assert len(calls) == 0
