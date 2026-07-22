@@ -20,7 +20,14 @@ from pathlib import Path
 from typing import Any, assert_never, cast
 
 import structlog
-from patchright.async_api import BrowserContext, CDPSession, Locator, Page, ProxySettings
+from patchright.async_api import (
+    BrowserContext,
+    CDPSession,
+    FloatRect,
+    Locator,
+    Page,
+    ProxySettings,
+)
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -348,14 +355,25 @@ class PatchrightDriver:
                 with contextlib.suppress(Exception):
                     await cdp.detach()
 
+        def _in_viewport(box: FloatRect) -> bool:
+            return (
+                box["x"] + box["width"] > 0
+                and box["x"] < vw
+                and box["y"] + box["height"] > 0
+                and box["y"] < vh
+            )
+
+        # Three distinct outcomes from `bounding_box()`, not two: a `dict` is
+        # checked against the viewport; `None` is Playwright's own "confirmed
+        # not visible/detached" signal, so that's a real prune; an
+        # *exception* means resolution failed for some transient reason
+        # (slow layout, momentary CDP hiccup) -- unrelated to whether the
+        # element is actually on-screen, so it fails open (kept) rather than
+        # silently discarding real content because one lookup was flaky.
         visible = {
             ref
             for ref, box in zip(leaf_refs, boxes, strict=True)
-            if isinstance(box, dict)
-            and box["x"] + box["width"] > 0
-            and box["x"] < vw
-            and box["y"] + box["height"] > 0
-            and box["y"] < vh
+            if (isinstance(box, dict) and _in_viewport(box)) or isinstance(box, Exception)
         }
         return prune_to_refs(root, visible)
 
