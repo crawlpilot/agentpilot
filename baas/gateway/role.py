@@ -1,24 +1,28 @@
 """P2's role split: `--role gateway|worker`, same codebase (`plan.md`).
-`monolith` (the default) is this repo's own addition -- P0/P1 never split
-roles, and every existing deployment/test hits one process at `:8000`
-expecting the full tenant-facing API; `monolith` preserves that unchanged
-while `gateway`/`worker` become available as an explicit opt-in (see
-`docker-compose.yml`'s `split` profile) rather than a breaking migration.
+`monolith` (the default) predates the split and is no longer a
+docker-compose deployment target (`docker-compose.yml`'s default topology
+is gateway+worker, unconditionally, each with a purpose-built image) -- but
+it remains a valid `BAAS_ROLE` value for non-Docker use: `uv run uvicorn
+baas.gateway.app:app` locally, and the implicit default for this repo's own
+unit test suite, most of which never sets `BAAS_ROLE` and so gets
+`monolith` from `get_role()` below.
 
 - `monolith`: owns the driver, registry, and reaper (today's P0/P1
   behavior) *and* serves `/v1/sessions/...` directly -- no HTTP hop to
   itself.
 - `worker`: owns the driver/registry/reaper; serves only
   `/internal/sessions/...`, never `/v1/...` -- internal-only, VPC-bound,
-  never tenant-exposed, per `plan.md`'s topology.
+  never tenant-exposed, per `plan.md`'s topology. Built from
+  `docker/worker.Dockerfile`.
 - `gateway`: stateless; serves `/v1/sessions/...` as a thin proxy to a
   configured worker's `/internal/...` surface. Never constructs a
   `PatchrightDriver` -- `baas.gateway.wiring` still imports `baas.driver` at
   module level (it's the composition root, exempt from the
   "only the composition root imports the driver" contract either way), but
-  a gateway-role `Wiring` never instantiates it. A true "gateway image with
-  no Chrome install" needs a separate Dockerfile target, which this pass
-  doesn't build -- same image serves all three roles here.
+  a gateway-role `Wiring` never instantiates it. Built from `docker/
+  gateway.Dockerfile`, a genuinely Chrome-free image (no Xvfb/X11/iptables,
+  no `patchright install`) -- the gap this docstring used to flag ("same
+  image serves all three roles") is closed.
 """
 
 from __future__ import annotations

@@ -16,13 +16,19 @@ from __future__ import annotations
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Protocol, runtime_checkable
-
-from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from baas.auth.keygen import generate_api_key, hash_key
 from baas.auth.models import ApiKeyRecord
+
+if TYPE_CHECKING:
+    # Deferred at runtime (see PostgresApiKeyStore's methods below): this
+    # module is imported unconditionally by baas.gateway.wiring regardless
+    # of role, and `worker` images are built without the `postgres` extra
+    # (see docker/worker.Dockerfile) -- a module-level import here would
+    # crash worker's boot on ModuleNotFoundError before any role check runs,
+    # even though worker never constructs a PostgresApiKeyStore at all.
+    from psycopg_pool import AsyncConnectionPool
 
 
 @runtime_checkable
@@ -101,12 +107,14 @@ class PostgresApiKeyStore:
         run inside a coroutine -- see `baas.gateway.wiring.Wiring
         ._connect_api_keys()`, itself awaited from `get_wiring()`."""
 
+        from psycopg_pool import AsyncConnectionPool
+
         pool = AsyncConnectionPool(
             database_url,
             min_size=1,
             max_size=10,
             open=False,
-            kwargs={"autocommit": True, "row_factory": dict_row},
+            kwargs={"autocommit": True},
         )
         await pool.open(wait=True, timeout=10.0)
         return cls(pool)
@@ -132,9 +140,11 @@ class PostgresApiKeyStore:
         return record, plaintext
 
     async def resolve(self, plaintext: str) -> ApiKeyRecord | None:
+        from psycopg.rows import dict_row
+
         digest = hash_key(plaintext)
         async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
+            async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     "SELECT key_id, tenant, name, prefix, created_at, last_used_at, revoked_at "
                     "FROM api_keys WHERE digest = %s",
@@ -158,8 +168,10 @@ class PostgresApiKeyStore:
         )
 
     async def list(self, tenant: str) -> list[ApiKeyRecord]:
+        from psycopg.rows import dict_row
+
         async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
+            async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     "SELECT key_id, tenant, name, prefix, created_at, last_used_at, revoked_at "
                     "FROM api_keys WHERE tenant = %s ORDER BY created_at DESC",

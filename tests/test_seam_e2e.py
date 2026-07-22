@@ -9,6 +9,13 @@ to exercise this module. The auth-gated tests additionally need
 with (`BAAS_ADMIN_TOKEN=some-secret docker compose up -d`) -- this test
 bootstraps a real tenant API key through `/v1/api-keys` using that token,
 exactly as an operator would, rather than hardcoding a backdoor.
+
+Note: this test can't distinguish "keys are backed by a real Postgres" from
+"the gateway silently fell back to `InMemoryApiKeyStore` because
+`BAAS_DATABASE_URL` was never set" -- both make it pass, since it only
+exercises the auth *contract*, not persistence. To actually prove the
+Postgres path, bring the stack up with `BAAS_DATABASE_URL` set (migrated),
+create a key, and check `psql ... -c 'select * from api_keys'` directly.
 """
 
 from __future__ import annotations

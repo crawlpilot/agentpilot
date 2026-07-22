@@ -1,2 +1,5 @@
 # Added by code-review-graph
 .code-review-graph/
+
+# Local secrets (BAAS_DATABASE_URL, BAAS_ADMIN_TOKEN, etc.) -- see .env.example
+.env
