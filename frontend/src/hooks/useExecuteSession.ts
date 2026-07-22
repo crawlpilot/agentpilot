@@ -6,7 +6,14 @@ import type { ActionIn } from '@/lib/api/types'
 export function useExecuteSession() {
   const { apiKey } = useAuth()
   return useMutation({
-    mutationFn: ({ sessionId, actions }: { sessionId: string; actions: ActionIn[] }) =>
-      executeSession(apiKey!, sessionId, { actions }),
+    mutationFn: ({
+      sessionId,
+      actions,
+      pageId,
+    }: {
+      sessionId: string
+      actions: ActionIn[]
+      pageId?: string | null
+    }) => executeSession(apiKey!, sessionId, { actions, page_id: pageId }),
   })
 }

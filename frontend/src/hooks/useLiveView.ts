@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { LiveViewSocket, type LiveViewMode, type LiveViewStatus } from '@/lib/api/liveView'
 import { useAuth } from '@/lib/auth/AuthContext'
 
-export function useLiveView(sessionId: string, initialMode: LiveViewMode = 'view') {
+export function useLiveView(sessionId: string, initialMode: LiveViewMode = 'view', pageId?: string | null) {
   const { apiKey } = useAuth()
   const [mode, setMode] = useState<LiveViewMode>(initialMode)
   const [status, setStatus] = useState<LiveViewStatus>('connecting')
@@ -16,6 +16,7 @@ export function useLiveView(sessionId: string, initialMode: LiveViewMode = 'view
       sessionId,
       apiKey,
       mode: initialMode,
+      pageId,
       onStatusChange: setStatus,
       onFrame: (blob) => {
         const url = URL.createObjectURL(blob)
@@ -31,6 +32,10 @@ export function useLiveView(sessionId: string, initialMode: LiveViewMode = 'view
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, apiKey])
+
+  useEffect(() => {
+    socketRef.current?.setPageId(pageId)
+  }, [pageId])
 
   const changeMode = useCallback((next: LiveViewMode) => {
     setMode(next)

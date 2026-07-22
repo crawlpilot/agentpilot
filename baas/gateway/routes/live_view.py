@@ -79,17 +79,23 @@ async def _send_frames(websocket: WebSocket, queue: asyncio.Queue[Any]) -> None:
             return
 
 
-async def _receive_input(websocket: WebSocket, driver: LiveViewCapable, ctx: Any) -> None:
+async def _receive_input(
+    websocket: WebSocket, driver: LiveViewCapable, ctx: Any, page_id: str | None
+) -> None:
     while True:
         msg = await websocket.receive_json()
         event = _parse_input_event(msg)
         if event is not None:
-            await driver.dispatch_input(ctx, event)
+            await driver.dispatch_input(ctx, event, page_id)
 
 
 @router.websocket("/{session_id}/live-view")
 async def live_view(
-    websocket: WebSocket, session_id: str, mode: str = "view", api_key: str | None = None
+    websocket: WebSocket,
+    session_id: str,
+    mode: str = "view",
+    api_key: str | None = None,
+    page_id: str | None = None,
 ) -> None:
     wiring = await get_wiring()
     session = wiring.sessions.get(session_id)
@@ -109,11 +115,11 @@ async def live_view(
         return
 
     await websocket.accept()
-    queue = await driver.start_screencast(session.ctx)
+    queue = await driver.start_screencast(session.ctx, page_id)
     sender = asyncio.create_task(_send_frames(websocket, queue))
     try:
         if mode == "interact":
-            await _receive_input(websocket, driver, session.ctx)
+            await _receive_input(websocket, driver, session.ctx, page_id)
         else:
             await sender
     except WebSocketDisconnect:
@@ -122,4 +128,4 @@ async def live_view(
         sender.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sender
-        await driver.stop_screencast(session.ctx)
+        await driver.stop_screencast(session.ctx, page_id)

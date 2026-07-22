@@ -48,7 +48,9 @@ async def _pump_input(websocket: WebSocket, upstream: ClientConnection) -> None:
 
 
 @router.websocket("/{session_id}/live-view")
-async def live_view_proxy(websocket: WebSocket, session_id: str, mode: str = "view") -> None:
+async def live_view_proxy(
+    websocket: WebSocket, session_id: str, mode: str = "view", page_id: str | None = None
+) -> None:
     wiring = await get_wiring()
     api_key = websocket.query_params.get("api_key")
     authed = await resolve_query_api_key(wiring, api_key)
@@ -74,6 +76,7 @@ async def live_view_proxy(websocket: WebSocket, session_id: str, mode: str = "vi
     ws_url = (
         worker_url.replace("http://", "ws://").replace("https://", "wss://")
         + f"/internal/sessions/{session_id}/live-view?mode={mode}"
+        + (f"&page_id={page_id}" if page_id is not None else "")
     )
 
     await websocket.accept()

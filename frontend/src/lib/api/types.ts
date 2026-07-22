@@ -106,6 +106,24 @@ export interface ScrollAction {
   ref?: string | null
 }
 
+// --- tab management (mirrors baas/spi/actions.py's NewTab/CloseTab/SwitchTab/ListTab) ---
+
+export interface NewTabAction {
+  type: 'new_tab'
+  url?: string | null
+}
+export interface CloseTabAction {
+  type: 'close_tab'
+  page_id: string
+}
+export interface SwitchTabAction {
+  type: 'switch_tab'
+  page_id: string
+}
+export interface ListTabsAction {
+  type: 'list_tabs'
+}
+
 export type ActionIn =
   | NavigateAction
   | GoBackAction
@@ -120,6 +138,10 @@ export type ActionIn =
   | HoverAction
   | PressAction
   | ScrollAction
+  | NewTabAction
+  | CloseTabAction
+  | SwitchTabAction
+  | ListTabsAction
 
 export const ACTION_TYPES = [
   'navigate',
@@ -135,10 +157,15 @@ export const ACTION_TYPES = [
   'hover',
   'press',
   'scroll',
+  'new_tab',
+  'close_tab',
+  'switch_tab',
+  'list_tabs',
 ] as const
 
 export interface ExecuteRequest {
   actions: ActionIn[]
+  page_id?: string | null
 }
 
 export interface SnapshotNode {
@@ -162,12 +189,20 @@ export interface ArtifactRef {
   sha256: string
 }
 
+export interface TabInfo {
+  page_id: string
+  url: string
+  title: string
+  active: boolean
+}
+
 export interface ActionResult {
   snapshots: AXSnapshot[]
   screenshots: string[] // base64 PNG
   extracts: string[]
   js_returns: unknown[]
   downloads: ArtifactRef[]
+  tabs: TabInfo[][] // one entry per `list_tabs` action in the batch
   sequence_aborted: boolean
   page_changed: boolean
 }

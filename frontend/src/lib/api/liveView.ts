@@ -14,6 +14,7 @@ interface LiveViewSocketOptions {
   sessionId: string
   apiKey: string
   mode: LiveViewMode
+  pageId?: string | null
   onFrame: (blob: Blob) => void
   onStatusChange: (status: LiveViewStatus) => void
 }
@@ -22,21 +23,24 @@ export class LiveViewSocket {
   private readonly opts: LiveViewSocketOptions
   private ws: WebSocket | null = null
   private mode: LiveViewMode
+  private pageId: string | null | undefined
   private deliberateClose = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(opts: LiveViewSocketOptions) {
     this.opts = opts
     this.mode = opts.mode
+    this.pageId = opts.pageId
     this.connect()
   }
 
   private connect(): void {
     this.opts.onStatusChange('connecting')
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const pageParam = this.pageId ? `&page_id=${encodeURIComponent(this.pageId)}` : ''
     const url =
       `${proto}://${window.location.host}/v1/sessions/${this.opts.sessionId}/live-view` +
-      `?mode=${this.mode}&api_key=${encodeURIComponent(this.opts.apiKey)}`
+      `?mode=${this.mode}&api_key=${encodeURIComponent(this.opts.apiKey)}${pageParam}`
 
     const ws = new WebSocket(url)
     ws.binaryType = 'blob'
@@ -65,6 +69,15 @@ export class LiveViewSocket {
   setMode(mode: LiveViewMode): void {
     if (this.mode === mode) return
     this.mode = mode
+    this.ws?.close()
+  }
+
+  /** Same transparent reconnect-on-change as `setMode` -- switching the
+   * active tab means a different page's screencast, which this protocol
+   * can't retarget on an already-open socket. */
+  setPageId(pageId: string | null | undefined): void {
+    if (this.pageId === pageId) return
+    this.pageId = pageId
     this.ws?.close()
   }
 
