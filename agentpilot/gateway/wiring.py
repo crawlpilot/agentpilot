@@ -1,12 +1,12 @@
-"""The composition root -- the ONLY file in the repo that imports `baas.driver`.
+"""The composition root -- the ONLY file in the repo that imports `agentpilot.driver`.
 
-Role-aware (see `baas.gateway.role`): a `worker`/`monolith` process owns the
+Role-aware (see `agentpilot.gateway.role`): a `worker`/`monolith` process owns the
 shared Patchright singleton, the `PatchrightDriver`, the registry (Redis-
-backed when `BAAS_REDIS_URL` is set, in-memory otherwise -- see
-`baas.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
+backed when `AGENTPILOT_REDIS_URL` is set, in-memory otherwise -- see
+`agentpilot.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
 layer (`Vault`/`ProxyPinner`, both optional). A `gateway` process constructs
 none of that -- just an httpx client and a Redis client for the
-`session_id -> worker` routing table, and never touches `baas.driver`.
+`session_id -> worker` routing table, and never touches `agentpilot.driver`.
 
 The `session_id -> Session` dict is worker/monolith-local: `Registry` is
 keyed by `IdentityKey`, not `session_id`, since one warm context can be
@@ -23,12 +23,12 @@ from pathlib import Path
 import httpx
 from redis.asyncio import Redis
 
-from baas.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
-from baas.gateway.role import Role, get_role
-from baas.identity.proxy_pinning import ProxyPinner
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, LeaseId
-from baas.spi.proxy import ProxyEndpoint
+from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
+from agentpilot.gateway.role import Role, get_role
+from agentpilot.identity.proxy_pinning import ProxyPinner
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, LeaseId
+from agentpilot.spi.proxy import ProxyEndpoint
 
 
 @dataclass
@@ -44,7 +44,7 @@ class Session:
 
 
 def _parse_proxy_pool(raw: str) -> list[ProxyEndpoint]:
-    """`BAAS_PROXY_POOL` format: comma-separated `scheme://[user:pass@]host:port`."""
+    """`AGENTPILOT_PROXY_POOL` format: comma-separated `scheme://[user:pass@]host:port`."""
 
     pool = []
     for entry in filter(None, (e.strip() for e in raw.split(","))):
@@ -65,24 +65,24 @@ class Wiring:
     def __init__(self) -> None:
         self.role: Role = get_role()
         self.sessions: dict[str, Session] = {}
-        self.lease_ttl_seconds = float(os.environ.get("BAAS_LEASE_TTL_SECONDS", "300"))
+        self.lease_ttl_seconds = float(os.environ.get("AGENTPILOT_LEASE_TTL_SECONDS", "300"))
         self.cdp_max_connection_seconds = float(
-            os.environ.get("BAAS_CDP_MAX_CONNECTION_SECONDS", "14400")
+            os.environ.get("AGENTPILOT_CDP_MAX_CONNECTION_SECONDS", "14400")
         )
 
-        redis_url = os.environ.get("BAAS_REDIS_URL")
+        redis_url = os.environ.get("AGENTPILOT_REDIS_URL")
         self.redis: Redis | None = Redis.from_url(redis_url) if redis_url else None
 
         # Placeholder until `_connect_api_keys()` (awaited from `get_wiring()`
-        # below) replaces it for `monolith`/`gateway` when `BAAS_DATABASE_URL`
+        # below) replaces it for `monolith`/`gateway` when `AGENTPILOT_DATABASE_URL`
         # is set. `worker` never mounts an auth-gated route and never touches
         # `wiring.api_keys` at all -- leaving this as `InMemoryApiKeyStore`
         # for it is correct, not merely cheap, now that opening the real
         # backend is an async network round-trip rather than Redis's lazy
         # client.
         self.api_keys: ApiKeyStoreProtocol = InMemoryApiKeyStore()
-        self._database_url = os.environ.get("BAAS_DATABASE_URL")
-        self.admin_token = os.environ.get("BAAS_ADMIN_TOKEN")
+        self._database_url = os.environ.get("AGENTPILOT_DATABASE_URL")
+        self.admin_token = os.environ.get("AGENTPILOT_ADMIN_TOKEN")
 
         if self.role == "gateway":
             self._init_gateway()
@@ -102,37 +102,37 @@ class Wiring:
             return
         if self._database_url:
             self.api_keys = await PostgresApiKeyStore.connect(self._database_url)
-        # else: BAAS_DATABASE_URL unset -> keep the InMemoryApiKeyStore()
+        # else: AGENTPILOT_DATABASE_URL unset -> keep the InMemoryApiKeyStore()
         # placeholder (dev/test convenience only -- keys won't survive a
         # restart or be visible to any other process).
 
     def _init_gateway(self) -> None:
-        # Gateway-role graph excludes baas.driver (plan.md) -- these imports
+        # Gateway-role graph excludes agentpilot.driver (plan.md) -- these imports
         # are deferred into this method (not hoisted to module level) purely
         # so a gateway-role process's *call stack* never touches driver code,
         # even though the module-level import above this class still exists
         # (wiring.py is the composition root, exempt from that contract
         # either way). `docker/gateway.Dockerfile` is a genuinely driver-free
-        # image (no Chrome/Xvfb/Patchright at all) -- see `baas/gateway/
+        # image (no Chrome/Xvfb/Patchright at all) -- see `agentpilot/gateway/
         # role.py`'s docstring.
         if self.redis is None:
-            raise RuntimeError("BAAS_ROLE=gateway requires BAAS_REDIS_URL")
-        self.worker_base_url = os.environ.get("BAAS_WORKER_URL", "http://worker:8000")
+            raise RuntimeError("AGENTPILOT_ROLE=gateway requires AGENTPILOT_REDIS_URL")
+        self.worker_base_url = os.environ.get("AGENTPILOT_WORKER_URL", "http://worker:8000")
         self.http_client = httpx.AsyncClient(timeout=90.0)
 
     def _init_worker(self) -> None:
-        from baas.driver.patchright_driver import PatchrightDriver
-        from baas.driver.process_launcher import ProcessLauncher
-        from baas.identity.vault import Vault
-        from baas.session.reaper import Reaper
-        from baas.session.redis_registry import RedisRegistry
-        from baas.session.registry import Registry, RegistryProtocol
-        from baas.spi.driver import BrowserDriver
+        from agentpilot.driver.patchright_driver import PatchrightDriver
+        from agentpilot.driver.process_launcher import ProcessLauncher
+        from agentpilot.identity.vault import Vault
+        from agentpilot.session.reaper import Reaper
+        from agentpilot.session.redis_registry import RedisRegistry
+        from agentpilot.session.registry import Registry, RegistryProtocol
+        from agentpilot.spi.driver import BrowserDriver
 
         self.launcher = ProcessLauncher()
         self.driver: BrowserDriver = PatchrightDriver(
             self.launcher,
-            max_tabs_per_session=int(os.environ.get("BAAS_MAX_TABS_PER_SESSION", "10")),
+            max_tabs_per_session=int(os.environ.get("AGENTPILOT_MAX_TABS_PER_SESSION", "10")),
         )
         assert isinstance(self.driver, BrowserDriver)
 
@@ -140,7 +140,9 @@ class Wiring:
         # -- fail fast, not the gateway's 90s cross-network timeout.
         self.cdp_http_client = httpx.AsyncClient(timeout=5.0)
 
-        self.profiles_root = Path(os.environ.get("BAAS_PROFILES_DIR", "/var/lib/baas/profiles"))
+        self.profiles_root = Path(
+            os.environ.get("AGENTPILOT_PROFILES_DIR", "/var/lib/agentpilot/profiles")
+        )
 
         self.registry: RegistryProtocol
         self.registry = RedisRegistry(self.redis) if self.redis is not None else Registry()
@@ -148,21 +150,27 @@ class Wiring:
         self.reaper = Reaper(
             self.registry,
             self.driver,
-            idle_ttl_seconds=float(os.environ.get("BAAS_IDLE_TTL_SECONDS", "300")),
-            scan_interval_seconds=float(os.environ.get("BAAS_REAPER_INTERVAL_SECONDS", "15")),
-            mem_pressure_watermark_pct=float(os.environ.get("BAAS_MEM_WATERMARK_PCT", "85")),
-            per_process_ceiling_mb=float(os.environ.get("BAAS_PER_PROCESS_CEILING_MB", "4096")),
+            idle_ttl_seconds=float(os.environ.get("AGENTPILOT_IDLE_TTL_SECONDS", "300")),
+            scan_interval_seconds=float(
+                os.environ.get("AGENTPILOT_REAPER_INTERVAL_SECONDS", "15")
+            ),
+            mem_pressure_watermark_pct=float(
+                os.environ.get("AGENTPILOT_MEM_WATERMARK_PCT", "85")
+            ),
+            per_process_ceiling_mb=float(
+                os.environ.get("AGENTPILOT_PER_PROCESS_CEILING_MB", "4096")
+            ),
         )
         self.reaper.start()
 
         self.vault: Vault | None = None
-        vault_key = os.environ.get("BAAS_VAULT_KEY")
+        vault_key = os.environ.get("AGENTPILOT_VAULT_KEY")
         if vault_key:
-            vault_root = Path(os.environ.get("BAAS_VAULT_DIR", "/var/lib/baas/vault"))
+            vault_root = Path(os.environ.get("AGENTPILOT_VAULT_DIR", "/var/lib/agentpilot/vault"))
             self.vault = Vault(vault_root, vault_key.encode())
 
         self.proxy_pinner: ProxyPinner | None = None
-        proxy_pool_raw = os.environ.get("BAAS_PROXY_POOL")
+        proxy_pool_raw = os.environ.get("AGENTPILOT_PROXY_POOL")
         if proxy_pool_raw and self.redis is not None:
             self.proxy_pinner = ProxyPinner(self.redis, _parse_proxy_pool(proxy_pool_raw))
 

@@ -1,6 +1,6 @@
 """Egress policy applied at the browser/httpx boundary.
 
-Baseline (metadata + RFC1918 block) is enforced in P0 by `baas.egress.policy`;
+Baseline (metadata + RFC1918 block) is enforced in P0 by `agentpilot.egress.policy`;
 full post-DNS-resolution IP validation for the httpx tier lands with P2.
 """
 

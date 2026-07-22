@@ -11,9 +11,9 @@
 // listens for the browser's `storage` event to pick up login/logout that
 // happened in another tab without needing a reload.
 
-const API_KEY_STORAGE_KEY = 'baas.apiKey'
-const TENANT_STORAGE_KEY = 'baas.tenant'
-const ADMIN_TOKEN_STORAGE_KEY = 'baas.adminToken'
+const API_KEY_STORAGE_KEY = 'agentpilot.apiKey'
+const TENANT_STORAGE_KEY = 'agentpilot.tenant'
+const ADMIN_TOKEN_STORAGE_KEY = 'agentpilot.adminToken'
 
 export function getStoredApiKey(): string | null {
   return localStorage.getItem(API_KEY_STORAGE_KEY)

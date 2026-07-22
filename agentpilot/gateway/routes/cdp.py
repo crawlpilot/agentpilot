@@ -37,10 +37,10 @@ import websockets
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 
-from baas.gateway.auth_deps import bearer_token, optional_authed_tenant, resolve_query_api_key
-from baas.gateway.wiring import Session, Wiring, get_wiring
-from baas.spi.cdp import CdpEndpointCapable
-from baas.spi.errors import CdpNotAvailable
+from agentpilot.gateway.auth_deps import bearer_token, optional_authed_tenant, resolve_query_api_key
+from agentpilot.gateway.wiring import Session, Wiring, get_wiring
+from agentpilot.spi.cdp import CdpEndpointCapable
+from agentpilot.spi.errors import CdpNotAvailable
 
 log = structlog.get_logger(__name__)
 

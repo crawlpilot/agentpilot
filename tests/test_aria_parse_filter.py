@@ -1,9 +1,9 @@
 """Pure, no-browser tests for the P1 "snapshot token budget" tree filters in
-`baas.driver.aria_parse`."""
+`agentpilot.driver.aria_parse`."""
 
 from __future__ import annotations
 
-from baas.driver.aria_parse import (
+from agentpilot.driver.aria_parse import (
     collect_leaf_refs,
     filter_snapshot,
     parse_aria_snapshot,

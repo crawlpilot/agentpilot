@@ -13,4 +13,4 @@ for _ in $(seq 1 20); do
     sleep 0.25
 done
 
-exec uv run uvicorn baas.gateway.app:app --host 0.0.0.0 --port 8000
+exec uv run uvicorn agentpilot.gateway.app:app --host 0.0.0.0 --port 8000

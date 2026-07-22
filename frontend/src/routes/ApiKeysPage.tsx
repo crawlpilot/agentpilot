@@ -31,7 +31,7 @@ export function ApiKeysPage() {
         <EmptyState
           icon={<KeyRound className="size-8" />}
           title="Admin token required"
-          description="Enter the platform's BAAS_ADMIN_TOKEN to manage API keys."
+          description="Enter the platform's AGENTPILOT_ADMIN_TOKEN to manage API keys."
           action={
             <form
               className="flex items-end gap-2"

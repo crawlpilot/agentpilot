@@ -1,7 +1,7 @@
 /*
  * Detection checks for the P0 stealth regression fixture.
  *
- * Results are written to the DOM (`#baas-detection-result`'s `textContent`,
+ * Results are written to the DOM (`#agentpilot-detection-result`'s `textContent`,
  * as JSON) rather than a `window` global. This isn't stylistic: Patchright's
  * `page.evaluate()` runs in a JS world isolated from the page's own <script>
  * execution context (empirically confirmed -- a global this script sets on
@@ -47,7 +47,7 @@
   };
 
   function resultElement() {
-    return document.getElementById("baas-detection-result");
+    return document.getElementById("agentpilot-detection-result");
   }
 
   function publish() {
@@ -58,7 +58,7 @@
     var N = 20000;
     var t0 = performance.now();
     for (var i = 0; i < N; i++) {
-      console.log("__baas_probe", i);
+      console.log("__agentpilot_probe", i);
     }
     var elapsed = performance.now() - t0;
     state.consoleLogMs = elapsed;

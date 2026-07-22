@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from baas.identity.profile_store import PathTraversalError, resolve_profile_dir
-from baas.spi.identity import IdentityKey
+from agentpilot.identity.profile_store import PathTraversalError, resolve_profile_dir
+from agentpilot.spi.identity import IdentityKey
 
 
 def test_resolve_profile_dir_stays_within_tenant_root(tmp_path) -> None:

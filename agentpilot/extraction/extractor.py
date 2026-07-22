@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import trafilatura
 
-from baas.spi.actions import ExtractFormat
+from agentpilot.spi.actions import ExtractFormat
 
 _OUTPUT_FORMAT = {"markdown": "markdown", "text": "txt"}
 

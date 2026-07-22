@@ -10,10 +10,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from baas.gateway.routes.sessions import list_sessions
-from baas.gateway.wiring import Session
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState, Lease, LeaseId
+from agentpilot.gateway.routes.sessions import list_sessions
+from agentpilot.gateway.wiring import Session
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 
 class _FakeHeaders:
@@ -121,7 +121,7 @@ async def test_list_sessions_filters_by_tenant_query_param() -> None:
 
 
 async def test_list_sessions_reports_rss_when_pid_known(monkeypatch: pytest.MonkeyPatch) -> None:
-    import baas.gateway.routes.sessions as sessions_module
+    import agentpilot.gateway.routes.sessions as sessions_module
 
     monkeypatch.setattr(sessions_module, "_read_pid_rss_mb", lambda _pid: 123.5)
     identity = _identity("acme", "dana")

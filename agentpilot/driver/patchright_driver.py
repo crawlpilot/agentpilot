@@ -1,7 +1,7 @@
 """The one concrete `BrowserDriver` implementation.
 
 Playwright/Patchright objects never leave this module -- everything returned
-to callers is a `baas.spi` dataclass. `execute()` is the single dispatch loop
+to callers is a `agentpilot.spi` dataclass. `execute()` is the single dispatch loop
 batching a whole `list[Action]` into one `ActionResult`. P1 adds real
 dispatch for the interaction verbs (via `driver/ref_cache.py`), snapshot
 token-budget filtering (`roles`/`max_nodes`/`viewport_only`), and the
@@ -45,22 +45,22 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from baas.driver.aria_parse import (
+from agentpilot.driver.aria_parse import (
     collect_leaf_refs,
     filter_snapshot,
     parse_aria_snapshot,
     prune_to_refs,
 )
-from baas.driver.live_view import (
+from agentpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
     parse_screencast_frame,
     to_cdp_input_params,
 )
-from baas.driver.process_launcher import ProcessLauncher
-from baas.driver.ref_cache import RefCache
-from baas.egress.policy import apply_baseline
-from baas.extraction.extractor import extract
-from baas.spi.actions import (
+from agentpilot.driver.process_launcher import ProcessLauncher
+from agentpilot.driver.ref_cache import RefCache
+from agentpilot.egress.policy import apply_baseline
+from agentpilot.extraction.extractor import extract
+from agentpilot.spi.actions import (
     Action,
     ActionResult,
     ClickAction,
@@ -82,21 +82,21 @@ from baas.spi.actions import (
     TabInfo,
     WaitAction,
 )
-from baas.spi.egress import EgressPolicy
-from baas.spi.errors import (
+from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import (
     CapacityExhausted,
     ContextCrashed,
     NavigationTimeout,
     StaleRefError,
     TabNotFound,
 )
-from baas.spi.health import HealthStatus
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState
-from baas.spi.proxy import ProxyEndpoint
-from baas.spi.snapshot import AXSnapshot, SnapshotNode
-from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
-from baas.spi.streaming import InputEvent, LiveViewFrame
+from agentpilot.spi.health import HealthStatus
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState
+from agentpilot.spi.proxy import ProxyEndpoint
+from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from agentpilot.spi.streaming import InputEvent, LiveViewFrame
 
 log = structlog.get_logger(__name__)
 
@@ -117,10 +117,10 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
 DEFAULT_MAX_TABS_PER_SESSION = 10
 """Per-session tab cap (`_Context.max_tabs`). A prior internal system's
 equivalent driver-pool capacity hard-ceilings much higher, but that governs a
-*shared driver pool* spread across many crawls; one baas-crawlpilot session
+*shared driver pool* spread across many crawls; one agentpilot session
 is already a dedicated Chrome context per tenant identity, a heavier unit, so
 a smaller default is the right translation, not a straight copy of the
-number. Configurable via `BAAS_MAX_TABS_PER_SESSION` (see `wiring.py`)."""
+number. Configurable via `AGENTPILOT_MAX_TABS_PER_SESSION` (see `wiring.py`)."""
 
 
 @dataclass
@@ -703,7 +703,7 @@ class PatchrightDriver:
 
     # --- LiveViewCapable (optional capability; see spi.streaming) ---
     # Page and Input domains only -- never Runtime, to preserve Patchright's
-    # anti-leak guarantee (see baas/driver/live_view.py's module docstring).
+    # anti-leak guarantee (see agentpilot/driver/live_view.py's module docstring).
     # One screencast at a time per context (the active tab's), matching a
     # real browser's single visible tab -- see multi-tab plan's "explicitly
     # out of scope".

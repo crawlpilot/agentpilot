@@ -1,7 +1,7 @@
 # Added by code-review-graph
 .code-review-graph/
 
-# Local secrets (BAAS_DATABASE_URL, BAAS_ADMIN_TOKEN, etc.) -- see .env.example
+# Local secrets (AGENTPILOT_DATABASE_URL, AGENTPILOT_ADMIN_TOKEN, etc.) -- see .env.example
 .env
 .localdata/
 __pycache__/

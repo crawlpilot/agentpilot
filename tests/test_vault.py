@@ -1,4 +1,4 @@
-"""`baas.identity.vault` -- encryption-at-rest round-trip and tamper/foreign
+"""`agentpilot.identity.vault` -- encryption-at-rest round-trip and tamper/foreign
 -key resilience. Trigger semantics (restore-only-on-fresh-dir,
 checkpoint-on-release) are the *caller's* responsibility (see the module
 docstring), so they're exercised in `test_seam_e2e.py`-level integration,
@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from cryptography.fernet import Fernet
 
-from baas.identity.vault import Vault
-from baas.spi.identity import IdentityKey
-from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from agentpilot.identity.vault import Vault
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 IDENTITY = IdentityKey(tenant="acme", domain="example.com", name="alice")
 

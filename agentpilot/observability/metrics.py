@@ -22,26 +22,26 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram
 
-contexts_active = Gauge("baas_contexts_active", "Number of ACTIVE browser contexts")
-contexts_idle = Gauge("baas_contexts_idle", "Number of IDLE browser contexts")
+contexts_active = Gauge("agentpilot_contexts_active", "Number of ACTIVE browser contexts")
+contexts_idle = Gauge("agentpilot_contexts_idle", "Number of IDLE browser contexts")
 
 session_open_duration_seconds = Histogram(
-    "baas_session_open_duration_seconds", "POST /v1/sessions latency"
+    "agentpilot_session_open_duration_seconds", "POST /v1/sessions latency"
 )
 execute_duration_seconds = Histogram(
-    "baas_execute_duration_seconds", "POST /v1/sessions/{id}/execute latency"
+    "agentpilot_execute_duration_seconds", "POST /v1/sessions/{id}/execute latency"
 )
 
 error_responses_total = Counter(
-    "baas_error_responses_total", "Gateway error responses by typed code", ["code"]
+    "agentpilot_error_responses_total", "Gateway error responses by typed code", ["code"]
 )
 requests_total = Counter(
-    "baas_requests_total", "Gateway requests by tenant and route", ["tenant", "route"]
+    "agentpilot_requests_total", "Gateway requests by tenant and route", ["tenant", "route"]
 )
 
 reaper_destroyed_total = Counter(
-    "baas_reaper_destroyed_total", "Contexts destroyed by the reaper, by reason", ["reason"]
+    "agentpilot_reaper_destroyed_total", "Contexts destroyed by the reaper, by reason", ["reason"]
 )
 reaper_lease_reclaimed_total = Counter(
-    "baas_reaper_lease_reclaimed_total", "ACTIVE leases force-released for expiring unrenewed"
+    "agentpilot_reaper_lease_reclaimed_total", "ACTIVE leases force-released for expiring unrenewed"
 )

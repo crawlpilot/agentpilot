@@ -1,4 +1,4 @@
-"""Unit tests for `baas.session.redis_registry.RedisRegistry` -- against
+"""Unit tests for `agentpilot.session.redis_registry.RedisRegistry` -- against
 `fakeredis` (with `lupa` for real Lua-script execution), not a live Redis
 server, so these stay fast and Docker-free like `test_session_registry.py`.
 Same behavioral contract as the in-memory `Registry` (`RegistryProtocol`) --
@@ -11,10 +11,10 @@ import asyncio
 import fakeredis
 import pytest
 
-from baas.session.redis_registry import RedisRegistry
-from baas.spi.errors import LeaseConflict
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState
+from agentpilot.session.redis_registry import RedisRegistry
+from agentpilot.spi.errors import LeaseConflict
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState
 
 IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
 

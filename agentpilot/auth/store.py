@@ -1,13 +1,13 @@
 """API-key storage for tenant-facing auth: Postgres-backed (persists across
-restarts, shared across gateway/monolith processes) when `BAAS_DATABASE_URL`
+restarts, shared across gateway/monolith processes) when `AGENTPILOT_DATABASE_URL`
 is set, in-memory otherwise (dev/test only) -- the same dual-backend shape as
-`baas.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
+`agentpilot.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
 persisted (`keygen.hash_key`); the plaintext is returned once, at creation,
 and never again.
 
 Postgres, not Redis: this is "user management" data (tenant, key hash, name,
-revocation), not the ephemeral distributed-lock/routing state `baas.session`
-and `baas.identity.proxy_pinning` use Redis for -- see `alembic/versions/
+revocation), not the ephemeral distributed-lock/routing state `agentpilot.session`
+and `agentpilot.identity.proxy_pinning` use Redis for -- see `alembic/versions/
 0001_create_api_keys.py` for the schema this store reads and writes.
 """
 
@@ -18,12 +18,12 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from baas.auth.keygen import generate_api_key, hash_key
-from baas.auth.models import ApiKeyRecord
+from agentpilot.auth.keygen import generate_api_key, hash_key
+from agentpilot.auth.models import ApiKeyRecord
 
 if TYPE_CHECKING:
     # Deferred at runtime (see PostgresApiKeyStore's methods below): this
-    # module is imported unconditionally by baas.gateway.wiring regardless
+    # module is imported unconditionally by agentpilot.gateway.wiring regardless
     # of role, and `worker` images are built without the `postgres` extra
     # (see docker/worker.Dockerfile) -- a module-level import here would
     # crash worker's boot on ModuleNotFoundError before any role check runs,
@@ -91,7 +91,7 @@ class PostgresApiKeyStore:
     """Postgres-backed `ApiKeyStoreProtocol` implementation -- hand-written
     SQL against the `api_keys` table (`alembic/versions/0001_create_api_keys
     .py`), matching this codebase's no-ORM house style (the same idea as
-    `baas.session.redis_registry`'s raw Lua scripts, just SQL instead of
+    `agentpilot.session.redis_registry`'s raw Lua scripts, just SQL instead of
     Lua). Only a key's sha256 digest is ever persisted, same contract as
     `InMemoryApiKeyStore`.
     """
@@ -104,7 +104,7 @@ class PostgresApiKeyStore:
         """Async factory, not a plain constructor: unlike `redis.asyncio
         .Redis.from_url()` (lazy, non-blocking), a Postgres pool needs an
         explicit `await pool.open()` to warm its connections, which can only
-        run inside a coroutine -- see `baas.gateway.wiring.Wiring
+        run inside a coroutine -- see `agentpilot.gateway.wiring.Wiring
         ._connect_api_keys()`, itself awaited from `get_wiring()`."""
 
         from psycopg_pool import AsyncConnectionPool

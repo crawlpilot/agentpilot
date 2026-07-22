@@ -1,6 +1,6 @@
 """Post-DNS-resolution IP validation for the httpx "basic" (non-browser)
 tier -- resolves DNS first, then validates *every* resolved IP against the
-same deny ranges `baas.egress.policy` enforces for the browser process
+same deny ranges `agentpilot.egress.policy` enforces for the browser process
 (metadata + RFC1918), before connecting.
 
 Checking the hostname string alone ("is this an internal-looking name") is
@@ -26,8 +26,8 @@ from typing import Any
 
 import httpx
 
-from baas.spi.egress import EgressPolicy
-from baas.spi.errors import EgressBlocked
+from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import EgressBlocked
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 

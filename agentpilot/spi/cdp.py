@@ -1,6 +1,6 @@
 """Optional capability: exposing a context's local Chrome DevTools Protocol
 endpoint, for external CDP clients (Playwright's `connect_over_cdp`,
-Puppeteer, browser-use, ...) to attach directly. Mirrors `baas.spi.streaming`'s
+Puppeteer, browser-use, ...) to attach directly. Mirrors `agentpilot.spi.streaming`'s
 `LiveViewCapable` pattern: checked via `isinstance` at the composition root,
 a driver without it simply doesn't get the CDP routes wired up.
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from baas.spi.lease import ContextRef
+from agentpilot.spi.lease import ContextRef
 
 
 @runtime_checkable

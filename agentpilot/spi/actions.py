@@ -10,7 +10,7 @@ P0 dispatched the navigate/read/extract verbs. The interaction verbs
 (Click/Fill/SelectOption/Hover/Press/Scroll) were defined from P0 for a
 stable closed set -- so gateway schemas and `spi.driver.BrowserDriver` never
 needed a breaking shape change -- and now dispatch for real in P1 via
-`baas.driver.ref_cache`.
+`agentpilot.driver.ref_cache`.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from baas.spi.artifact import ArtifactRef
-from baas.spi.snapshot import AXSnapshot
+from agentpilot.spi.artifact import ArtifactRef
+from agentpilot.spi.snapshot import AXSnapshot
 
 ExtractFormat = Literal["markdown", "text", "html"]
 
@@ -46,7 +46,7 @@ class SnapshotAction:
 
 @dataclass
 class ExtractAction:
-    """The scrape output. `markdown`/`text` route through `baas.extraction`
+    """The scrape output. `markdown`/`text` route through `agentpilot.extraction`
     (trafilatura); `html` returns `page.content()` raw."""
 
     format: ExtractFormat = "markdown"

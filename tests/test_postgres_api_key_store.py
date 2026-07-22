@@ -1,9 +1,9 @@
-"""`baas.auth.store.PostgresApiKeyStore` -- against a real local Postgres test
-database. Skipped automatically when `BAAS_TEST_DATABASE_URL` isn't set or
+"""`agentpilot.auth.store.PostgresApiKeyStore` -- against a real local Postgres test
+database. Skipped automatically when `AGENTPILOT_TEST_DATABASE_URL` isn't set or
 isn't reachable, so `pytest tests/` requires no Postgres by default (same
 idiom as `tests/test_seam_e2e.py`'s compose-reachability skip). Point this at
 a scratch database that already has `alembic upgrade head` applied, e.g.:
-  BAAS_TEST_DATABASE_URL=postgresql://baas:baas@localhost:5432/baas_test
+  AGENTPILOT_TEST_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot_test
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import uuid
 import psycopg
 import pytest
 
-from baas.auth.store import PostgresApiKeyStore
+from agentpilot.auth.store import PostgresApiKeyStore
 
-_DATABASE_URL = os.environ.get("BAAS_TEST_DATABASE_URL")
+_DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")
 
 
 def _database_reachable() -> bool:
@@ -31,7 +31,7 @@ def _database_reachable() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _database_reachable(),
-    reason="set BAAS_TEST_DATABASE_URL to a real local Postgres db with "
+    reason="set AGENTPILOT_TEST_DATABASE_URL to a real local Postgres db with "
     "`alembic upgrade head` already applied",
 )
 

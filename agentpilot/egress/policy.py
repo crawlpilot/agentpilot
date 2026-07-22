@@ -8,7 +8,7 @@ host's) blocking outbound access to `169.254.169.254` and private ranges, at
 - P2's per-worker netns isolation is the real boundary; this baseline exists
   so P0 isn't wide open before that lands.
 - The httpx "basic" tier gets full post-DNS-resolution IP validation (guards
-  rebinding) starting in P2 -- see `baas.egress.httpx_guard` (not built yet).
+  rebinding) starting in P2 -- see `agentpilot.egress.httpx_guard` (not built yet).
 - This is a container-wide block (every process in the container, not just
   Chrome) -- the plan's eventual "Chrome uid/netns"-scoped enforcement needs
   a distinct OS user for Chrome, which P0's single collapsed gateway+worker
@@ -38,7 +38,7 @@ import subprocess
 
 import structlog
 
-from baas.spi.egress import EgressPolicy
+from agentpilot.spi.egress import EgressPolicy
 
 log = structlog.get_logger(__name__)
 

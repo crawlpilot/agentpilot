@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from baas.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityKey
 
 
 class PathTraversalError(ValueError):

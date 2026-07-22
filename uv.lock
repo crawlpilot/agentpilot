@@ -7,6 +7,76 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agentpilot"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "redis" },
+    { name = "structlog" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+driver = [
+    { name = "cryptography" },
+    { name = "patchright" },
+    { name = "re-cdp-patches" },
+    { name = "trafilatura" },
+]
+postgres = [
+    { name = "alembic" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "fakeredis" },
+    { name = "import-linter" },
+    { name = "lupa" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-httpserver" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", marker = "extra == 'postgres'", specifier = ">=1.13" },
+    { name = "cryptography", marker = "extra == 'driver'", specifier = ">=43.0" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "patchright", marker = "extra == 'driver'", specifier = ">=1.61.2" },
+    { name = "prometheus-client", specifier = ">=0.21" },
+    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "re-cdp-patches", marker = "extra == 'driver'", specifier = ">=0.9.1" },
+    { name = "redis", specifier = ">=5.0" },
+    { name = "structlog", specifier = ">=24.4" },
+    { name = "trafilatura", marker = "extra == 'driver'", specifier = ">=2.1.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "websockets", specifier = ">=13.0" },
+]
+provides-extras = ["driver", "postgres"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fakeredis", specifier = ">=2.26" },
+    { name = "import-linter", specifier = ">=2.1" },
+    { name = "lupa", specifier = ">=2.1" },
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-httpserver", specifier = ">=1.1" },
+    { name = "ruff", specifier = ">=0.7" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.18.5"
 source = { registry = "https://pypi.org/simple" }
@@ -90,76 +160,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/09/c7/7d5ad8b49e1278e1c2a1e0274bd7850560b3f09313aa00c13bc8d5544792/ast_serialize-0.6.0-cp39-abi3-win32.whl", hash = "sha256:82c312a7844d2fdeb4d5c48bd3d215bf940dafd4704e1a9bcf252a99010a99b1", size = 1063165, upload-time = "2026-06-30T20:02:50.98Z" },
     { url = "https://files.pythonhosted.org/packages/47/ae/6710c14ecb276031cf10249f6adf5a59e2d3fdb3b5183bd59f70524067ee/ast_serialize-0.6.0-cp39-abi3-win_amd64.whl", hash = "sha256:113b58346f9ceb664352032770caca817d4a3c86f611c6088e6ef65ddaa70f0e", size = 1101444, upload-time = "2026-06-30T20:02:52.554Z" },
     { url = "https://files.pythonhosted.org/packages/66/40/c53deb2cd0c9b0fb636d24d9f40924cf2e65028e6b20b10cd5c1eeb2c730/ast_serialize-0.6.0-cp39-abi3-win_arm64.whl", hash = "sha256:ccd132fe8db56f61fe743b1f644d01b8d65b83248a8da506f3132bda86d6ed5e", size = 1072965, upload-time = "2026-06-30T20:02:54.097Z" },
-]
-
-[[package]]
-name = "baas-crawlpilot"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "prometheus-client" },
-    { name = "pydantic" },
-    { name = "redis" },
-    { name = "structlog" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-driver = [
-    { name = "cryptography" },
-    { name = "patchright" },
-    { name = "re-cdp-patches" },
-    { name = "trafilatura" },
-]
-postgres = [
-    { name = "alembic" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "fakeredis" },
-    { name = "import-linter" },
-    { name = "lupa" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-httpserver" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", marker = "extra == 'postgres'", specifier = ">=1.13" },
-    { name = "cryptography", marker = "extra == 'driver'", specifier = ">=43.0" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "patchright", marker = "extra == 'driver'", specifier = ">=1.61.2" },
-    { name = "prometheus-client", specifier = ">=0.21" },
-    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.9" },
-    { name = "re-cdp-patches", marker = "extra == 'driver'", specifier = ">=0.9.1" },
-    { name = "redis", specifier = ">=5.0" },
-    { name = "structlog", specifier = ">=24.4" },
-    { name = "trafilatura", marker = "extra == 'driver'", specifier = ">=2.1.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
-    { name = "websockets", specifier = ">=13.0" },
-]
-provides-extras = ["driver", "postgres"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "fakeredis", specifier = ">=2.26" },
-    { name = "import-linter", specifier = ">=2.1" },
-    { name = "lupa", specifier = ">=2.1" },
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pytest-httpserver", specifier = ">=1.1" },
-    { name = "ruff", specifier = ">=0.7" },
 ]
 
 [[package]]

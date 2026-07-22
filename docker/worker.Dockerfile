@@ -1,5 +1,5 @@
-# Heavy image for BAAS_ROLE=worker (and, run outside Docker, monolith): the
-# only role that ever imports baas.driver. Debian base because Chrome +
+# Heavy image for AGENTPILOT_ROLE=worker (and, run outside Docker, monolith): the
+# only role that ever imports agentpilot.driver. Debian base because Chrome +
 # Xvfb + cdp_patches' X11 input dispatch all need real system packages, not
 # a distroless/alpine image. See docker/gateway.Dockerfile for the lean
 # image used by the stateless gateway role, which needs none of this.
@@ -24,8 +24,8 @@ RUN uv sync --extra driver
 RUN uv run patchright install --with-deps chrome
 
 ENV DISPLAY=:99
-ENV BAAS_PROFILES_DIR=/var/lib/baas/profiles
-RUN mkdir -p /var/lib/baas/profiles
+ENV AGENTPILOT_PROFILES_DIR=/var/lib/agentpilot/profiles
+RUN mkdir -p /var/lib/agentpilot/profiles
 
 EXPOSE 8000
 ENTRYPOINT ["/app/docker/worker-entrypoint.sh"]

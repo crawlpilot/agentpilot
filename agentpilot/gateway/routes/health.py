@@ -1,5 +1,5 @@
 """Liveness/readiness + `/metrics` -- every metric object lives in
-`baas.observability.metrics`; this route only samples current registry state
+`agentpilot.observability.metrics`; this route only samples current registry state
 into the pool gauges on scrape (pull-model, not pushed on every mutation,
 since a Prometheus scrape interval is the only consumer)."""
 
@@ -8,9 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from baas.gateway.wiring import Wiring, get_wiring
-from baas.observability.metrics import contexts_active, contexts_idle
-from baas.spi.lease import ContextState
+from agentpilot.gateway.wiring import Wiring, get_wiring
+from agentpilot.observability.metrics import contexts_active, contexts_idle
+from agentpilot.spi.lease import ContextState
 
 router = APIRouter(tags=["health"])
 

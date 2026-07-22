@@ -1,5 +1,5 @@
-# Lean image for BAAS_ROLE=gateway: gateway is a stateless proxy
-# (baas/gateway/wiring.py's _init_gateway) that never imports baas.driver at
+# Lean image for AGENTPILOT_ROLE=gateway: gateway is a stateless proxy
+# (agentpilot/gateway/wiring.py's _init_gateway) that never imports agentpilot.driver at
 # runtime, so it needs none of worker.Dockerfile's Chrome/Xvfb/X11/iptables
 # packages, no `patchright install`, and no Xvfb-wait entrypoint script --
 # there's nothing to wait on, so CMD goes straight into uvicorn.
@@ -20,4 +20,4 @@ COPY . .
 RUN uv sync --extra postgres
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "baas.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "agentpilot.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -22,9 +22,9 @@ import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 
-from baas.gateway.auth_deps import resolve_query_api_key
-from baas.gateway.routing import resolve_worker
-from baas.gateway.wiring import get_wiring
+from agentpilot.gateway.auth_deps import resolve_query_api_key
+from agentpilot.gateway.routing import resolve_worker
+from agentpilot.gateway.wiring import get_wiring
 
 log = structlog.get_logger(__name__)
 

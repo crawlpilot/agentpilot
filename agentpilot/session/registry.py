@@ -15,11 +15,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from baas.session.lease import new_lease
-from baas.session.lease import renew as _renew_lease
-from baas.spi.errors import LeaseConflict
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState, Lease, LeaseId
+from agentpilot.session.lease import new_lease
+from agentpilot.session.lease import renew as _renew_lease
+from agentpilot.spi.errors import LeaseConflict
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 Opener = Callable[[], Awaitable[ContextRef]]
 

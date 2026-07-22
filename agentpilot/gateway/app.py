@@ -1,5 +1,5 @@
 """FastAPI app: wires routers + exception handlers, role-aware (see
-`baas.gateway.role`). Zero session state lives here -- that's
+`agentpilot.gateway.role`). Zero session state lives here -- that's
 `wiring.Wiring`, constructed lazily via `get_wiring()`.
 
 - `monolith` (default): everything -- `/v1/sessions` (real logic, tenant-
@@ -27,10 +27,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 
-from baas.gateway.auth_deps import require_admin, require_tenant_auth
-from baas.gateway.errors import register_exception_handlers
-from baas.gateway.role import get_role
-from baas.gateway.routes import (
+from agentpilot.gateway.auth_deps import require_admin, require_tenant_auth
+from agentpilot.gateway.errors import register_exception_handlers
+from agentpilot.gateway.role import get_role
+from agentpilot.gateway.routes import (
     api_keys,
     cdp,
     cdp_proxy,
@@ -40,7 +40,7 @@ from baas.gateway.routes import (
     live_view_proxy,
     sessions,
 )
-from baas.gateway.wiring import reset_wiring
+from agentpilot.gateway.wiring import reset_wiring
 
 
 @asynccontextmanager
@@ -49,7 +49,7 @@ async def _lifespan(app: FastAPI):
     await reset_wiring()
 
 
-app = FastAPI(title="baas-crawlpilot", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="agentpilot", version="0.1.0", lifespan=_lifespan)
 register_exception_handlers(app)
 app.include_router(health.router)
 

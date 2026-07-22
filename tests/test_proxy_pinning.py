@@ -1,4 +1,4 @@
-"""`baas.identity.proxy_pinning` -- assign-once-keep-for-life, race-safe via
+"""`agentpilot.identity.proxy_pinning` -- assign-once-keep-for-life, race-safe via
 Redis `HSETNX`. Against `fakeredis`, same pattern as `test_redis_registry.py`."""
 
 from __future__ import annotations
@@ -8,9 +8,9 @@ import asyncio
 import fakeredis
 import pytest
 
-from baas.identity.proxy_pinning import ProxyPinner
-from baas.spi.identity import IdentityKey
-from baas.spi.proxy import ProxyEndpoint
+from agentpilot.identity.proxy_pinning import ProxyPinner
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.proxy import ProxyEndpoint
 
 POOL = [
     ProxyEndpoint(scheme="http", host="proxy1.example.com", port=8080, vendor="acme"),

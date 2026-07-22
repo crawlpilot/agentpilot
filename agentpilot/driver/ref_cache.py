@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 
 from patchright.async_api import Locator, Page
 
-from baas.spi.errors import StaleRefError
+from agentpilot.spi.errors import StaleRefError
 
 
 @dataclass

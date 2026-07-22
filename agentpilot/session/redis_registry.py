@@ -1,6 +1,6 @@
 """P2's Redis-backed `RegistryProtocol` implementation -- the "registry.py
 -> Redis, same interface" swap `plan.md` calls for. Atomicity comes from the
-five Lua scripts in `baas/session/lua/`, loaded once at construction and
+five Lua scripts in `agentpilot/session/lua/`, loaded once at construction and
 invoked via `redis.asyncio.Redis.register_script()` so callers never see
 raw Lua or raw Redis commands.
 
@@ -20,7 +20,7 @@ compensating-transaction mechanism).
 **What lives where**: this class stores only registry *bookkeeping*
 (`context_id`, `state`, `pid`, `node_id`, lease fields) in Redis --
 never a live Playwright/Patchright object, which still can't leave
-`baas.driver`. The actual browser resources stay in the worker process's
+`agentpilot.driver`. The actual browser resources stay in the worker process's
 `PatchrightDriver._live` dict, keyed by `context_id`; Redis's job is making
 the identity -> context_id mapping and the <=1-ACTIVE invariant shared and
 crash-resilient across restarts (and, once >1 worker exists, across nodes).
@@ -36,10 +36,10 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from baas.session.registry import Opener
-from baas.spi.errors import LeaseConflict
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState, Lease, LeaseId
+from agentpilot.session.registry import Opener
+from agentpilot.spi.errors import LeaseConflict
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
 

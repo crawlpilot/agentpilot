@@ -30,9 +30,9 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from baas.gateway.auth_deps import resolve_query_api_key
-from baas.gateway.wiring import get_wiring
-from baas.spi.streaming import (
+from agentpilot.gateway.auth_deps import resolve_query_api_key
+from agentpilot.gateway.wiring import get_wiring
+from agentpilot.spi.streaming import (
     InputEvent,
     KeyEvent,
     LiveViewCapable,

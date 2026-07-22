@@ -10,13 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from baas.spi.actions import Action, ActionResult
-from baas.spi.egress import EgressPolicy
-from baas.spi.health import HealthStatus
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef
-from baas.spi.proxy import ProxyEndpoint
-from baas.spi.storage_state import StorageState
+from agentpilot.spi.actions import Action, ActionResult
+from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.health import HealthStatus
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef
+from agentpilot.spi.proxy import ProxyEndpoint
+from agentpilot.spi.storage_state import StorageState
 
 
 @runtime_checkable

@@ -3,12 +3,12 @@
 ## Setup
 
 ```bash
-uv sync --group dev --extra driver          # --extra postgres too if you're touching baas.auth.store.PostgresApiKeyStore
+uv sync --group dev --extra driver          # --extra postgres too if you're touching agentpilot.auth.store.PostgresApiKeyStore
 uv run patchright install chrome            # needed to run tests/driver_contract/ or a local monolith/worker
 ```
 
 The `driver` extra (Patchright, `re-cdp-patches`, `trafilatura`, `cryptography`) is only ever
-imported by `baas.driver`, `baas.extraction`, and `baas.identity.vault` — it's deliberately not a
+imported by `agentpilot.driver`, `agentpilot.extraction`, and `agentpilot.identity.vault` — it's deliberately not a
 hard dependency of the package as a whole, so a `gateway`-role deployment can skip it entirely
 (see `docker/gateway.Dockerfile`).
 
@@ -17,8 +17,8 @@ hard dependency of the package as a whole, so a `gateway`-role deployment can sk
 Run the same checks CI-equivalent tooling expects:
 
 ```bash
-uv run ruff check baas tests
-uv run mypy baas
+uv run ruff check agentpilot tests
+uv run mypy agentpilot
 uv run lint-imports
 uv run pytest --ignore=tests/driver_contract   # fast path
 uv run pytest tests/driver_contract            # slower, launches real Chrome
@@ -26,8 +26,8 @@ uv run pytest tests/driver_contract            # slower, launches real Chrome
 
 - **`ruff`**: `select = ["E", "F", "I", "UP", "B"]` (see `pyproject.toml`). Should be clean —
   there are no existing suppressions to work around.
-- **`mypy`**: strict mode is enforced on the core layers (`baas.spi`, `baas.driver`, `baas.identity`,
-  `baas.session`, `baas.auth`) via `[[tool.mypy.overrides]]` in `pyproject.toml`; `baas.gateway` and
+- **`mypy`**: strict mode is enforced on the core layers (`agentpilot.spi`, `agentpilot.driver`, `agentpilot.identity`,
+  `agentpilot.session`, `agentpilot.auth`) via `[[tool.mypy.overrides]]` in `pyproject.toml`; `agentpilot.gateway` and
   the rest are checked non-strict. New code in the strict-mode packages needs to type-check clean
   under `strict = true`.
 - **`lint-imports`**: enforces the layering contracts described in the README's Architecture
@@ -40,14 +40,14 @@ uv run pytest tests/driver_contract            # slower, launches real Chrome
 
 - No comments explaining *what* code does — names should do that. A comment earns its place by
   explaining a non-obvious *why*: a hidden constraint, a workaround for a specific bug, a decision
-  that would otherwise look arbitrary. Look at any existing module docstring in `baas/` for the
+  that would otherwise look arbitrary. Look at any existing module docstring in `agentpilot/` for the
   house style.
-- `baas.spi` types are plain `dataclasses`/`Enum`/`Protocol` — no Pydantic there; Pydantic is
-  scoped to `baas/gateway/schemas.py` as the HTTP-boundary validation layer only, mirroring `spi`
+- `agentpilot.spi` types are plain `dataclasses`/`Enum`/`Protocol` — no Pydantic there; Pydantic is
+  scoped to `agentpilot/gateway/schemas.py` as the HTTP-boundary validation layer only, mirroring `spi`
   shapes rather than inventing new ones.
-- Driver-agnostic code (`baas.spi`, `baas.session`, `baas.identity`, `baas.gateway`) must never
-  import Playwright/Patchright types directly — `baas.driver.patchright_driver` is the one module
-  where those objects are allowed to exist; everything it returns to callers is a `baas.spi`
+- Driver-agnostic code (`agentpilot.spi`, `agentpilot.session`, `agentpilot.identity`, `agentpilot.gateway`) must never
+  import Playwright/Patchright types directly — `agentpilot.driver.patchright_driver` is the one module
+  where those objects are allowed to exist; everything it returns to callers is a `agentpilot.spi`
   dataclass.
 
 ## Tests
@@ -55,7 +55,7 @@ uv run pytest tests/driver_contract            # slower, launches real Chrome
 - Plain unit/integration tests live flat under `tests/*.py`.
 - `tests/driver_contract/` is a *behavioral contract* suite, not implementation-specific: it
   launches a real browser against local `pytest-httpserver` fixtures (never a mocked browser, never
-  an external site) and asserts on `baas.spi` behavior. Any new `BrowserDriver` implementation is
+  an external site) and asserts on `agentpilot.spi` behavior. Any new `BrowserDriver` implementation is
   expected to pass it unmodified — that's the point of the `spi` boundary.
 - Prefer a real fixture/local server over mocking wherever practical, following the pattern already
   used throughout `tests/driver_contract/`.

@@ -1,4 +1,4 @@
-// Hand-mirrored from `baas/gateway/schemas.py` -- kept in sync by hand for
+// Hand-mirrored from `agentpilot/gateway/schemas.py` -- kept in sync by hand for
 // now (the schema surface is small and still moving; revisit codegen once it
 // stabilizes, see the frontend architecture notes in the enterprise-UI plan).
 
@@ -106,7 +106,7 @@ export interface ScrollAction {
   ref?: string | null
 }
 
-// --- tab management (mirrors baas/spi/actions.py's NewTab/CloseTab/SwitchTab/ListTab) ---
+// --- tab management (mirrors agentpilot/spi/actions.py's NewTab/CloseTab/SwitchTab/ListTab) ---
 
 export interface NewTabAction {
   type: 'new_tab'
@@ -232,7 +232,7 @@ export interface ApiKeyListOut {
   api_keys: ApiKeyOut[]
 }
 
-// --- errors (baas/gateway/errors.py's closed ErrorCode enum) ---
+// --- errors (agentpilot/gateway/errors.py's closed ErrorCode enum) ---
 
 export type ErrorCode =
   | 'BAD_REQUEST'

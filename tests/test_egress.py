@@ -1,4 +1,4 @@
-"""`baas.egress.policy` unit tests. Safe to run anywhere: without `iptables`
+"""`agentpilot.egress.policy` unit tests. Safe to run anywhere: without `iptables`
 on PATH (macOS dev, most CI runners) it must no-op with a warning rather than
 raise or touch the host network stack."""
 
@@ -8,8 +8,8 @@ import shutil
 
 import pytest
 
-from baas.egress.policy import _deny_ranges, apply_baseline
-from baas.spi.egress import EgressPolicy
+from agentpilot.egress.policy import _deny_ranges, apply_baseline
+from agentpilot.spi.egress import EgressPolicy
 
 
 def test_deny_ranges_includes_metadata_and_private_by_default() -> None:

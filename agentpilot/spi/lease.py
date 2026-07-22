@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import NewType
 
-from baas.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityKey
 
 LeaseId = NewType("LeaseId", str)
 

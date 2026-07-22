@@ -5,16 +5,16 @@ contexts directly; only this module needs the containers.
 Skipped automatically when the compose stack isn't reachable, so a plain
 `pytest tests/` doesn't require Docker -- run `docker compose up -d` first
 to exercise this module. The auth-gated tests additionally need
-`BAAS_ADMIN_TOKEN` set to whatever value the compose stack itself was started
-with (`BAAS_ADMIN_TOKEN=some-secret docker compose up -d`) -- this test
+`AGENTPILOT_ADMIN_TOKEN` set to whatever value the compose stack itself was started
+with (`AGENTPILOT_ADMIN_TOKEN=some-secret docker compose up -d`) -- this test
 bootstraps a real tenant API key through `/v1/api-keys` using that token,
 exactly as an operator would, rather than hardcoding a backdoor.
 
 Note: this test can't distinguish "keys are backed by a real Postgres" from
 "the gateway silently fell back to `InMemoryApiKeyStore` because
-`BAAS_DATABASE_URL` was never set" -- both make it pass, since it only
+`AGENTPILOT_DATABASE_URL` was never set" -- both make it pass, since it only
 exercises the auth *contract*, not persistence. To actually prove the
-Postgres path, bring the stack up with `BAAS_DATABASE_URL` set (migrated),
+Postgres path, bring the stack up with `AGENTPILOT_DATABASE_URL` set (migrated),
 create a key, and check `psql ... -c 'select * from api_keys'` directly.
 """
 
@@ -29,7 +29,7 @@ import pytest
 GATEWAY = "http://127.0.0.1:8000"
 DETECTION_PAGE_INTERNAL = "http://detection-page:8090/"
 
-_ADMIN_TOKEN = os.environ.get("BAAS_ADMIN_TOKEN")
+_ADMIN_TOKEN = os.environ.get("AGENTPILOT_ADMIN_TOKEN")
 
 
 def _unique_name(label: str) -> str:
@@ -58,7 +58,7 @@ pytestmark = [
     ),
     pytest.mark.skipif(
         not _ADMIN_TOKEN,
-        reason="set BAAS_ADMIN_TOKEN to the same value the compose stack was started with",
+        reason="set AGENTPILOT_ADMIN_TOKEN to the same value the compose stack was started with",
     ),
 ]
 
@@ -108,7 +108,7 @@ def test_full_session_lifecycle(auth_headers: dict[str, str]) -> None:
                     {"type": "extract", "format": "markdown"},
                     {
                         "type": "execute_js",
-                        "script": 'document.getElementById("baas-detection-result").textContent',
+                        "script": 'document.getElementById("agentpilot-detection-result").textContent',
                     },
                 ]
             },

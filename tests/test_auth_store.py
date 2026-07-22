@@ -1,4 +1,4 @@
-"""`baas.auth.store.InMemoryApiKeyStore` -- the dev/test-only fallback path
+"""`agentpilot.auth.store.InMemoryApiKeyStore` -- the dev/test-only fallback path
 (no Postgres required). See `tests/test_postgres_api_key_store.py` for the
 same behavioral contract exercised against a real Postgres, including
 cross-instance persistence, which `InMemoryApiKeyStore` deliberately can't
@@ -7,7 +7,7 @@ provide (see its docstring).
 
 from __future__ import annotations
 
-from baas.auth.store import InMemoryApiKeyStore
+from agentpilot.auth.store import InMemoryApiKeyStore
 
 
 async def test_create_then_resolve_round_trips() -> None:

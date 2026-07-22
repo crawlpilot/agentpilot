@@ -1,4 +1,4 @@
-"""Unit tests for `baas.session.reaper` -- a fake driver (records `close()`
+"""Unit tests for `agentpilot.session.reaper` -- a fake driver (records `close()`
 calls) and monkeypatched `/proc` readers stand in for a real container, so
 these run without Docker/Patchright."""
 
@@ -8,11 +8,11 @@ import asyncio
 
 import pytest
 
-import baas.session.reaper as reaper_module
-from baas.session.reaper import Reaper
-from baas.session.registry import Registry
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, ContextState
+import agentpilot.session.reaper as reaper_module
+from agentpilot.session.reaper import Reaper
+from agentpilot.session.registry import Registry
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, ContextState
 
 
 class FakeDriver:

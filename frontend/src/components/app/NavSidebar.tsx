@@ -14,7 +14,7 @@ export function NavSidebar() {
     <aside className="hidden w-56 shrink-0 border-r border-border bg-card p-4 sm:flex sm:flex-col">
       <div className="mb-8 flex items-center gap-2 px-2">
         <span className="size-2.5 rounded-full bg-accent" />
-        <span className="text-sm font-semibold tracking-tight text-foreground">baas-crawlpilot</span>
+        <span className="text-sm font-semibold tracking-tight text-foreground">agentpilot</span>
       </div>
       <nav className="flex flex-col gap-0.5">
         {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (

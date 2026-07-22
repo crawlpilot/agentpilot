@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from baas.gateway.wiring import Wiring
+from agentpilot.gateway.wiring import Wiring
 
 
 def session_route_key(session_id: str) -> str:
@@ -15,7 +15,7 @@ def session_route_key(session_id: str) -> str:
 
 
 async def resolve_worker(wiring: Wiring, session_id: str) -> str:
-    assert wiring.redis is not None  # role=="gateway" always has BAAS_REDIS_URL
+    assert wiring.redis is not None  # role=="gateway" always has AGENTPILOT_REDIS_URL
     raw = await wiring.redis.get(session_route_key(session_id))
     if raw is None:
         raise HTTPException(status_code=404, detail=f"no session {session_id!r}")

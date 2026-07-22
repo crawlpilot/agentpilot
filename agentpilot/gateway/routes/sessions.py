@@ -2,7 +2,7 @@
 release. No baked-in path prefix -- `app.py` mounts this same router at
 `/v1/sessions` (`monolith`/`worker`-serving-itself-in-tests) and at
 `/internal/sessions` (`worker`'s VPC-internal surface), per
-`baas.gateway.role`. A `gateway`-role process never mounts this router at
+`agentpilot.gateway.role`. A `gateway`-role process never mounts this router at
 all; it mounts `routes/gateway_proxy.py` at `/v1/sessions` instead, which
 proxies to a worker's `/internal/sessions` copy of these exact routes.
 
@@ -21,8 +21,8 @@ import uuid
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from baas.gateway.auth_deps import optional_authed_tenant
-from baas.gateway.schemas import (
+from agentpilot.gateway.auth_deps import optional_authed_tenant
+from agentpilot.gateway.schemas import (
     ActionResultOut,
     ArtifactRefOut,
     AXSnapshotOut,
@@ -52,19 +52,19 @@ from baas.gateway.schemas import (
     TabInfoOut,
     WaitActionIn,
 )
-from baas.gateway.wiring import Session, Wiring, get_wiring
-from baas.identity.profile_store import resolve_profile_dir
-from baas.observability.metrics import (
+from agentpilot.gateway.wiring import Session, Wiring, get_wiring
+from agentpilot.identity.profile_store import resolve_profile_dir
+from agentpilot.observability.metrics import (
     execute_duration_seconds,
     requests_total,
     session_open_duration_seconds,
 )
-from baas.session.reaper import _read_pid_rss_mb
-from baas.spi import actions as spi_actions
-from baas.spi.egress import EgressPolicy
-from baas.spi.errors import NodeLost
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef
+from agentpilot.session.reaper import _read_pid_rss_mb
+from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import NodeLost
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef
 
 log = structlog.get_logger(__name__)
 

@@ -1,6 +1,6 @@
 """Driver-agnostic (and gateway-agnostic) API-key auth types -- kept
-separate from `baas.gateway` so import-linter's layering holds: `baas.auth`
-sits alongside `baas.identity`/`baas.session`, below `baas.gateway`.
+separate from `agentpilot.gateway` so import-linter's layering holds: `agentpilot.auth`
+sits alongside `agentpilot.identity`/`agentpilot.session`, below `agentpilot.gateway`.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class ApiKeyRecord:
 class AuthedTenant:
     """The result of a successful tenant-auth check -- the tenant a request
     is authenticated as, resolved from its API key rather than trusted from
-    a free-text request-body field (see `baas.gateway.auth_deps`)."""
+    a free-text request-body field (see `agentpilot.gateway.auth_deps`)."""
 
     tenant: str
     key_id: str

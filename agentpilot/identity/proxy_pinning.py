@@ -12,8 +12,8 @@ import hashlib
 
 from redis.asyncio import Redis
 
-from baas.spi.identity import IdentityKey
-from baas.spi.proxy import ProxyEndpoint
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxy:"
 _FIELD = "endpoint"

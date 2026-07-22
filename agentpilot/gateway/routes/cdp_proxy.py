@@ -22,10 +22,10 @@ import websockets
 from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 
-from baas.auth.models import AuthedTenant
-from baas.gateway.auth_deps import bearer_token, require_tenant_auth, resolve_query_api_key
-from baas.gateway.routing import resolve_worker
-from baas.gateway.wiring import Wiring, get_wiring
+from agentpilot.auth.models import AuthedTenant
+from agentpilot.gateway.auth_deps import bearer_token, require_tenant_auth, resolve_query_api_key
+from agentpilot.gateway.routing import resolve_worker
+from agentpilot.gateway.wiring import Wiring, get_wiring
 
 log = structlog.get_logger(__name__)
 

@@ -1,5 +1,5 @@
 [project]
-name = "baas-crawlpilot"
+name = "agentpilot"
 version = "0.1.0"
 description = "Multi-tenant Browser-as-a-Service platform"
 readme = "README.md"
@@ -28,13 +28,13 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/RahulBisht/baas-crawlpilot"
-Issues = "https://github.com/RahulBisht/baas-crawlpilot/issues"
+Repository = "https://github.com/RahulBisht/agentpilot"
+Issues = "https://github.com/RahulBisht/agentpilot/issues"
 
 [project.optional-dependencies]
-# Chrome-adjacent packages -- only ever imported by baas.driver,
-# baas.extraction, and baas.identity.vault's Fernet encryption. Needed by
-# `BAAS_ROLE=worker` (and `monolith`, run outside Docker) -- never installed
+# Chrome-adjacent packages -- only ever imported by agentpilot.driver,
+# agentpilot.extraction, and agentpilot.identity.vault's Fernet encryption. Needed by
+# `AGENTPILOT_ROLE=worker` (and `monolith`, run outside Docker) -- never installed
 # in docker/gateway.Dockerfile's image, which is the whole point of the
 # split (a genuinely Chrome-free gateway image).
 driver = [
@@ -43,7 +43,7 @@ driver = [
     "trafilatura>=2.1.0",
     "cryptography>=43.0",
 ]
-# Postgres driver (runtime pool) + Alembic (migrations) for baas.auth
+# Postgres driver (runtime pool) + Alembic (migrations) for agentpilot.auth
 # .store.PostgresApiKeyStore. Needed by `monolith`/`gateway` (both mount
 # tenant-facing auth-gated routes) -- not `worker`, which never touches
 # wiring.api_keys.
@@ -69,7 +69,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["baas"]
+packages = ["agentpilot"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -83,7 +83,7 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 # B008: FastAPI's `Depends(...)` in argument defaults is the framework's own
 # dependency-injection idiom, not the mutable-default-argument bug B008 exists
-# to catch -- false positive on every route in baas.gateway.routes.
+# to catch -- false positive on every route in agentpilot.gateway.routes.
 ignore = ["B008"]
 
 [tool.mypy]
@@ -91,36 +91,36 @@ python_version = "3.12"
 strict = false
 
 [[tool.mypy.overrides]]
-module = ["baas.spi.*", "baas.driver.*", "baas.identity.*", "baas.session.*", "baas.auth.*"]
+module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*"]
 strict = true
 
 [tool.importlinter]
-root_package = "baas"
+root_package = "agentpilot"
 
-# baas.placement/control are still P3+/future packages that don't exist yet
+# agentpilot.placement/control are still P3+/future packages that don't exist yet
 # -- wrapped in parentheses per import-linter's "optional layer" syntax so
 # these contracts are already correct once those packages land, without
-# breaking `lint-imports` today. baas.session landed in P1 and baas.identity
+# breaking `lint-imports` today. agentpilot.session landed in P1 and agentpilot.identity
 # lands in P2, so neither is parenthesized anymore.
 [[tool.importlinter.contracts]]
 name = "gateway -> session -> identity -> auth -> spi"
 type = "layers"
-layers = ["baas.gateway", "baas.session", "baas.identity", "baas.auth", "baas.spi"]
+layers = ["agentpilot.gateway", "agentpilot.session", "agentpilot.identity", "agentpilot.auth", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> placement -> spi"
 type = "layers"
-layers = ["baas.gateway", "(baas.placement)", "baas.spi"]
+layers = ["agentpilot.gateway", "(agentpilot.placement)", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> control -> spi"
 type = "layers"
-layers = ["baas.gateway", "(baas.control)", "baas.spi"]
+layers = ["agentpilot.gateway", "(agentpilot.control)", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "driver -> {extraction, egress} -> spi"
 type = "layers"
-layers = ["baas.driver", "baas.extraction | baas.egress", "baas.spi"]
+layers = ["agentpilot.driver", "agentpilot.extraction | agentpilot.egress", "agentpilot.spi"]
 
 # "control/placement never import driver" is still deferred until those
 # future packages exist -- `forbidden` contracts, unlike `layers`, have no
@@ -131,15 +131,15 @@ layers = ["baas.driver", "baas.extraction | baas.egress", "baas.spi"]
 name = "only the composition root imports the concrete driver"
 type = "forbidden"
 source_modules = [
-    "baas.gateway.routes",
-    "baas.gateway.schemas",
-    "baas.gateway.app",
-    "baas.session",
-    "baas.identity",
-    "baas.auth",
+    "agentpilot.gateway.routes",
+    "agentpilot.gateway.schemas",
+    "agentpilot.gateway.app",
+    "agentpilot.session",
+    "agentpilot.identity",
+    "agentpilot.auth",
 ]
-forbidden_modules = ["baas.driver"]
-# routes/app reach the driver only *through* baas.gateway.wiring (the
+forbidden_modules = ["agentpilot.driver"]
+# routes/app reach the driver only *through* agentpilot.gateway.wiring (the
 # composition root) -- that's the intended indirection, so only a *direct*
-# `import baas.driver` from these modules should trip this contract.
+# `import agentpilot.driver` from these modules should trip this contract.
 allow_indirect_imports = true

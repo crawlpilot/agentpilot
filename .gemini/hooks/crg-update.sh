@@ -5,6 +5,6 @@ set -euo pipefail
 
 cat > /dev/null || true
 
-code-review-graph update --skip-flows --repo "/Users/rahulbisht/Documents/Github/baas-crawlpilot" >/dev/null 2>&1 || true
+code-review-graph update --skip-flows --repo "/Users/rahulbisht/Documents/Github/agentpilot" >/dev/null 2>&1 || true
 echo '{"suppressOutput": true}'
 exit 0

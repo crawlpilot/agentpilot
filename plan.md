@@ -1,4 +1,4 @@
-# BaaS Platform (baas-crawlpilot) — Full Design & Build Plan
+# AgentPilot Platform (agentpilot) — Full Design & Build Plan
 
 > Consolidated plan: the original Python-adaptation design, every review finding folded into its
 > owning section, and the fleet placement/routing/admission architecture promoted to a first-class
@@ -11,7 +11,7 @@ crawlers, and scrapers are built by consuming warm browser sessions as tools ove
 protocol, targeting millions of crawls/hour. Informed by patterns from an earlier internal
 JVM-based browser-automation system, but rebuilt single-stack in Python because the stealth layer
 (Patchright) forces Python anyway; running two ecosystems for an I/O-bound coordinator was pure
-overhead. Target repo `baas-crawlpilot` is empty — a from-scratch build informed by that system's
+overhead. Target repo `agentpilot` is empty — a from-scratch build informed by that system's
 *patterns*, not a code port (its hand-rolled CDP client isn't reusable).
 
 **The system is a fleet, not a node.** At the §Capacity numbers (~5,600 concurrent contexts,
@@ -74,7 +74,7 @@ reopened:
    navigation.
 7. **Multi-tenant network egress is fail-closed** *(review)*. Browser processes and the httpx
    tier cannot reach cloud metadata or RFC1918 space; post-DNS-resolution IP validation guards
-   against rebinding. Table stakes for BaaS.
+   against rebinding. Table stakes for AgentPilot.
 8. **Placement + admission is one atomic Lua script** *(review)*, sharing keys with the lease
    Lua — which is why it must be designed with P2's registry, not after.
 
@@ -93,7 +93,7 @@ reopened:
 | Registry / placement / rate limiting | `redis.asyncio` + Lua (`register_script`) | Atomic cross-node invariants; SPOF → Sentinel HA (P2) |
 | Metrics | `prometheus-client` | Pool occupancy, per-tier latency, challenge/burn rate — fleet is unobservable without it |
 | Packaging | `uv` | Fast resolver, workspace-friendly if it splits into sub-packages |
-| Lint/format/type | `ruff` + `mypy --strict` on `baas.spi`/`baas.driver` | Protocol-heavy code benefits most from strict typing |
+| Lint/format/type | `ruff` + `mypy --strict` on `agentpilot.spi`/`agentpilot.driver` | Protocol-heavy code benefits most from strict typing |
 | Import boundaries | `import-linter` (`lint-imports` in CI) | Enforces the layered contract mechanically |
 | Tests | `pytest` + `pytest-asyncio` + `pytest-httpserver`, testcontainers for Redis | Real browser vs. real local fixtures — no mocking, no external-site flakiness (browser-use pattern) |
 | Logging | `structlog` w/ contextvars (`tenant`, `identity`, `lease_id`, `context_id`, `node_id`) | Every line attributable in a multi-tenant fleet |
@@ -114,59 +114,59 @@ driver  ──► egress     ──► spi        (egress is applied at the brow
 driver  ──► spi                       (concrete; imported ONLY by the composition root)
 ```
 
-- `baas.driver` is imported by exactly one file: the composition root (`baas/wiring.py`). At P2
-  the root splits by role, so gateway-role process graphs never include `baas.driver` at all;
+- `agentpilot.driver` is imported by exactly one file: the composition root (`agentpilot/wiring.py`). At P2
+  the root splits by role, so gateway-role process graphs never include `agentpilot.driver` at all;
   worker-role graphs do.
-- `baas.extraction` and `baas.egress` are leaves (spi-only) so they're trivially unit-testable
+- `agentpilot.extraction` and `agentpilot.egress` are leaves (spi-only) so they're trivially unit-testable
   and reusable across drivers.
-- `baas.placement` owns routing/affinity/admission (spi + Redis); imported only by gateway.
-- `baas.mcp` is the top layer — imports the gateway app/schemas, imported by nothing.
+- `agentpilot.placement` owns routing/affinity/admission (spi + Redis); imported only by gateway.
+- `agentpilot.mcp` is the top layer — imports the gateway app/schemas, imported by nothing.
 
 Enforced via `import-linter` contracts in `pyproject.toml` (layers + forbidden contracts as in the
 original, extended for the new modules):
 
 ```toml
 [tool.importlinter]
-root_package = "baas"
+root_package = "agentpilot"
 
 [[tool.importlinter.contracts]]
 name = "gateway -> session -> identity -> spi"
 type = "layers"
-layers = ["baas.gateway", "baas.session", "baas.identity", "baas.spi"]
+layers = ["agentpilot.gateway", "agentpilot.session", "agentpilot.identity", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> placement -> spi"
 type = "layers"
-layers = ["baas.gateway", "baas.placement", "baas.spi"]
+layers = ["agentpilot.gateway", "agentpilot.placement", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> control -> spi"
 type = "layers"
-layers = ["baas.gateway", "baas.control", "baas.spi"]
+layers = ["agentpilot.gateway", "agentpilot.control", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "driver -> {extraction, egress} -> spi"
 type = "layers"
-layers = ["baas.driver", "baas.extraction", "baas.spi"]
+layers = ["agentpilot.driver", "agentpilot.extraction", "agentpilot.spi"]
 
 [[tool.importlinter.contracts]]
 name = "session/identity/control/placement never import driver"
 type = "forbidden"
-source_modules = ["baas.session", "baas.identity", "baas.control", "baas.placement"]
-forbidden_modules = ["baas.driver"]
+source_modules = ["agentpilot.session", "agentpilot.identity", "agentpilot.control", "agentpilot.placement"]
+forbidden_modules = ["agentpilot.driver"]
 
 [[tool.importlinter.contracts]]
 name = "only the composition root imports the concrete driver"
 type = "forbidden"
-source_modules = ["baas.gateway.routes", "baas.gateway.schemas", "baas.gateway.auth", "baas.gateway.app", "baas.mcp"]
-forbidden_modules = ["baas.driver"]
+source_modules = ["agentpilot.gateway.routes", "agentpilot.gateway.schemas", "agentpilot.gateway.auth", "agentpilot.gateway.app", "agentpilot.mcp"]
+forbidden_modules = ["agentpilot.driver"]
 ```
 
 `lint-imports` runs in CI as a P0 exit criterion, not deferred.
 
 ---
 
-## `baas.spi` — foundation types (build first)
+## `agentpilot.spi` — foundation types (build first)
 
 Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted internal callers).
 
@@ -192,7 +192,7 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
   discriminated union, convergent with the prior internal system's own batch primitive). A closed
   set of tagged, driver-agnostic dataclasses:
   - Navigation/read: `NavigateAction(url, timeout_ms)`, `GoBackAction()`, `SnapshotAction(viewport_only=False, max_nodes=None, roles=None)`, `ScreenshotAction(full_page=False, ...)`, `WaitAction(ms=None, ref=None)`.
-  - **`ExtractAction(format: Literal["markdown","text","html"], main_content=True)`** *(review)* — the scrape output. `markdown`/`text` route through `baas.extraction` (trafilatura); `html` returns `page.content()` raw. This is what a crawler actually harvests.
+  - **`ExtractAction(format: Literal["markdown","text","html"], main_content=True)`** *(review)* — the scrape output. `markdown`/`text` route through `agentpilot.extraction` (trafilatura); `html` returns `page.content()` raw. This is what a crawler actually harvests.
   - Interaction (P1): `ClickAction(ref, all=False)`, `FillAction(ref, text)`, `SelectOptionAction(ref, values)` *(review)*, `HoverAction(ref)` *(review)*, `PressAction(key)`, `ScrollAction(direction, ref=None)`.
   - Escape hatch: `ExecuteJsAction(script)`.
 
@@ -247,7 +247,7 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
 ## API design — adapted from Firecrawl (gateway layer, all phases)
 
 Firecrawl's `apps/api` is a mature example of exactly our shape (one API in front of pluggable
-engines). All adaptations are translated through `baas.spi` — **`gateway/schemas.py` is a Pydantic
+engines). All adaptations are translated through `agentpilot.spi` — **`gateway/schemas.py` is a Pydantic
 mirror of `spi` types for HTTP-boundary validation only; it never defines a shape `spi` doesn't
 own.** Same one-way dependency discipline the prior internal system followed between its own API
 and core layers.
@@ -399,7 +399,7 @@ worker holds local state). Name this in `docs/` and test it.
 
 ## Content extraction (new — the scrape product)
 
-`baas.extraction` is a pure transform (spi-only), imported by the driver to fulfill `ExtractAction`.
+`agentpilot.extraction` is a pure transform (spi-only), imported by the driver to fulfill `ExtractAction`.
 
 - `markdown`/`text` → `trafilatura` main-content extraction (readability-grade boilerplate
   stripping), which is what a crawler wants 90% of the time. `main_content=False` widens to
@@ -416,7 +416,7 @@ Without this, an agent can click but can't harvest without `ExecuteJsAction("...
 ## Network egress / SSRF policy (new — multi-tenant safety)
 
 Tenants control navigation targets and `ExecuteJsAction`; the browser and httpx tier can otherwise
-reach `169.254.169.254` and RFC1918 from inside the VPC. `baas.egress` enforces `EgressPolicy`:
+reach `169.254.169.254` and RFC1918 from inside the VPC. `agentpilot.egress` enforces `EgressPolicy`:
 
 - **Browser processes**: network-namespace / iptables rules on the worker blocking cloud-metadata
   IPs and private ranges for Chrome's uid/netns. Applied at `open()` time from the policy.
@@ -506,17 +506,17 @@ long before TTL expiry. Add *(review)*:
 
 ### P0 — the seam (+ extraction, egress baseline, popup policy, epoch, concurrency spike)
 
-**Files**: `baas/spi/*` (minimal: `driver.py`, `actions.py`, `identity.py`, `snapshot.py`,
-`storage_state.py`, `errors.py`, `egress.py`), `baas/extraction/*`, `baas/egress/*`,
-`baas/driver/{patchright_driver.py, process_launcher.py}`,
-`baas/gateway/{app.py, routes/sessions.py, routes/health.py, schemas.py, wiring.py, errors.py}`,
-`baas/wiring.py` (composition root), `docker-compose.yml`, `Dockerfile`,
+**Files**: `agentpilot/spi/*` (minimal: `driver.py`, `actions.py`, `identity.py`, `snapshot.py`,
+`storage_state.py`, `errors.py`, `egress.py`), `agentpilot/extraction/*`, `agentpilot/egress/*`,
+`agentpilot/driver/{patchright_driver.py, process_launcher.py}`,
+`agentpilot/gateway/{app.py, routes/sessions.py, routes/health.py, schemas.py, wiring.py, errors.py}`,
+`agentpilot/wiring.py` (composition root), `docker-compose.yml`, `Dockerfile`,
 `docs/capacity-planning.md`, `tests/{driver_contract/, fixtures/detection_page/, test_seam_e2e.py}`.
 
 - `PatchrightDriver.open()` → `chromium.launch_persistent_context(user_data_dir=profile_dir,
   channel="chrome", headless=not headful, no_viewport=True, proxy=...)`; `headful` gates whether
   `cdp_patches.AsyncInput` is wired; `egress` applies the netns/iptables baseline. Playwright
-  objects never leave `baas.driver`.
+  objects never leave `agentpilot.driver`.
 - `execute()` dispatches each `Action`, accumulating one `ActionResult`. P0 lands
   `NavigateAction`, `GoBackAction`, `SnapshotAction`, **`ExtractAction`**, `ScreenshotAction`,
   `WaitAction`, `ExecuteJsAction`. Interaction verbs land P1 (need `ref_cache`).
@@ -533,10 +533,10 @@ long before TTL expiry. Add *(review)*:
   per-display serialized dispatch, which changes capacity math. Same rigor as the `aria-ref=` spike.
 - **Snapshot epoch** wired from P0 in `SnapshotAction`/`AXSnapshot` even though refs are consumed
   in P1.
-- **Docker Compose** (single `baas` service, gateway+worker collapsed): Debian base +
+- **Docker Compose** (single `agentpilot` service, gateway+worker collapsed): Debian base +
   `patchright install chrome` + Xvfb + `python-xlib`; entrypoint
-  `Xvfb :99 ... & export DISPLAY=:99; exec uvicorn baas.gateway.app:app`; **`cap_add: [SYS_ADMIN]`**,
-  no `--no-sandbox`; `shm_size: '2gb'`; volume for `/var/lib/baas/profiles`; `detection-page`
+  `Xvfb :99 ... & export DISPLAY=:99; exec uvicorn agentpilot.gateway.app:app`; **`cap_add: [SYS_ADMIN]`**,
+  no `--no-sandbox`; `shm_size: '2gb'`; volume for `/var/lib/agentpilot/profiles`; `detection-page`
   static server; no Redis yet.
 - **Detection regression test**: own static fixture inlining `navigator.webdriver`, `window.chrome`,
   a `Runtime.enable` timing side-channel, and the page/screen-coordinate check `cdp_patches`
@@ -550,8 +550,8 @@ green → `docs/capacity-planning.md` exists.
 
 ### P1 — registry + lease + ref→locator + live-view + memory pressure + metrics
 
-**Files**: `baas/session/{registry.py, lease.py, reaper.py}`, `baas/driver/ref_cache.py`,
-`baas/driver/live_view.py`, `baas/gateway/routes/live_view.py`, `baas/observability/*`.
+**Files**: `agentpilot/session/{registry.py, lease.py, reaper.py}`, `agentpilot/driver/ref_cache.py`,
+`agentpilot/driver/live_view.py`, `agentpilot/gateway/routes/live_view.py`, `agentpilot/observability/*`.
 
 - `registry.py`: in-memory `dict[IdentityKey, ContextRef]` + `dict[LeaseId, Lease]` guarded by a
   **per-`IdentityKey` `asyncio.Lock`** (port of a get-or-create-under-lock pattern from the prior
@@ -586,10 +586,10 @@ green → `docs/capacity-planning.md` exists.
 
 ### P2 — vault + sticky + Redis registry + placement/routing/admission + role split
 
-**Files**: `baas/identity/{profile_store.py, vault.py, proxy_pinning.py}`,
-`baas/session/registry.py` (→ Redis, same interface), `baas/session/lua/*.lua`,
-`baas/placement/*`, `baas/gateway/routes/internal.py` (worker surface), role split in `wiring.py`,
-`baas/egress/httpx_guard.py`.
+**Files**: `agentpilot/identity/{profile_store.py, vault.py, proxy_pinning.py}`,
+`agentpilot/session/registry.py` (→ Redis, same interface), `agentpilot/session/lua/*.lua`,
+`agentpilot/placement/*`, `agentpilot/gateway/routes/internal.py` (worker surface), role split in `wiring.py`,
+`agentpilot/egress/httpx_guard.py`.
 
 - `vault.py`: wraps driver `export_state()`/`import_state()`; its own job is encryption-at-rest +
   tenant-scoped keys (`vault/{tenant}/{domain}/{name}.json.enc`). **Trigger** (avoids the
@@ -604,7 +604,7 @@ green → `docs/capacity-planning.md` exists.
   **`place_session.lua`**, `rate_governor.lua`) — atomic cross-node invariants; loaded via
   `register_script()`, wrapped so callers never see raw Lua. `place_session.lua` shares keys with
   the lease Lua (the reason placement is designed here).
-- **Role split** *(review)*: `--role gateway|worker`; gateway-role graph excludes `baas.driver`;
+- **Role split** *(review)*: `--role gateway|worker`; gateway-role graph excludes `agentpilot.driver`;
   worker serves `/internal/...`. Compose gains a second gateway-role service.
 - **Full egress** *(review)*: `httpx_guard.py` post-DNS IP validation for the basic tier.
 - **Redis HA**: Sentinel; gateway fails closed on outage.
@@ -614,7 +614,7 @@ green → `docs/capacity-planning.md` exists.
 
 ### P3 — challenge handling
 
-**Files**: `baas/driver/challenge/{detector.py, turnstile.py, interstitial.py}`.
+**Files**: `agentpilot/driver/challenge/{detector.py, turnstile.py, interstitial.py}`.
 
 - `detector.py`: structural port of a challenge-classification enum (`ROBOT_CHECK`, `WRONG_COUNTRY`,
   `FORBIDDEN`, ...) from the prior internal system — cheap DOM/status heuristics.
@@ -626,7 +626,7 @@ green → `docs/capacity-planning.md` exists.
 
 ### P4 — control plane
 
-**Files**: `baas/control/{success_tracker.py, rate_governor.py, tier_router.py, proxy_vendor.py}`.
+**Files**: `agentpilot/control/{success_tracker.py, rate_governor.py, tier_router.py, proxy_vendor.py}`.
 
 - `success_tracker.py` — the most portable pattern from the prior internal system's privacy-context
   model: per-identity `(tasks, successes, warnings)` in Redis hashes. Defaults:
@@ -649,7 +649,7 @@ green → `docs/capacity-planning.md` exists.
   (`client.execute(...)` polls; `client.start_execute(...)` returns a job id), a `Watcher` class
   wrapping WS/SSE status streaming with polling fallback. Keep backward-compat method aliases in
   mind — LLM-agent callers hallucinate prior method names.
-- **MCP server** *(review — the literal "tools exposed to agents" ask)*: `baas.mcp` wraps
+- **MCP server** *(review — the literal "tools exposed to agents" ask)*: `agentpilot.mcp` wraps
   sessions/execute as MCP tools (Playwright-MCP is the reference shape), so any MCP-speaking agent
   gets warm-session browsing as a native tool. The snapshot token budget (P1) is what makes these
   tools usable — an unbounded `aria_snapshot` blows an agent's context.
@@ -678,7 +678,7 @@ green → `docs/capacity-planning.md` exists.
 
 ## Verification (end-to-end, once P0 lands)
 
-1. `docker compose up` in `baas-crawlpilot`.
+1. `docker compose up` in `agentpilot`.
 2. `POST /v1/sessions` with a test `IdentityKey` (+`tier`, `headful`) → session id; repeat with the
    same identity from a second "owner" → **409** (+ `Retry-After`).
 3. `POST /.../execute` `[Navigate(detection_page), Snapshot()]` → `ActionResult` snapshot has refs

@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from collections import deque
 
-from baas.spi.snapshot import SnapshotNode
+from agentpilot.spi.snapshot import SnapshotNode
 
 _LINE_RE = re.compile(r"^(?P<indent> *)- (?P<body>.*)$")
 _HEAD_RE = re.compile(r'^(?P<role>\S+)(?:\s+"(?P<name>(?:[^"\\]|\\.)*)")?\s*(?P<rest>.*)$')

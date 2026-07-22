@@ -5,7 +5,7 @@ set -euo pipefail
 
 cat > /dev/null || true
 
-msg="$(code-review-graph status --repo "/Users/rahulbisht/Documents/Github/baas-crawlpilot" 2>&1 | head -n 1 || true)"
+msg="$(code-review-graph status --repo "/Users/rahulbisht/Documents/Github/agentpilot" 2>&1 | head -n 1 || true)"
 
 CRG_MSG="$msg" python3 -c '
 import json,os

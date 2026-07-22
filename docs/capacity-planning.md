@@ -113,7 +113,7 @@ cross-architecture emulation.
 ("ERROR: not supported on Linux Arm64") — Google does not ship official
 Chrome for Linux ARM64 at all, only Chromium. Since the plan locks in real
 Chrome (not Chromium) for sandbox fidelity, `docker-compose.yml` pins
-`platform: linux/amd64` for the `baas` service rather than silently
+`platform: linux/amd64` for the `agentpilot` service rather than silently
 substituting Chromium on ARM dev hosts. This matches the actual fleet target
 (cloud nodes are overwhelmingly amd64 for this exact reason) but means local
 builds on Apple Silicon run under Rosetta/QEMU emulation — slower, and per
@@ -122,7 +122,7 @@ finding #2, not valid for the timing-based detection check.
 ### 4. A blanket RFC1918 block also blocks the container's own network (resolved)
 
 Discovered running the real compose stack, not by inspection: the
-`detection-page` sidecar became unreachable from `baas` as soon as a session
+`detection-page` sidecar became unreachable from `agentpilot` as soon as a session
 opened (which triggers `apply_baseline()`). Docker Compose's default bridge
 network sits at `172.18.0.0/16` — inside the `172.16.0.0/12` RFC1918 range
 the baseline blocks. A blanket per-container "deny all private ranges" rule
@@ -132,7 +132,7 @@ directly-connected network, which is exactly the network real workers use to
 reach Redis/the registry in P2. Same shape of problem on real cloud infra:
 a worker's own VPC subnet is RFC1918 too.
 
-Fixed in `baas.egress.policy` by reading the container's directly-connected
+Fixed in `agentpilot.egress.policy` by reading the container's directly-connected
 routes from `/proc/net/route` (Linux-only, no extra package needed) and
 inserting `ACCEPT` rules for those specific subnets *ahead of* the broader
 `REJECT` rules — narrower than exempting all of RFC1918, so `169.254.169.254`
@@ -183,12 +183,12 @@ Chrome build; see `driver/ref_cache.py`'s module docstring.
 ## P1 reaper
 
 P0 finding #5 (IDLE Chrome processes/profile locks never reaped) is fixed:
-`baas.session.registry.Registry` reuses a released identity's still-warm
+`agentpilot.session.registry.Registry` reuses a released identity's still-warm
 context on reopen (no second Chrome onto the same profile dir), and
-`baas.session.reaper.Reaper` destroys genuinely-idle contexts past
-`BAAS_IDLE_TTL_SECONDS` (default 300s), evicts oldest-IDLE-first under node
+`agentpilot.session.reaper.Reaper` destroys genuinely-idle contexts past
+`AGENTPILOT_IDLE_TTL_SECONDS` (default 300s), evicts oldest-IDLE-first under node
 memory pressure (`/proc/meminfo`, default 85% watermark), and kills any
-single context whose Chrome process RSS exceeds `BAAS_PER_PROCESS_CEILING_MB`
+single context whose Chrome process RSS exceeds `AGENTPILOT_PER_PROCESS_CEILING_MB`
 (default 4096MB) regardless of TTL.
 
 ## Refinement plan
@@ -196,6 +196,6 @@ single context whose Chrome process RSS exceeds `BAAS_PER_PROCESS_CEILING_MB`
 Every estimate above is still first-pass; replacing them with measured
 numbers from `docker stats` (RAM/CPU per context) and wall-clock sampling
 for `active_render_fraction` remains open, now trackable via the P1
-`/metrics` endpoint (`baas_contexts_active`/`baas_contexts_idle`,
-`baas_execute_duration_seconds`, `baas_session_open_duration_seconds`)
+`/metrics` endpoint (`agentpilot_contexts_active`/`agentpilot_contexts_idle`,
+`agentpilot_execute_duration_seconds`, `agentpilot_session_open_duration_seconds`)
 instead of only ad hoc `docker stats` snapshots.

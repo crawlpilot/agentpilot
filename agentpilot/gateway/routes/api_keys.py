@@ -1,8 +1,8 @@
 """`POST/GET/DELETE /v1/api-keys` -- the admin-gated control-plane surface
 that issues the tenant-facing API keys `routes/sessions.py`/`gateway_proxy.py`
 authenticate against. Gated by `require_admin` (a single operator-controlled
-`BAAS_ADMIN_TOKEN`, not per-tenant credentials) at `include_router()` time in
-`app.py` -- see `baas.gateway.auth_deps`'s docstring on why a real per-tenant
+`AGENTPILOT_ADMIN_TOKEN`, not per-tenant credentials) at `include_router()` time in
+`app.py` -- see `agentpilot.gateway.auth_deps`'s docstring on why a real per-tenant
 login is out of scope for this pass (you can't call this endpoint with an API
 key you don't have yet, so something has to bootstrap the first one).
 """
@@ -11,14 +11,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from baas.auth.models import ApiKeyRecord
-from baas.gateway.schemas import (
+from agentpilot.auth.models import ApiKeyRecord
+from agentpilot.gateway.schemas import (
     ApiKeyCreateOut,
     ApiKeyCreateRequest,
     ApiKeyListOut,
     ApiKeyOut,
 )
-from baas.gateway.wiring import Wiring, get_wiring
+from agentpilot.gateway.wiring import Wiring, get_wiring
 
 router = APIRouter(tags=["api-keys"])
 

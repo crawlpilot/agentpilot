@@ -13,8 +13,8 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextRef, Lease, LeaseId
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.lease import ContextRef, Lease, LeaseId
 
 
 def new_lease(

@@ -68,7 +68,7 @@ export function LoginPage() {
                 <Input
                   id="admin-token"
                   type="password"
-                  placeholder="BAAS_ADMIN_TOKEN"
+                  placeholder="AGENTPILOT_ADMIN_TOKEN"
                   value={adminToken}
                   onChange={(e) => setAdminTokenInput(e.target.value)}
                 />

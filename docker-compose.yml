@@ -13,7 +13,7 @@ services:
 
   # gateway+worker (each with a purpose-built image) is the only process
   # topology this file offers -- `monolith` (one process, no HTTP hop to
-  # itself) is still a valid `BAAS_ROLE` for non-Docker use (this repo's own
+  # itself) is still a valid `AGENTPILOT_ROLE` for non-Docker use (this repo's own
   # test suite), just no longer a compose service.
   #
   # Redis and Postgres run as compose services too (below), each on its own
@@ -33,9 +33,9 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: baas
-      POSTGRES_PASSWORD: baas
-      POSTGRES_DB: baas
+      POSTGRES_USER: agentpilot
+      POSTGRES_PASSWORD: agentpilot
+      POSTGRES_DB: agentpilot
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
@@ -56,18 +56,18 @@ services:
     cap_add:
       - SYS_ADMIN # real Chrome sandbox (not --no-sandbox) -- untrusted third-party
       # pages on a shared multi-tenant node need process-level isolation.
-      - NET_ADMIN # baas.egress.policy applies real iptables rules in this
+      - NET_ADMIN # agentpilot.egress.policy applies real iptables rules in this
       # container's own netns (metadata + RFC1918 baseline).
     shm_size: "2gb"
     volumes:
-      - profiles:/var/lib/baas/profiles
-      - vault:/var/lib/baas/vault
+      - profiles:/var/lib/agentpilot/profiles
+      - vault:/var/lib/agentpilot/vault
     environment:
-      BAAS_ROLE: worker
-      BAAS_PROFILES_DIR: /var/lib/baas/profiles
-      BAAS_REDIS_URL: redis://redis:6379/0
-      BAAS_VAULT_DIR: /var/lib/baas/vault
-      BAAS_VAULT_KEY: ${BAAS_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
+      AGENTPILOT_ROLE: worker
+      AGENTPILOT_PROFILES_DIR: /var/lib/agentpilot/profiles
+      AGENTPILOT_REDIS_URL: redis://redis:6379/0
+      AGENTPILOT_VAULT_DIR: /var/lib/agentpilot/vault
+      AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
     depends_on:
       - detection-page
       - redis
@@ -82,14 +82,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      BAAS_ROLE: gateway
-      BAAS_REDIS_URL: redis://redis:6379/0
-      BAAS_WORKER_URL: http://worker:8000
+      AGENTPILOT_ROLE: gateway
+      AGENTPILOT_REDIS_URL: redis://redis:6379/0
+      AGENTPILOT_WORKER_URL: http://worker:8000
       # Gates `/v1/api-keys` (issuing/revoking tenant API keys) and nothing
       # else -- unset means that control-plane surface 401s unconditionally
       # (fails closed), not that auth is disabled fleet-wide.
-      BAAS_ADMIN_TOKEN: ${BAAS_ADMIN_TOKEN:-}
-      BAAS_DATABASE_URL: postgresql://baas:baas@postgres:5432/baas
+      AGENTPILOT_ADMIN_TOKEN: ${AGENTPILOT_ADMIN_TOKEN:-}
+      AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
     depends_on:
       - worker
       - postgres

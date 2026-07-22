@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class DriverError(Exception):
-    """Base class for all baas.spi driver errors."""
+    """Base class for all agentpilot.spi driver errors."""
 
 
 class NavigationTimeout(DriverError):

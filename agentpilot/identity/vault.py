@@ -17,7 +17,7 @@ this module.
 bounds node-loss staleness to one session's delta -- also the caller's
 job, at the same release call site.
 
-**Key management**: one `BAAS_VAULT_KEY` (a `Fernet.generate_key()`
+**Key management**: one `AGENTPILOT_VAULT_KEY` (a `Fernet.generate_key()`
 value) shared fleet-wide. Per-tenant *key derivation* (not just per-tenant
 *file paths*, which this module already has via `IdentityKey.slug()`) is
 real further hardening, deliberately left for later -- this pass gets
@@ -32,8 +32,8 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from baas.spi.identity import IdentityKey
-from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 
 def _to_json(state: StorageState) -> dict[str, Any]:

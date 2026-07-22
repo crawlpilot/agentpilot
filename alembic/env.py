@@ -1,9 +1,9 @@
-"""Alembic migration environment for baas-crawlpilot's `api_keys` table
-(`baas.auth.store.PostgresApiKeyStore`). Reads `BAAS_DATABASE_URL` -- the
+"""Alembic migration environment for agentpilot's `api_keys` table
+(`agentpilot.auth.store.PostgresApiKeyStore`). Reads `AGENTPILOT_DATABASE_URL` -- the
 same env var `Wiring` uses at runtime -- never a hardcoded URL, so `alembic
 upgrade head` always targets whatever Postgres the caller actually intends
 (fail loudly if unset, matching this repo's fail-closed philosophy for
-other required-but-unset config, e.g. `BAAS_ADMIN_TOKEN`).
+other required-but-unset config, e.g. `AGENTPILOT_ADMIN_TOKEN`).
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-_raw_url = os.environ.get("BAAS_DATABASE_URL")
+_raw_url = os.environ.get("AGENTPILOT_DATABASE_URL")
 if not _raw_url:
     raise RuntimeError(
-        "BAAS_DATABASE_URL must be set to run migrations, e.g. "
-        "postgresql://baas:baas@localhost:5432/baas -- refusing to guess."
+        "AGENTPILOT_DATABASE_URL must be set to run migrations, e.g. "
+        "postgresql://agentpilot:agentpilot@localhost:5432/agentpilot -- refusing to guess."
     )
 # psycopg (v3) is the driver everywhere in this repo (runtime store and
 # migrations alike) -- SQLAlchemy just needs the dialect prefix to pick it.

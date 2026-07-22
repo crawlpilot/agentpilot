@@ -3,7 +3,7 @@
 `routes/sessions.py`, just mounted under a different prefix on the worker).
 
 Mounted **instead of** `routes/sessions.py` when `wiring.role == "gateway"`
-(see `app.py`) -- a gateway process never imports/touches `baas.driver`.
+(see `app.py`) -- a gateway process never imports/touches `agentpilot.driver`.
 Every route here requires `require_tenant_auth` (added at `include_router()`
 time in `app.py`, not per-function, since this router is *only* ever mounted
 at `/v1/sessions` -- there's no internal/trusted-mount ambiguity to handle the
@@ -17,7 +17,7 @@ caller completely -- the gateway is the only thing allowed to call it.
 (`wiring.worker_base_url`) -- `plan.md`'s real placement (affinity,
 capacity-weighted, node failure) needs more than one worker to place
 across, which this pass doesn't have running. The routing-table mechanism
-(`session:{id} -> worker_addr` in Redis, `baas.gateway.routing`) is still
+(`session:{id} -> worker_addr` in Redis, `agentpilot.gateway.routing`) is still
 real and would extend to multiple workers without a shape change; only the
 *decision* is a stub.
 
@@ -34,12 +34,12 @@ import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from baas.auth.models import AuthedTenant
-from baas.gateway.auth_deps import require_tenant_auth
-from baas.gateway.routing import resolve_worker, session_route_key
-from baas.gateway.schemas import SessionOpenRequest
-from baas.gateway.wiring import Wiring, get_wiring
-from baas.observability.metrics import requests_total, session_open_duration_seconds
+from agentpilot.auth.models import AuthedTenant
+from agentpilot.gateway.auth_deps import require_tenant_auth
+from agentpilot.gateway.routing import resolve_worker, session_route_key
+from agentpilot.gateway.schemas import SessionOpenRequest
+from agentpilot.gateway.wiring import Wiring, get_wiring
+from agentpilot.observability.metrics import requests_total, session_open_duration_seconds
 
 log = structlog.get_logger(__name__)
 

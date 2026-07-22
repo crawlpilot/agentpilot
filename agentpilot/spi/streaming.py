@@ -9,7 +9,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from baas.spi.lease import ContextRef
+from agentpilot.spi.lease import ContextRef
 
 
 @dataclass

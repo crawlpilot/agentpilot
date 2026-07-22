@@ -1,4 +1,4 @@
-"""FastAPI `Depends()` glue for `baas.auth` -- kept out of that package so it
+"""FastAPI `Depends()` glue for `agentpilot.auth` -- kept out of that package so it
 stays gateway-agnostic (import-linter layers: gateway -> ... -> auth -> spi).
 
 Two enforcement shapes are used across the gateway, matching where a route is
@@ -21,8 +21,8 @@ import hmac
 
 from fastapi import Depends, Header, HTTPException, Request
 
-from baas.auth.models import AuthedTenant
-from baas.gateway.wiring import Wiring, get_wiring
+from agentpilot.auth.models import AuthedTenant
+from agentpilot.gateway.wiring import Wiring, get_wiring
 
 
 def bearer_token(authorization: str | None) -> str | None:

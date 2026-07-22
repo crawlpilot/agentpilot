@@ -15,8 +15,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from baas.observability.metrics import error_responses_total
-from baas.spi import errors as spi_errors
+from agentpilot.observability.metrics import error_responses_total
+from agentpilot.spi import errors as spi_errors
 
 log = structlog.get_logger(__name__)
 

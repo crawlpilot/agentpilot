@@ -1,17 +1,17 @@
-"""`baas.egress.httpx_guard` -- post-DNS IP validation for the basic tier.
+"""`agentpilot.egress.httpx_guard` -- post-DNS IP validation for the basic tier.
 DNS resolution is monkeypatched for the blocked-IP cases so these don't
 depend on real network/DNS; the allowed-path test hits a real local
 `pytest-httpserver` instance (loopback isn't in the blocked-range list --
-same scope as `baas.egress.policy`'s browser-process baseline)."""
+same scope as `agentpilot.egress.policy`'s browser-process baseline)."""
 
 from __future__ import annotations
 
 import pytest
 from pytest_httpserver import HTTPServer
 
-from baas.egress import httpx_guard
-from baas.spi.egress import EgressPolicy
-from baas.spi.errors import EgressBlocked
+from agentpilot.egress import httpx_guard
+from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import EgressBlocked
 
 DEFAULT_POLICY = EgressPolicy()
 
