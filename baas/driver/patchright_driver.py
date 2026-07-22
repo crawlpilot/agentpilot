@@ -343,7 +343,6 @@ class PatchrightDriver:
                 *(live.page.locator(f"aria-ref={ref}").bounding_box() for ref in leaf_refs),
                 return_exceptions=True,
             )
-            print("DEBUG leaf_refs", leaf_refs, "boxes", boxes, "vw,vh", vw, vh)
         finally:
             if owns_session:
                 with contextlib.suppress(Exception):

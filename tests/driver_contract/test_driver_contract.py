@@ -176,7 +176,14 @@ async def test_ref_from_superseded_epoch_raises_stale_ref_error(
     driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
 ) -> None:
     """A ref minted by an earlier snapshot must be rejected once a newer
-    snapshot has superseded it -- no cascade, no lookalike click on stale DOM."""
+    snapshot has superseded it -- no cascade, no lookalike click on stale DOM.
+
+    Replacing the button between snapshots (rather than just re-snapshotting
+    an unchanged page) matters: Playwright's `aria-ref=` numbering is stable
+    for an unchanged element, so an unchanged page's second snapshot would
+    reissue the *same* ref for the *same* button -- correctly still valid,
+    not a regression to test against. Mutating the DOM is what actually
+    frees up (or reassigns) that ref number, exercising the real hazard."""
 
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     snap1 = await driver.execute(
@@ -185,7 +192,16 @@ async def test_ref_from_superseded_epoch_raises_stale_ref_error(
     old_button = _find_role(snap1.snapshots[0].root, "button")
     assert old_button is not None
 
-    await driver.execute(open_ctx, [SnapshotAction()])  # bumps the epoch
+    await driver.execute(
+        open_ctx,
+        [
+            ExecuteJsAction(
+                script="document.getElementById('probe').outerHTML = "
+                "'<span>replaced</span>'"
+            ),
+            SnapshotAction(),  # bumps the epoch; the old button no longer exists
+        ],
+    )
 
     with pytest.raises(StaleRefError) as exc_info:
         await driver.execute(open_ctx, [ClickAction(ref=old_button.ref)])
