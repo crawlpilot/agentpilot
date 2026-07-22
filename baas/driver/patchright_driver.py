@@ -15,11 +15,16 @@ from pathlib import Path
 from typing import Any, cast
 
 import structlog
-from patchright.async_api import BrowserContext, Page, ProxySettings
+from patchright.async_api import BrowserContext, CDPSession, Page, ProxySettings
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from baas.driver.aria_parse import parse_aria_snapshot
+from baas.driver.live_view import (
+    SCREENCAST_START_PARAMS,
+    parse_screencast_frame,
+    to_cdp_input_params,
+)
 from baas.driver.process_launcher import ProcessLauncher
 from baas.egress.policy import apply_baseline
 from baas.extraction.extractor import extract
@@ -46,6 +51,7 @@ from baas.spi.lease import ContextRef, ContextState
 from baas.spi.proxy import ProxyEndpoint
 from baas.spi.snapshot import AXSnapshot
 from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from baas.spi.streaming import InputEvent, LiveViewFrame
 
 log = structlog.get_logger(__name__)
 
@@ -61,6 +67,8 @@ class _Live:
     death_reason: str | None = None
     block_popups: bool = False
     page_changed: bool = False
+    cdp_session: CDPSession | None = None
+    frame_queue: asyncio.Queue[LiveViewFrame] | None = None
 
 
 def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
@@ -256,3 +264,47 @@ class PatchrightDriver:
         if live is None:
             return HealthStatus(alive=False, reason="context_not_found")
         return HealthStatus(alive=live.alive, reason=live.death_reason)
+
+    # --- LiveViewCapable (optional capability; see spi.streaming) ---
+    # Page and Input domains only -- never Runtime, to preserve Patchright's
+    # anti-leak guarantee (see baas/driver/live_view.py's module docstring).
+
+    async def start_screencast(self, ctx: ContextRef) -> asyncio.Queue[LiveViewFrame]:
+        live = self._require_live(ctx)
+        if live.frame_queue is not None:
+            return live.frame_queue
+
+        queue: asyncio.Queue[LiveViewFrame] = asyncio.Queue(maxsize=2)
+        cdp = await live.context.new_cdp_session(live.page)
+
+        async def _ack_and_enqueue(params: dict[str, Any]) -> None:
+            await cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
+            if queue.full():
+                queue.get_nowait()  # live view wants the latest frame, not a backlog
+            queue.put_nowait(parse_screencast_frame(params))
+
+        cdp.on("Page.screencastFrame", lambda params: asyncio.create_task(_ack_and_enqueue(params)))
+        await cdp.send("Page.startScreencast", SCREENCAST_START_PARAMS)
+
+        live.cdp_session = cdp
+        live.frame_queue = queue
+        return queue
+
+    async def stop_screencast(self, ctx: ContextRef) -> None:
+        live = self._require_live(ctx)
+        if live.cdp_session is None:
+            return
+        try:
+            await live.cdp_session.send("Page.stopScreencast")
+            await live.cdp_session.detach()
+        except Exception:
+            pass  # context may already be closing; best-effort teardown
+        live.cdp_session = None
+        live.frame_queue = None
+
+    async def dispatch_input(self, ctx: ContextRef, event: InputEvent) -> None:
+        live = self._require_live(ctx)
+        if live.cdp_session is None:
+            raise ContextCrashed("live view is not active for this context")
+        method, params = to_cdp_input_params(event)
+        await live.cdp_session.send(method, params)

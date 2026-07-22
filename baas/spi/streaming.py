@@ -58,7 +58,7 @@ class LiveViewCapable(Protocol):
     at the composition root; drivers without it simply don't get a
     live-view route wired up."""
 
-    async def start_screencast(self, ctx: ContextRef) -> "asyncio.Queue[LiveViewFrame]":
+    async def start_screencast(self, ctx: ContextRef) -> asyncio.Queue[LiveViewFrame]:
         """Returns the queue the caller reads live frames from."""
         ...
 

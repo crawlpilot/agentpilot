@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>baas-crawlpilot</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">baas<em>crawlpilot</em></span>
+      </div>
+      <div class="topbar-status">
+        <span class="dot" id="gateway-dot"></span>
+        <span id="gateway-status">checking gateway&hellip;</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-config">
+        <h2>Session</h2>
+
+        <form id="open-form" class="form">
+          <div class="row">
+            <label>Tenant<input type="text" name="tenant" value="demo" required /></label>
+            <label>Domain<input type="text" name="domain" value="example.com" required /></label>
+            <label>Name<input type="text" name="name" value="operator-1" required /></label>
+          </div>
+
+          <div class="row">
+            <label>Tier
+              <select name="tier">
+                <option value="auto" selected>auto</option>
+                <option value="basic">basic</option>
+                <option value="stealth">stealth</option>
+                <option value="enhanced">enhanced</option>
+              </select>
+            </label>
+            <label class="checkbox"><input type="checkbox" name="headful" /> Headful</label>
+            <label class="checkbox"><input type="checkbox" name="block_popups" /> Block popups</label>
+            <label class="checkbox"><input type="checkbox" name="live_view" checked /> Live view</label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary" id="open-btn">Open session</button>
+            <button type="button" class="btn btn-ghost" id="release-btn" disabled>Release</button>
+          </div>
+        </form>
+
+        <div class="session-info" id="session-info" hidden>
+          <div class="kv"><span>session_id</span><code id="session-id"></code></div>
+          <div class="kv"><span>node_id</span><code id="session-node"></code></div>
+          <div class="kv"><span>tier_used</span><code id="session-tier"></code></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <h2>Execute</h2>
+        <div class="form">
+          <label>Navigate URL
+            <div class="inline">
+              <input type="text" id="nav-url" placeholder="https://example.com" />
+              <button type="button" class="btn btn-primary" id="nav-btn" disabled>Go</button>
+            </div>
+          </label>
+          <div class="actions">
+            <button type="button" class="btn" id="snapshot-btn" disabled>Snapshot</button>
+            <button type="button" class="btn" id="extract-btn" disabled>Extract</button>
+            <button type="button" class="btn" id="screenshot-btn" disabled>Screenshot</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <h2>Log</h2>
+        <pre class="log" id="log"></pre>
+      </section>
+
+      <section class="panel panel-live">
+        <div class="live-header">
+          <h2>Live view</h2>
+          <div class="live-controls">
+            <div class="segmented" id="mode-toggle">
+              <button type="button" class="seg-btn active" data-mode="view">View</button>
+              <button type="button" class="seg-btn" data-mode="interact">Interact</button>
+            </div>
+            <button type="button" class="btn btn-primary" id="connect-btn" disabled>Connect</button>
+          </div>
+        </div>
+
+        <div class="live-stage" id="live-stage" tabindex="0">
+          <img id="live-frame" alt="live view stream" draggable="false" />
+          <div class="live-empty" id="live-empty">
+            <p>Open a session with <strong>live view</strong> checked, then Connect.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
