@@ -54,8 +54,17 @@ class RefCache:
     _locators: dict[str, Locator] = field(default_factory=dict)
 
     def reset(self, epoch: int) -> None:
+        """Bumps the epoch and drops cached `Locator`s (page-bound, must be
+        re-resolved). Deliberately does **not** clear `_meta`: a ref that
+        isn't re-recorded by the new snapshot (the element moved, changed,
+        or disappeared, so the new `aria_snapshot` didn't reissue that ref
+        string for it) stays behind with its *old* epoch stamp -- that
+        mismatch is exactly what lets `resolve()` tell "genuinely stale"
+        apart from "never existed" below. A ref that *is* reissued for the
+        same element (DOM unchanged) gets its `_meta` entry overwritten with
+        the current epoch by `record()`, so it stays valid, as it should."""
+
         self.epoch = epoch
-        self._meta.clear()
         self._locators.clear()
 
     def record(self, ref: str, *, role: str, name: str) -> None:

@@ -81,17 +81,23 @@ def filter_snapshot(
     against static trees.
 
     `roles`: prunes any subtree whose root role isn't in `roles`, *unless* it
-    has a matching descendant -- structural nodes (no `ref`, e.g. the
-    synthetic `role="root"`) are always kept as scaffolding around whatever
-    they contain, since dropping them would silently reparent unrelated
-    matches. `max_nodes`: breadth-first budget so a truncated tree still
-    reads as a coherent (if incomplete) page rather than one deep sliver.
+    has a matching descendant -- structural *container* nodes (no `ref` but
+    with children, e.g. the synthetic `role="root"`) are always kept as
+    scaffolding around whatever they contain, since dropping them would
+    silently reparent unrelated matches. Ref-less *leaf* nodes (e.g. a
+    link's `/url: "#"` metadata line, which also carries no `ref`) are NOT
+    given this passthrough -- they're informational annotations, not
+    containers, so they're dropped like any other non-matching leaf; giving
+    them a free pass would keep every filtered-out link/image alive purely
+    because it happens to have one of these metadata children.
+    `max_nodes`: breadth-first budget so a truncated tree still reads as a
+    coherent (if incomplete) page rather than one deep sliver.
     """
 
     def keep(node: SnapshotNode) -> SnapshotNode | None:
         children = [c for c in (keep(child) for child in node.children) if c is not None]
-        is_structural = not node.ref
-        matches = roles is None or node.role in roles or is_structural
+        is_structural_container = not node.ref and bool(node.children)
+        matches = roles is None or node.role in roles or is_structural_container
         if not matches and not children:
             return None
         copy = _copy_shallow(node)

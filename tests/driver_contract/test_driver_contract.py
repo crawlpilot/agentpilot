@@ -17,6 +17,7 @@ from pytest_httpserver import HTTPServer
 from baas.driver.patchright_driver import PatchrightDriver
 from baas.spi.actions import (
     ClickAction,
+    ExecuteJsAction,
     ExtractAction,
     FillAction,
     NavigateAction,
@@ -146,8 +147,14 @@ async def test_fill_dispatches_via_ref_cache(
 
     await driver.execute(open_ctx, [FillAction(ref=textbox.ref, text="hello")])
 
-    result = await driver.execute(open_ctx, [ExtractAction(format="html")])
-    assert 'value="hello"' in result.extracts[0]
+    # `.fill()` sets the live DOM `.value` *property*, not the `value`
+    # attribute -- `page.content()`'s outerHTML serialization wouldn't show
+    # it even on success, so read the property directly instead.
+    result = await driver.execute(
+        open_ctx,
+        [ExecuteJsAction(script="document.getElementById('search-box').value")],
+    )
+    assert result.js_returns[0] == "hello"
 
 
 async def test_click_with_unknown_ref_raises_stale_ref_error(
