@@ -125,11 +125,19 @@ async def open_session(
 
     started = time.monotonic()
     try:
-        profile_dir = wiring.profiles_root / identity.slug()
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        ctx = await wiring.driver.open(
-            identity, profile_dir, None, req.headful, EgressPolicy()
-        )
+        warm_ctx = wiring.warm_contexts.get(identity)
+        if warm_ctx is not None:
+            # Reuse the still-running Chrome from a prior release instead of
+            # launching a second one onto the same profile dir (see
+            # wiring.py's module docstring for why that crashes).
+            warm_ctx.state = ContextState.ACTIVE
+            ctx = warm_ctx
+        else:
+            profile_dir = wiring.profiles_root / identity.slug()
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            ctx = await wiring.driver.open(
+                identity, profile_dir, None, req.headful, EgressPolicy()
+            )
     except BaseException:
         async with wiring.lock:
             wiring.active_identities.pop(identity, None)
@@ -144,6 +152,7 @@ async def open_session(
         headful=req.headful,
         block_popups=req.block_popups,
     )
+    wiring.warm_contexts[identity] = ctx
     async with wiring.lock:
         wiring.active_identities[identity] = session_id
 

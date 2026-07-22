@@ -6,6 +6,18 @@ an `active_identities` map enforcing "at most one ACTIVE context per
 IdentityKey", guarded by one lock (P1 replaces this with per-identity locks
 and P2 re-implements the invariant as Lua -- this isn't thrown away, just
 extended with idle-reaping and finer-grained locking).
+
+`warm_contexts` exists because P0 has no reaper: releasing a session marks
+its `ContextRef` IDLE but never calls `driver.close()` on it, so the
+underlying Chrome process (and its profile dir's `SingletonLock`) is still
+there. Without this map, re-opening the same `IdentityKey` after a release
+would try to launch a *second* Chrome onto the same profile dir and crash
+with "ProcessSingleton ... already in use" -- discovered by actually using
+the UI, not by inspection. Tracking the warm `ContextRef` per identity and
+reusing it on the next open (new `session_id`, same underlying context) is
+the minimal correct fix, and it's also just P1's registry pattern
+(Browser4's `computeIfAbsent`) arriving a little early because real usage
+needed it now rather than waiting for P1.
 """
 
 from __future__ import annotations
@@ -41,6 +53,7 @@ class Wiring:
         self.profiles_root = Path(os.environ.get("BAAS_PROFILES_DIR", "/var/lib/baas/profiles"))
         self.sessions: dict[str, Session] = {}
         self.active_identities: dict[IdentityKey, str | None] = {}
+        self.warm_contexts: dict[IdentityKey, ContextRef] = {}
         self.lock = asyncio.Lock()
 
     async def close(self) -> None:

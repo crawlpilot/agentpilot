@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from baas.spi import errors as spi_errors
+
+log = structlog.get_logger(__name__)
 
 
 class ErrorCode(StrEnum):
@@ -82,3 +85,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         code = ErrorCode.NOT_FOUND if exc.status_code == 404 else ErrorCode.BAD_REQUEST
         return _error_response(exc.status_code, code, str(exc.detail))
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Catch-all so a raw Chromium/CDP error (e.g. "Cannot navigate to
+        invalid URL") surfaces as a diagnosable typed response instead of an
+        opaque "Internal Server Error" -- found by actually using the UI:
+        a schemeless navigate URL crashed with no useful message. Registering
+        this handler means Starlette's own console traceback logging no
+        longer fires for these (it already produced a response), so we log
+        it here instead.
+        """
+
+        log.error(
+            "gateway.unhandled_exception",
+            path=request.url.path,
+            exc_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return _error_response(500, ErrorCode.INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
