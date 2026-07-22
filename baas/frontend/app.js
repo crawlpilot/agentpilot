@@ -114,8 +114,15 @@ async function execute(actions) {
   });
 }
 
+function normalizeUrl(raw) {
+  // Chrome's CDP Page.navigate rejects schemeless URLs outright ("Cannot
+  // navigate to invalid URL") rather than guessing like an address bar does
+  // -- default to https:// the same way a browser's own bar would.
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) ? raw : `https://${raw}`;
+}
+
 $("nav-btn").addEventListener("click", async () => {
-  const url = $("nav-url").value.trim();
+  const url = normalizeUrl($("nav-url").value.trim());
   if (!url) return;
   logLine(`navigate -> ${url}`);
   try {

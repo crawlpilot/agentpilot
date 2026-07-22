@@ -52,9 +52,16 @@ def _parse_input_event(msg: dict[str, Any]) -> InputEvent | None:
 
 
 async def _send_frames(websocket: WebSocket, queue: asyncio.Queue[Any]) -> None:
+    """Stops quietly once the socket is closing rather than letting a send
+    into a closing connection raise (observed as `websockets.exceptions.
+    InvalidState` spam in logs when a client disconnects mid-stream)."""
+
     while True:
         frame = await queue.get()
-        await websocket.send_bytes(frame.data)
+        try:
+            await websocket.send_bytes(frame.data)
+        except Exception:
+            return
 
 
 async def _receive_input(websocket: WebSocket, driver: LiveViewCapable, ctx: Any) -> None:
