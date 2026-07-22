@@ -126,7 +126,10 @@ class Wiring:
         from baas.spi.driver import BrowserDriver
 
         self.launcher = ProcessLauncher()
-        self.driver: BrowserDriver = PatchrightDriver(self.launcher)
+        self.driver: BrowserDriver = PatchrightDriver(
+            self.launcher,
+            max_tabs_per_session=int(os.environ.get("BAAS_MAX_TABS_PER_SESSION", "10")),
+        )
         assert isinstance(self.driver, BrowserDriver)
 
         self.profiles_root = Path(os.environ.get("BAAS_PROFILES_DIR", "/var/lib/baas/profiles"))

@@ -28,6 +28,18 @@ class StaleRefError(DriverError):
         self.epoch_superseded = epoch_superseded
 
 
+class TabNotFound(DriverError):
+    """A `page_id`/tab reference (execute's `page_id` arg, or
+    `SwitchTabAction`/`CloseTabAction`'s) that doesn't resolve to a currently
+    tracked tab -- already closed, or never existed. Same NOT_FOUND family as
+    "no such session", not a distinct `ErrorCode` (see `gateway/errors.py`'s
+    mapping)."""
+
+    def __init__(self, page_id: str) -> None:
+        super().__init__(f"no such tab {page_id!r}")
+        self.page_id = page_id
+
+
 class LeaseConflict(DriverError):
     pass
 

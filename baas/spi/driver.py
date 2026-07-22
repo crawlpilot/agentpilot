@@ -28,11 +28,21 @@ class BrowserDriver(Protocol):
         proxy: ProxyEndpoint | None,
         headful: bool,
         egress: EgressPolicy,
+        block_popups: bool = False,
     ) -> ContextRef: ...
 
     async def close(self, ctx: ContextRef) -> None: ...
 
-    async def execute(self, ctx: ContextRef, actions: list[Action]) -> ActionResult: ...
+    async def execute(
+        self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
+    ) -> ActionResult:
+        """`page_id` selects which tab within `ctx`'s context this whole
+        batch dispatches against; `None` means "the context's current active
+        tab" -- every pre-multi-tab caller keeps working unchanged. Storage
+        state (`export_state`/`restore_state` below) stays context-scoped,
+        not page-scoped: cookies/localStorage are a browser-context-wide
+        concept in Playwright, not per-tab."""
+        ...
 
     async def export_state(self, ctx: ContextRef) -> StorageState: ...
 

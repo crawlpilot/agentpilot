@@ -27,13 +27,16 @@ from baas.gateway.schemas import (
     ArtifactRefOut,
     AXSnapshotOut,
     ClickActionIn,
+    CloseTabActionIn,
     ExecuteJsActionIn,
     ExecuteRequest,
     ExtractActionIn,
     FillActionIn,
     GoBackActionIn,
     HoverActionIn,
+    ListTabsActionIn,
     NavigateActionIn,
+    NewTabActionIn,
     PressActionIn,
     ScreenshotActionIn,
     ScrollActionIn,
@@ -45,6 +48,8 @@ from baas.gateway.schemas import (
     SessionOut,
     SnapshotActionIn,
     SnapshotNodeOut,
+    SwitchTabActionIn,
+    TabInfoOut,
     WaitActionIn,
 )
 from baas.gateway.wiring import Session, Wiring, get_wiring
@@ -85,6 +90,10 @@ _ACTION_CONVERTERS = {
     HoverActionIn: lambda a: spi_actions.HoverAction(ref=a.ref),
     PressActionIn: lambda a: spi_actions.PressAction(key=a.key),
     ScrollActionIn: lambda a: spi_actions.ScrollAction(direction=a.direction, ref=a.ref),
+    NewTabActionIn: lambda a: spi_actions.NewTabAction(url=a.url),
+    CloseTabActionIn: lambda a: spi_actions.CloseTabAction(page_id=a.page_id),
+    SwitchTabActionIn: lambda a: spi_actions.SwitchTabAction(page_id=a.page_id),
+    ListTabsActionIn: lambda a: spi_actions.ListTabsAction(),
 }
 
 
@@ -119,6 +128,13 @@ def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
                 sha256=d.sha256,
             )
             for d in result.downloads
+        ],
+        tabs=[
+            [
+                TabInfoOut(page_id=t.page_id, url=t.url, title=t.title, active=t.active)
+                for t in tab_list
+            ]
+            for tab_list in result.tabs
         ],
         sequence_aborted=result.sequence_aborted,
         page_changed=result.page_changed,
@@ -160,7 +176,9 @@ async def open_session(
         profile_dir.mkdir(parents=True, exist_ok=True)
 
         proxy = await wiring.proxy_pinner.get_or_assign(identity) if wiring.proxy_pinner else None
-        ctx = await wiring.driver.open(identity, profile_dir, proxy, req.headful, EgressPolicy())
+        ctx = await wiring.driver.open(
+            identity, profile_dir, proxy, req.headful, EgressPolicy(), req.block_popups
+        )
 
         if is_fresh and wiring.vault is not None:
             state = wiring.vault.load(identity)
@@ -261,7 +279,7 @@ async def execute_session(
 
     actions = [_to_spi_action(a) for a in req.actions]
     with execute_duration_seconds.time():
-        result = await wiring.driver.execute(session.ctx, actions)
+        result = await wiring.driver.execute(session.ctx, actions, req.page_id)
     return _to_action_result_out(result)
 
 

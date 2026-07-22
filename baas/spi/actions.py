@@ -115,6 +115,42 @@ class ScrollAction:
     terminates_sequence: bool = False
 
 
+# --- Tab management (multi-page-per-session; see driver_contract/plan.md's
+# multi-tab pass). Named to match Browser4's agent tool surface (newTab/
+# closeTab/listTabs/switchTab -- browser4-agentic's BrowserToolExecutor)
+# rather than invented fresh. These mutate `PatchrightDriver`'s per-context
+# page bookkeeping (which page is tracked, which is active) for *subsequent*
+# `execute()` calls -- they do not retarget the page the rest of *this same*
+# batch dispatches against, which stays fixed to whatever `execute()`
+# resolved at the top from its own `page_id` argument. That keeps the
+# dispatch loop's single `live` reference simple, and mirrors Browser4's
+# `switchTab` being its own standalone tool call rather than something
+# interleaved mid-sequence with page actions.
+
+
+@dataclass
+class NewTabAction:
+    url: str | None = None
+    terminates_sequence: bool = True
+
+
+@dataclass
+class CloseTabAction:
+    page_id: str
+    terminates_sequence: bool = True
+
+
+@dataclass
+class SwitchTabAction:
+    page_id: str
+    terminates_sequence: bool = True
+
+
+@dataclass
+class ListTabsAction:
+    terminates_sequence: bool = False
+
+
 Action = (
     NavigateAction
     | GoBackAction
@@ -129,7 +165,22 @@ Action = (
     | HoverAction
     | PressAction
     | ScrollAction
+    | NewTabAction
+    | CloseTabAction
+    | SwitchTabAction
+    | ListTabsAction
 )
+
+@dataclass
+class TabInfo:
+    """One `ListTabsAction` entry -- mirrors Browser4's `listTabs()` shape
+    (`{index, guid, title, url}`), `page_id` standing in for `guid`."""
+
+    page_id: str
+    url: str
+    title: str
+    active: bool
+
 
 @dataclass
 class ActionResult:
@@ -140,9 +191,16 @@ class ActionResult:
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)
     downloads: list[ArtifactRef] = field(default_factory=list)
+    tabs: list[list[TabInfo]] = field(default_factory=list)
+    """One entry per `ListTabsAction` in the batch (matching every other
+    per-type list here being index-correlated to that action's occurrences,
+    not a single running snapshot)."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""
     page_changed: bool = False
-    """Set on popup adoption (new page becomes "the page") or unexpected
-    navigation, per the popup/download policy."""
+    """Set when a new tab is auto-focused (`_on_new_page` popup handling) or
+    an unexpected navigation occurs on the active page, per the popup/download
+    policy. Not set by `NewTabAction`/`SwitchTabAction` themselves -- those
+    are explicit, caller-driven tab changes, not "the ground shifted under
+    you" signals this field exists to carry."""

@@ -6,7 +6,10 @@ batching a whole `list[Action]` into one `ActionResult`. P1 adds real
 dispatch for the interaction verbs (via `driver/ref_cache.py`), snapshot
 token-budget filtering (`roles`/`max_nodes`/`viewport_only`), and the
 view-only live-view screencast (`LiveViewCapable`, at the bottom of this
-class).
+class). This pass adds multi-tab: one `_Context` per `ContextRef` now owns a
+`dict[page_id, _Page]` (was a single implicit page) -- see the multi-tab plan
+for how this mirrors Browser4's `BrowserTab`/`PulsarWebDriver`/
+`AbstractBrowser.mutableDrivers` shape.
 """
 
 from __future__ import annotations
@@ -50,21 +53,32 @@ from baas.spi.actions import (
     Action,
     ActionResult,
     ClickAction,
+    CloseTabAction,
     ExecuteJsAction,
     ExtractAction,
     FillAction,
     GoBackAction,
     HoverAction,
+    ListTabsAction,
     NavigateAction,
+    NewTabAction,
     PressAction,
     ScreenshotAction,
     ScrollAction,
     SelectOptionAction,
     SnapshotAction,
+    SwitchTabAction,
+    TabInfo,
     WaitAction,
 )
 from baas.spi.egress import EgressPolicy
-from baas.spi.errors import ContextCrashed, NavigationTimeout, StaleRefError
+from baas.spi.errors import (
+    CapacityExhausted,
+    ContextCrashed,
+    NavigationTimeout,
+    StaleRefError,
+    TabNotFound,
+)
 from baas.spi.health import HealthStatus
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef, ContextState
@@ -89,19 +103,48 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
     "left": (-600, 0),
 }
 
+DEFAULT_MAX_TABS_PER_SESSION = 10
+"""Per-session tab cap (`_Context.max_tabs`). Browser4's equivalent
+(`LoadingWebDriverPool.capacity`) hard-ceilings at 50, but that governs a
+*shared driver pool* spread across many crawls; one baas-crawlpilot session
+is already a dedicated Chrome context per tenant identity, a heavier unit, so
+a smaller default is the right translation, not a straight copy of the
+number. Configurable via `BAAS_MAX_TABS_PER_SESSION` (see `wiring.py`)."""
+
 
 @dataclass
-class _Live:
-    context: BrowserContext
+class _Page:
+    """One tab's live state -- was `_Live` pre-multi-tab, minus the fields
+    that are actually context-wide (`context`, `alive`/`death_reason` for the
+    whole browser, `block_popups`), which moved to `_Context` below."""
+
     page: Page
     epoch: int = 0
     alive: bool = True
     death_reason: str | None = None
-    block_popups: bool = False
-    page_changed: bool = False
     cdp_session: CDPSession | None = None
     frame_queue: asyncio.Queue[LiveViewFrame] | None = None
     ref_cache: RefCache = field(default_factory=RefCache)
+
+
+@dataclass
+class _Context:
+    """One `ContextRef`'s live state -- the per-context wrapper `_Live` used
+    to be (a context WAS a page, 1:1). Mirrors Browser4's `AbstractBrowser`:
+    `pages` is `mutableDrivers`, `active_page_id` is `frontDriver`."""
+
+    context: BrowserContext
+    pages: dict[str, _Page]
+    active_page_id: str
+    max_tabs: int = DEFAULT_MAX_TABS_PER_SESSION
+    alive: bool = True
+    death_reason: str | None = None
+    block_popups: bool = False
+    page_changed: bool = False
+    """Set when `_on_new_page` auto-focuses a new tab (see multi-tab plan's
+    "New-tab focus" decision: real-browser semantics, matching Browser4's
+    unconditional `onWindowOpen` -> `newDriver` auto-follow). Read once per
+    `execute()` call and reset, same lifecycle as before."""
 
 
 def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
@@ -155,14 +198,26 @@ def _from_playwright_storage_state(raw: Mapping[str, Any]) -> StorageState:
 
 
 class PatchrightDriver:
-    def __init__(self, launcher: ProcessLauncher) -> None:
+    def __init__(
+        self, launcher: ProcessLauncher, max_tabs_per_session: int = DEFAULT_MAX_TABS_PER_SESSION
+    ) -> None:
         self._launcher = launcher
-        self._live: dict[str, _Live] = {}
+        self._max_tabs_per_session = max_tabs_per_session
+        self._contexts: dict[str, _Context] = {}
 
-    def _require_live(self, ctx: ContextRef) -> _Live:
-        live = self._live.get(ctx.context_id)
-        if live is None or not live.alive:
+    def _require_context(self, ctx: ContextRef) -> _Context:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None or not cctx.alive:
             raise ContextCrashed(f"context {ctx.context_id} is not alive")
+        return cctx
+
+    def _require_page(self, cctx: _Context, page_id: str | None) -> _Page:
+        pid = page_id or cctx.active_page_id
+        live = cctx.pages.get(pid)
+        if live is None:
+            raise TabNotFound(pid)
+        if not live.alive:
+            raise ContextCrashed(f"tab {pid} is not alive: {live.death_reason}")
         return live
 
     async def open(
@@ -172,6 +227,7 @@ class PatchrightDriver:
         proxy: ProxyEndpoint | None,
         headful: bool,
         egress: EgressPolicy,
+        block_popups: bool = False,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -187,30 +243,54 @@ class PatchrightDriver:
         )
         page = context.pages[0] if context.pages else await context.new_page()
 
-        live = _Live(context=context, page=page)
         context_id = str(uuid.uuid4())
+        page_id = str(uuid.uuid4())
+        cctx = _Context(
+            context=context,
+            pages={page_id: _Page(page=page)},
+            active_page_id=page_id,
+            max_tabs=self._max_tabs_per_session,
+            block_popups=block_popups,
+        )
 
-        def _on_crash(_page: Page) -> None:
-            live.alive = False
-            live.death_reason = "page_crash"
-            log.warning("driver.page_crashed", context_id=context_id)
+        def _wire_page(pid: str, pg: Page) -> None:
+            def _on_crash(_page: Page) -> None:
+                live_page = cctx.pages.get(pid)
+                if live_page is not None:
+                    live_page.alive = False
+                    live_page.death_reason = "page_crash"
+                log.warning("driver.page_crashed", context_id=context_id, page_id=pid)
+
+            pg.on("crash", _on_crash)
 
         def _on_context_close(_context: BrowserContext) -> None:
-            live.alive = False
-            live.death_reason = live.death_reason or "context_closed"
+            cctx.alive = False
+            cctx.death_reason = cctx.death_reason or "context_closed"
 
         def _on_new_page(new_page: Page) -> None:
-            if live.block_popups:
+            if cctx.block_popups:
                 asyncio.create_task(new_page.close())
                 return
-            live.page = new_page
-            live.page_changed = True
+            if len(cctx.pages) >= cctx.max_tabs:
+                asyncio.create_task(new_page.close())
+                log.warning(
+                    "driver.tab_cap_exceeded", context_id=context_id, max_tabs=cctx.max_tabs
+                )
+                return
+            new_page_id = str(uuid.uuid4())
+            cctx.pages[new_page_id] = _Page(page=new_page)
+            # Auto-focus, matching real-browser semantics for a target=_blank
+            # click -- same as Browser4's unconditional `onWindowOpen` ->
+            # `newDriver` auto-follow (confirmed with user, see multi-tab plan).
+            cctx.active_page_id = new_page_id
+            cctx.page_changed = True
+            _wire_page(new_page_id, new_page)
 
-        page.on("crash", _on_crash)
+        _wire_page(page_id, page)
         context.on("close", _on_context_close)
         context.on("page", _on_new_page)
 
-        self._live[context_id] = live
+        self._contexts[context_id] = cctx
         return ContextRef(
             context_id=context_id,
             identity=identity,
@@ -220,15 +300,18 @@ class PatchrightDriver:
         )
 
     async def close(self, ctx: ContextRef) -> None:
-        live = self._live.pop(ctx.context_id, None)
-        if live is None:
+        cctx = self._contexts.pop(ctx.context_id, None)
+        if cctx is None:
             return
-        if live.alive:
-            await live.context.close()
+        if cctx.alive:
+            await cctx.context.close()
 
-    async def execute(self, ctx: ContextRef, actions: list[Action]) -> ActionResult:
-        """Dispatches the whole batch, aborting early if the page navigated
-        out from under a ref-consuming action.
+    async def execute(
+        self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
+    ) -> ActionResult:
+        """Dispatches the whole batch against one resolved page (`page_id`,
+        defaulting to the context's active tab), aborting early if the page
+        navigated out from under a ref-consuming action.
 
         `Action.terminates_sequence` is caller-facing metadata (e.g. an SDK
         deciding whether to keep queuing actions client-side); it is not the
@@ -238,11 +321,17 @@ class PatchrightDriver:
         P1's ref-consuming actions (Click/Fill/...) land, any of them
         following an unnoticed navigation -- deliberate or not -- would act
         on stale refs, so those are the ones that trip `sequence_aborted`.
-        """
 
-        live = self._require_live(ctx)
-        result = ActionResult(page_changed=live.page_changed)
-        live.page_changed = False
+        Tab-management actions (New/Close/SwitchTab) mutate `cctx`'s
+        bookkeeping for *subsequent* `execute()` calls; they do not retarget
+        which page the rest of *this* batch dispatches against -- that stays
+        fixed to `live`, resolved once here. See `spi.actions`' docstring on
+        those actions for why."""
+
+        cctx = self._require_context(ctx)
+        live = self._require_page(cctx, page_id)
+        result = ActionResult(page_changed=cctx.page_changed)
+        cctx.page_changed = False
 
         stale = False
         for action in actions:
@@ -253,12 +342,14 @@ class PatchrightDriver:
                 result.sequence_aborted = True
                 break
             pre_url = live.page.url
-            await self._dispatch(live, action, result)
+            await self._dispatch(cctx, live, action, result)
             if live.page.url != pre_url:
                 stale = True
         return result
 
-    async def _dispatch(self, live: _Live, action: Action, result: ActionResult) -> None:
+    async def _dispatch(
+        self, cctx: _Context, live: _Page, action: Action, result: ActionResult
+    ) -> None:
         if isinstance(action, NavigateAction):
             try:
                 await live.page.goto(action.url, timeout=action.timeout_ms)
@@ -315,10 +406,74 @@ class PatchrightDriver:
             else:
                 dx, dy = _SCROLL_DELTAS[action.direction]
                 await live.page.mouse.wheel(dx, dy)
+        elif isinstance(action, NewTabAction):
+            new_page_id = await self._create_tab(cctx, action.url)
+            cctx.active_page_id = new_page_id
+        elif isinstance(action, CloseTabAction):
+            await self._close_tab(cctx, action.page_id)
+        elif isinstance(action, SwitchTabAction):
+            if action.page_id not in cctx.pages:
+                raise TabNotFound(action.page_id)
+            cctx.active_page_id = action.page_id
+        elif isinstance(action, ListTabsAction):
+            result.tabs.append(await self._list_tabs(cctx))
         else:
             assert_never(action)
 
-    async def _resolve_ref(self, live: _Live, ref: str) -> Locator:
+    async def _create_tab(self, cctx: _Context, url: str | None) -> str:
+        """Explicit `NewTabAction` counterpart to `open()`'s `_on_new_page`
+        auto-tracking -- same cap enforcement, same crash-handler wiring, no
+        popup-blocking check (a caller-requested tab isn't a popup)."""
+
+        if len(cctx.pages) >= cctx.max_tabs:
+            raise CapacityExhausted(f"session already has {cctx.max_tabs} tabs open")
+        new_page = await cctx.context.new_page()
+        page_id = str(uuid.uuid4())
+        cctx.pages[page_id] = _Page(page=new_page)
+
+        def _on_crash(_page: Page) -> None:
+            live_page = cctx.pages.get(page_id)
+            if live_page is not None:
+                live_page.alive = False
+                live_page.death_reason = "page_crash"
+
+        new_page.on("crash", _on_crash)
+        if url is not None:
+            await new_page.goto(url)
+        return page_id
+
+    async def _close_tab(self, cctx: _Context, page_id: str) -> None:
+        live = cctx.pages.get(page_id)
+        if live is None:
+            raise TabNotFound(page_id)
+        if len(cctx.pages) == 1:
+            raise ValueError("cannot close the last remaining tab in a session")
+        if live.cdp_session is not None:
+            with contextlib.suppress(Exception):
+                await live.cdp_session.send("Page.stopScreencast")
+                await live.cdp_session.detach()
+        with contextlib.suppress(Exception):
+            await live.page.close()
+        del cctx.pages[page_id]
+        if cctx.active_page_id == page_id:
+            cctx.active_page_id = next(iter(cctx.pages))
+            cctx.page_changed = True
+
+    async def _list_tabs(self, cctx: _Context) -> list[TabInfo]:
+        titles = await asyncio.gather(
+            *(p.page.title() for p in cctx.pages.values()), return_exceptions=True
+        )
+        return [
+            TabInfo(
+                page_id=pid,
+                url=p.page.url,
+                title=title if isinstance(title, str) else "",
+                active=(pid == cctx.active_page_id),
+            )
+            for (pid, p), title in zip(cctx.pages.items(), titles, strict=True)
+        ]
+
+    async def _resolve_ref(self, live: _Page, ref: str) -> Locator:
         """Resolves via `RefCache`, then enforces visibility: a ref that
         resolves to a zero-size box (`display:none`, collapsed, off-canvas)
         is treated the same as a ref that failed to resolve at all -- both
@@ -340,7 +495,7 @@ class PatchrightDriver:
             raise StaleRefError(ref, epoch_superseded=False)
         return locator
 
-    async def _apply_viewport_filter(self, live: _Live, root: SnapshotNode) -> SnapshotNode:
+    async def _apply_viewport_filter(self, live: _Page, root: SnapshotNode) -> SnapshotNode:
         """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`
         (Page domain -- never Runtime, same constraint as live-view) rather
         than Playwright's own `viewport_size()`, since `open()` launches with
@@ -361,7 +516,7 @@ class PatchrightDriver:
         cdp = live.cdp_session
         owns_session = cdp is None
         if cdp is None:
-            cdp = await live.context.new_cdp_session(live.page)
+            cdp = await live.page.context.new_cdp_session(live.page)
         try:
             metrics = await cdp.send("Page.getLayoutMetrics")
             viewport = metrics["cssVisualViewport"]
@@ -403,31 +558,37 @@ class PatchrightDriver:
         return prune_to_refs(root, visible)
 
     async def export_state(self, ctx: ContextRef) -> StorageState:
-        live = self._require_live(ctx)
-        raw = await live.context.storage_state()
+        cctx = self._require_context(ctx)
+        raw = await cctx.context.storage_state()
         return _from_playwright_storage_state(raw)
 
     async def restore_state(self, ctx: ContextRef, state: StorageState) -> None:
-        live = self._require_live(ctx)
-        await live.context.set_storage_state(_to_playwright_storage_state(state))
+        cctx = self._require_context(ctx)
+        await cctx.context.set_storage_state(_to_playwright_storage_state(state))
 
     async def health(self, ctx: ContextRef) -> HealthStatus:
-        live = self._live.get(ctx.context_id)
-        if live is None:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None:
             return HealthStatus(alive=False, reason="context_not_found")
-        return HealthStatus(alive=live.alive, reason=live.death_reason)
+        return HealthStatus(alive=cctx.alive, reason=cctx.death_reason)
 
     # --- LiveViewCapable (optional capability; see spi.streaming) ---
     # Page and Input domains only -- never Runtime, to preserve Patchright's
     # anti-leak guarantee (see baas/driver/live_view.py's module docstring).
+    # One screencast at a time per context (the active tab's), matching a
+    # real browser's single visible tab -- see multi-tab plan's "explicitly
+    # out of scope".
 
-    async def start_screencast(self, ctx: ContextRef) -> asyncio.Queue[LiveViewFrame]:
-        live = self._require_live(ctx)
+    async def start_screencast(
+        self, ctx: ContextRef, page_id: str | None = None
+    ) -> asyncio.Queue[LiveViewFrame]:
+        cctx = self._require_context(ctx)
+        live = self._require_page(cctx, page_id)
         if live.frame_queue is not None:
             return live.frame_queue
 
         queue: asyncio.Queue[LiveViewFrame] = asyncio.Queue(maxsize=2)
-        cdp = await live.context.new_cdp_session(live.page)
+        cdp = await cctx.context.new_cdp_session(live.page)
 
         async def _ack_and_enqueue(params: dict[str, Any]) -> None:
             await cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
@@ -442,8 +603,9 @@ class PatchrightDriver:
         live.frame_queue = queue
         return queue
 
-    async def stop_screencast(self, ctx: ContextRef) -> None:
-        live = self._require_live(ctx)
+    async def stop_screencast(self, ctx: ContextRef, page_id: str | None = None) -> None:
+        cctx = self._require_context(ctx)
+        live = self._require_page(cctx, page_id)
         if live.cdp_session is None:
             return
         try:
@@ -454,9 +616,12 @@ class PatchrightDriver:
         live.cdp_session = None
         live.frame_queue = None
 
-    async def dispatch_input(self, ctx: ContextRef, event: InputEvent) -> None:
-        live = self._require_live(ctx)
+    async def dispatch_input(
+        self, ctx: ContextRef, event: InputEvent, page_id: str | None = None
+    ) -> None:
+        cctx = self._require_context(ctx)
+        live = self._require_page(cctx, page_id)
         if live.cdp_session is None:
-            raise ContextCrashed("live view is not active for this context")
+            raise ContextCrashed("live view is not active for this tab")
         method, params = to_cdp_input_params(event)
         await live.cdp_session.send(method, params)

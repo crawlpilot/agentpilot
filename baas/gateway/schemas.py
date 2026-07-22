@@ -130,6 +130,32 @@ class ScrollActionIn(BaseModel):
     ref: str | None = None
 
 
+# --- tab management (mirrors spi.actions' NewTab/CloseTab/SwitchTab/ListTab) ---
+
+
+class NewTabActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["new_tab"]
+    url: str | None = None
+
+
+class CloseTabActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["close_tab"]
+    page_id: str
+
+
+class SwitchTabActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["switch_tab"]
+    page_id: str
+
+
+class ListTabsActionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["list_tabs"]
+
+
 ActionIn = Annotated[
     NavigateActionIn
     | GoBackActionIn
@@ -143,7 +169,11 @@ ActionIn = Annotated[
     | SelectOptionActionIn
     | HoverActionIn
     | PressActionIn
-    | ScrollActionIn,
+    | ScrollActionIn
+    | NewTabActionIn
+    | CloseTabActionIn
+    | SwitchTabActionIn
+    | ListTabsActionIn,
     Field(discriminator="type"),
 ]
 
@@ -151,6 +181,10 @@ ActionIn = Annotated[
 class ExecuteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     actions: list[ActionIn]
+    page_id: str | None = None
+    """Which tab this whole batch dispatches against; omitted/`None` means
+    the session's current active tab -- see `spi.driver.BrowserDriver.
+    execute`'s docstring."""
 
 
 # --- action results ---
@@ -180,6 +214,14 @@ class ArtifactRefOut(BaseModel):
     sha256: str
 
 
+class TabInfoOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    page_id: str
+    url: str
+    title: str
+    active: bool
+
+
 class ActionResultOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     snapshots: list[AXSnapshotOut] = Field(default_factory=list)
@@ -188,6 +230,8 @@ class ActionResultOut(BaseModel):
     extracts: list[str] = Field(default_factory=list)
     js_returns: list[Any] = Field(default_factory=list)
     downloads: list[ArtifactRefOut] = Field(default_factory=list)
+    tabs: list[list[TabInfoOut]] = Field(default_factory=list)
+    """One entry per `list_tabs` action in the batch."""
     sequence_aborted: bool = False
     page_changed: bool = False
 

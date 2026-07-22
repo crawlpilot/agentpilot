@@ -43,6 +43,7 @@ _DRIVER_ERROR_MAPPING: dict[type[Exception], tuple[int, ErrorCode]] = {
     spi_errors.ChallengeDetected: (422, ErrorCode.CHALLENGE_UNRESOLVED),
     spi_errors.ContextCrashed: (500, ErrorCode.CONTEXT_CRASHED),
     spi_errors.EgressBlocked: (403, ErrorCode.EGRESS_BLOCKED),
+    spi_errors.TabNotFound: (404, ErrorCode.NOT_FOUND),
     # A ref from a superseded epoch or one that no longer resolves is a
     # client-side "you're acting on a stale snapshot" error (re-snapshot and
     # retry), not a server fault -- 409, same family as SESSION_LEASE_CONFLICT.

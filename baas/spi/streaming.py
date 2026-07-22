@@ -58,10 +58,18 @@ class LiveViewCapable(Protocol):
     at the composition root; drivers without it simply don't get a
     live-view route wired up."""
 
-    async def start_screencast(self, ctx: ContextRef) -> asyncio.Queue[LiveViewFrame]:
-        """Returns the queue the caller reads live frames from."""
+    async def start_screencast(
+        self, ctx: ContextRef, page_id: str | None = None
+    ) -> asyncio.Queue[LiveViewFrame]:
+        """Returns the queue the caller reads live frames from. `page_id`
+        selects which tab to screencast; `None` means the context's current
+        active tab -- one screencast at a time per context, matching a real
+        browser's single visible tab (see multi-tab plan's "explicitly out
+        of scope")."""
         ...
 
-    async def stop_screencast(self, ctx: ContextRef) -> None: ...
+    async def stop_screencast(self, ctx: ContextRef, page_id: str | None = None) -> None: ...
 
-    async def dispatch_input(self, ctx: ContextRef, event: InputEvent) -> None: ...
+    async def dispatch_input(
+        self, ctx: ContextRef, event: InputEvent, page_id: str | None = None
+    ) -> None: ...
