@@ -73,6 +73,7 @@ def _session(session_id: str, identity: IdentityKey, ctx: ContextRef, lease_id: 
         tier="auto",
         headful=False,
         block_popups=False,
+        enable_cdp=False,
     )
 
 
