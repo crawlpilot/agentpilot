@@ -1,6 +1,6 @@
 """In-memory session registry -- the real version of P0's `wiring.py`
-`active_identities`/`warm_contexts` dicts (a port of Browser4's
-`ConcurrentStatefulPrivacyContextPool.computeIfAbsent()`), now with a
+`active_identities`/`warm_contexts` dicts (a port of a prior internal
+system's get-or-create-under-lock context pool), now with a
 per-`IdentityKey` `asyncio.Lock` instead of one global lock. P2 swaps the
 in-memory dicts for Redis + Lua behind this same interface -- the
 <=1-ACTIVE-per-identity invariant enforced here is exactly what

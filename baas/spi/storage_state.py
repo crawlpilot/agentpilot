@@ -2,8 +2,8 @@
 
 Pure data only -- no capture logic lives here. Playwright/Patchright's native
 `storage_state()` already captures cookies *and* every visited origin's
-localStorage in one call, which is the fix over Browser4's `saveStorageState()`
-(it only ever captured the single origin loaded at call time). The driver
+localStorage in one call, which is the fix over a prior internal system's
+equivalent (it only ever captured the single origin loaded at call time). The driver
 calls the native method directly and wraps the result in these types.
 """
 

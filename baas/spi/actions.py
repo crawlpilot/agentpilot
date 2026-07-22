@@ -1,7 +1,8 @@
 """The single interaction primitive: a closed set of tagged, driver-agnostic actions.
 
 Adapted from Firecrawl's `actionSchema` discriminated union (convergent with
-Browser4's press/fill/mouseWheel/batch backport). `execute()` dispatches a
+a prior internal system's own press/fill/mouseWheel/batch primitive).
+`execute()` dispatches a
 `list[Action]` in one round trip and returns one `ActionResult` carrying
 per-type correlated output lists -- the thing that matters at millions/hour.
 
@@ -116,16 +117,15 @@ class ScrollAction:
 
 
 # --- Tab management (multi-page-per-session; see driver_contract/plan.md's
-# multi-tab pass). Named to match Browser4's agent tool surface (newTab/
-# closeTab/listTabs/switchTab -- browser4-agentic's BrowserToolExecutor)
-# rather than invented fresh. These mutate `PatchrightDriver`'s per-context
-# page bookkeeping (which page is tracked, which is active) for *subsequent*
-# `execute()` calls -- they do not retarget the page the rest of *this same*
-# batch dispatches against, which stays fixed to whatever `execute()`
-# resolved at the top from its own `page_id` argument. That keeps the
-# dispatch loop's single `live` reference simple, and mirrors Browser4's
-# `switchTab` being its own standalone tool call rather than something
-# interleaved mid-sequence with page actions.
+# multi-tab pass). Named to match a prior internal system's agent tool
+# surface (newTab/closeTab/listTabs/switchTab) rather than invented fresh.
+# These mutate `PatchrightDriver`'s per-context page bookkeeping (which page
+# is tracked, which is active) for *subsequent* `execute()` calls -- they do
+# not retarget the page the rest of *this same* batch dispatches against,
+# which stays fixed to whatever `execute()` resolved at the top from its own
+# `page_id` argument. That keeps the dispatch loop's single `live` reference
+# simple, and mirrors that system's `switchTab` being its own standalone
+# tool call rather than something interleaved mid-sequence with page actions.
 
 
 @dataclass
@@ -173,8 +173,9 @@ Action = (
 
 @dataclass
 class TabInfo:
-    """One `ListTabsAction` entry -- mirrors Browser4's `listTabs()` shape
-    (`{index, guid, title, url}`), `page_id` standing in for `guid`."""
+    """One `ListTabsAction` entry -- mirrors a prior internal system's
+    tab-listing shape (`{index, guid, title, url}`), `page_id` standing in
+    for `guid`."""
 
     page_id: str
     url: str

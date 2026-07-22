@@ -6,3 +6,15 @@
 .localdata/
 __pycache__/
 *.py[cod]
+
+# Personal AI-assistant/editor tool configs -- these hardcode a developer's
+# own absolute local path and aren't portable/meaningful to other
+# contributors; each tool falls back gracefully without one.
+.mcp.json
+.cursor/mcp.json
+.gemini/settings.json
+.qoder/mcp.json
+.qoder/settings.json
+.vscode/mcp.json
+opencode.jsonc
+*.bak

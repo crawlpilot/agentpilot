@@ -1,5 +1,5 @@
-"""Assign-once-keep-for-life proxy pinning -- Browser4's
-`ProxyPoolManager.getProxy` pattern, backed by Redis `HSETNX` so the pin
+"""Assign-once-keep-for-life proxy pinning -- a prior internal system's
+proxy-pool-pinning pattern, backed by Redis `HSETNX` so the pin
 survives process restarts and is race-safe: `HSETNX` is atomic, so if two
 concurrent first-opens for the same brand-new identity both try to pin,
 only one write wins and the other's `HSETNX` is silently a no-op -- both

@@ -8,11 +8,11 @@
 
 A multi-tenant, distributed **Browser-as-a-Service** platform — a foundation on which agents,
 crawlers, and scrapers are built by consuming warm browser sessions as tools over a stable
-protocol, targeting millions of crawls/hour. Adapted from **Browser4** (Kotlin/JVM predecessor)
-but rebuilt single-stack in Python because the stealth layer (Patchright) forces Python anyway;
-running two ecosystems for an I/O-bound coordinator was pure overhead. Target repo
-`baas-crawlpilot` is empty — a from-scratch build informed by Browser4's *patterns*, not a code
-port (Browser4's hand-rolled Kotlin CDP client isn't reusable).
+protocol, targeting millions of crawls/hour. Informed by patterns from an earlier internal
+JVM-based browser-automation system, but rebuilt single-stack in Python because the stealth layer
+(Patchright) forces Python anyway; running two ecosystems for an I/O-bound coordinator was pure
+overhead. Target repo `baas-crawlpilot` is empty — a from-scratch build informed by that system's
+*patterns*, not a code port (its hand-rolled CDP client isn't reusable).
 
 **The system is a fleet, not a node.** At the §Capacity numbers (~5,600 concurrent contexts,
 ~31–50 nodes) three facts are load-bearing and shape the design from P0: a session is physically
@@ -21,7 +21,7 @@ one node's disk; and fleet capacity is finite, so "open a context" must sometime
 "not now." Any design that only works on one container is wrong here.
 
 Research grounding (verified against actual package internals):
-- **Browser4** — strong prior art for identity/profile modeling, driver pooling with
+- **Prior internal system** — strong prior art for identity/profile modeling, driver pooling with
   lease/release-to-IDLE, sticky proxy pinning keyed by identity, and a success/failure feedback
   loop retiring "burned" identities. Has **zero** multi-tenancy and **zero** challenge solving
   (only heuristic classification → retirement) — both net-new here.
@@ -36,8 +36,8 @@ Research grounding (verified against actual package internals):
   user-facing **`proxy: basic|stealth|enhanced|auto`** tier knob that auto-escalates and reports
   what actually ran; a stateful `POST /browser` → `execute` → `DELETE` session lifecycle with a
   single-writer profile lock returning **409**; strict (extra-forbidden) schemas; SDK ergonomics.
-  Browser4 independently backported a press/fill/mouseWheel/batch primitive — convergent evidence
-  that batched action execution is right, not a Firecrawl-only opinion.
+  The prior internal system independently converged on a press/fill/mouseWheel/batch primitive —
+  convergent evidence that batched action execution is right, not a Firecrawl-only opinion.
 - **browser-use** — migrated off Playwright onto raw CDP, but its **pre-migration** code solves
   our P1 ref→locator problem almost exactly (`git show <pre-migration-sha>^:<path>`). Concretely
   transferable: (a) a cascading match-level fallback (exact-hash → stable-hash → xpath →
@@ -172,10 +172,10 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
 
 - **`identity.py`** — `IdentityKey(tenant, domain, name)` frozen/hashable + `.slug()` for
   filesystem paths; `ProfileKind` enum (`DEFAULT/PROTOTYPE/GROUP/TEMPORARY/PERMANENT`) — structural
-  port of Browser4's `ProfileId`.
+  port of the prior system's profile-identity concept.
 - **`proxy.py`** — `ProxyEndpoint(scheme, host, port, username, password, vendor, sticky_key)`;
-  `sticky_key` defaults to owning `IdentityKey` — explicit form of Browser4's
-  `activeProxyEntries.computeIfAbsent` pinning.
+  `sticky_key` defaults to owning `IdentityKey` — explicit form of the same sticky-proxy-pinning
+  pattern.
 - **`lease.py`** — `LeaseId`, `ContextState` enum (`IDLE/ACTIVE/RETIRED/RETIRING`),
   `Lease(lease_id, identity, owner, acquired_at, ttl_seconds, context_ref)`,
   `ContextRef(context_id, identity, state, pid, node_id)` — driver-agnostic, never holds a
@@ -185,12 +185,12 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
   carries the epoch it was born in. See `errors.StaleRefError` and the ref-cache cascade for how
   epoch mismatch hard-fails rather than degrading.
 - **`storage_state.py`** — mirrors Playwright's native `storage_state()` JSON shape
-  (`cookies`, `origins[].localStorage`) field-for-field. **Fix over Browser4**: its
-  `saveStorageState()` only captured the current origin; Patchright's native
+  (`cookies`, `origins[].localStorage`) field-for-field. **Fix over the prior system**: its
+  equivalent only captured the current origin; Patchright's native
   `context.storage_state()` captures all origins — the vault uses it directly.
 - **`actions.py`** — the single interaction primitive (adapted from Firecrawl's `actionSchema`
-  discriminated union, convergent with Browser4's batch backport). A closed set of tagged,
-  driver-agnostic dataclasses:
+  discriminated union, convergent with the prior internal system's own batch primitive). A closed
+  set of tagged, driver-agnostic dataclasses:
   - Navigation/read: `NavigateAction(url, timeout_ms)`, `GoBackAction()`, `SnapshotAction(viewport_only=False, max_nodes=None, roles=None)`, `ScreenshotAction(full_page=False, ...)`, `WaitAction(ms=None, ref=None)`.
   - **`ExtractAction(format: Literal["markdown","text","html"], main_content=True)`** *(review)* — the scrape output. `markdown`/`text` route through `baas.extraction` (trafilatura); `html` returns `page.content()` raw. This is what a crawler actually harvests.
   - Interaction (P1): `ClickAction(ref, all=False)`, `FillAction(ref, text)`, `SelectOptionAction(ref, values)` *(review)*, `HoverAction(ref)` *(review)*, `PressAction(key)`, `ScrollAction(direction, ref=None)`.
@@ -212,8 +212,8 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
   - Downloads: `context.expect_download` captured, streamed to the tenant-scoped artifact store
     (P2), surfaced as `ActionResult.downloads: list[ArtifactRef]`. A crawler fetching PDFs/CSVs is
     a primary use case, not an edge case.
-- **`driver.py`** — the seam, narrowed to batch execution (mirrors Browser4's own batched driver
-  path rather than one method per verb):
+- **`driver.py`** — the seam, narrowed to batch execution (mirrors the prior internal system's own
+  batched driver path rather than one method per verb):
   ```python
   @runtime_checkable
   class BrowserDriver(Protocol):
@@ -249,8 +249,8 @@ Plain `dataclasses`/`Enum`/`Protocol` — no Pydantic (hot path, trusted interna
 Firecrawl's `apps/api` is a mature example of exactly our shape (one API in front of pluggable
 engines). All adaptations are translated through `baas.spi` — **`gateway/schemas.py` is a Pydantic
 mirror of `spi` types for HTTP-boundary validation only; it never defines a shape `spi` doesn't
-own.** Same discipline Browser4 follows (`browser4-rest` depends on `browser4-skeleton`, never the
-reverse).
+own.** Same one-way dependency discipline the prior internal system followed between its own API
+and core layers.
 
 - **Session lifecycle, not stateless actions-per-scrape.** `POST /v1/sessions` (open) →
   `POST /v1/sessions/{id}/execute` (batched `Action` list) → `DELETE /v1/sessions/{id}` (release to
@@ -431,9 +431,9 @@ reach `169.254.169.254` and RFC1918 from inside the VPC. `baas.egress` enforces 
 ## Live View — human-in-the-loop browser streaming
 
 A frontend needs to show the live tab and let an operator interact — demoing, manually clearing a
-login/CAPTCHA the P3 solver can't, or watching a crawl. Neither Browser4 nor any dep covers this;
-it doesn't touch stealth, so it's legitimate new engineering. Standard technique (Browserbase/
-steel-browser-style) is CDP screencast.
+login/CAPTCHA the P3 solver can't, or watching a crawl. Nothing in the prior internal system or any
+dependency covers this; it doesn't touch stealth, so it's legitimate new engineering. Standard
+technique (Browserbase/steel-browser-style) is CDP screencast.
 
 - **Mechanism**: CDP `Page.startScreencast`/`screencastFrame`(+ack) outbound;
   `Input.dispatchMouseEvent`/`dispatchKeyEvent` inbound — via `context.new_cdp_session(page)`.
@@ -554,8 +554,9 @@ green → `docs/capacity-planning.md` exists.
 `baas/driver/live_view.py`, `baas/gateway/routes/live_view.py`, `baas/observability/*`.
 
 - `registry.py`: in-memory `dict[IdentityKey, ContextRef]` + `dict[LeaseId, Lease]` guarded by a
-  **per-`IdentityKey` `asyncio.Lock`** (port of Browser4 `computeIfAbsent`). Invariant enforced
-  here first: **≤1 ACTIVE per IdentityKey** (P2 re-implements as Lua).
+  **per-`IdentityKey` `asyncio.Lock`** (port of a get-or-create-under-lock pattern from the prior
+  internal system). Invariant enforced here first: **≤1 ACTIVE per IdentityKey** (P2 re-implements
+  as Lua).
 - `reaper.py`: idle-timeout scan; vault (stubbed until P2) before destroy; release → IDLE; only
   reaper destroys. **+ memory-pressure LRU eviction + per-process ceiling** (see §Memory-pressure).
 - **Ref→locator hardening**:
@@ -596,7 +597,7 @@ green → `docs/capacity-planning.md` exists.
   when `open()` targets a **fresh** profile dir (new node, or reaper-recreated), never onto an
   already-warm dir. **+ checkpoint on release-to-IDLE** *(review)* to bound node-loss staleness.
 - `proxy_pinning.py`: `ProxyPinner.get_or_assign(identity)` backed by `HSETNX proxy:{identity}` —
-  assign-once-keep-for-life across restarts (Browser4 `ProxyPoolManager.getProxy`).
+  assign-once-keep-for-life across restarts, same pattern as the prior internal system's proxy pool.
 - **Cross-tenant enforcement**: `profile_store.py` path-builder rejects any `IdentityKey` whose
   resolved path escapes the tenant root (`../` in domain/name) — `test_profile_store_rejects_path_traversal`.
 - Redis Lua (`acquire_lease.lua`, `release_lease.lua`, `bind_active_context.lua`,
@@ -615,10 +616,10 @@ green → `docs/capacity-planning.md` exists.
 
 **Files**: `baas/driver/challenge/{detector.py, turnstile.py, interstitial.py}`.
 
-- `detector.py`: structural port of Browser4 `HtmlIntegrity` enum (`ROBOT_CHECK`, `WRONG_COUNTRY`,
-  `FORBIDDEN`, ...) — cheap DOM/status heuristics.
-- Turnstile/interstitial **solving** is new (Browser4 only classifies+retires). Study Scrapling for
-  technique; **verify license/importability first** — dedicated spike at P3 start.
+- `detector.py`: structural port of a challenge-classification enum (`ROBOT_CHECK`, `WRONG_COUNTRY`,
+  `FORBIDDEN`, ...) from the prior internal system — cheap DOM/status heuristics.
+- Turnstile/interstitial **solving** is new (the prior system only classifies+retires). Study
+  Scrapling for technique; **verify license/importability first** — dedicated spike at P3 start.
 - On `ChallengeDetected`, driver raises the typed error; P4's `success_tracker` decides burn/rotate.
   P3 stops at detect + one in-driver solve; on failure the session goes "needs human" and the
   interactive Live View becomes the operator fallback — not an immediate identity burn.
@@ -627,18 +628,19 @@ green → `docs/capacity-planning.md` exists.
 
 **Files**: `baas/control/{success_tracker.py, rate_governor.py, tier_router.py, proxy_vendor.py}`.
 
-- `success_tracker.py` — most portable Browser4 pattern (`AbstractPrivacyContext`): per-identity
-  `(tasks, successes, warnings)` in Redis hashes. Defaults:
+- `success_tracker.py` — the most portable pattern from the prior internal system's privacy-context
+  model: per-identity `(tasks, successes, warnings)` in Redis hashes. Defaults:
   `is_high_failure_rate = tasks > 100 and (1 - successes/tasks) > 0.6`;
   `mark_warning/mark_leaked/mark_success`; retire at `warnings >= 8` (`PRIVACY_MAX_WARNINGS`) →
   release pinned proxy, clear for reassignment with a **new** pin next use — never a mid-life swap.
 - `rate_governor.py` — token-bucket per `(tenant, domain)` backing the gateway's real
-  `X-RateLimit-*`/`Retry-After` headers. New (Browser4 has no multi-tenant governance). Also backs
-  `wait_for_lease`/`wait_for_capacity` bounded queues (per-tenant caps).
+  `X-RateLimit-*`/`Retry-After` headers. New (the prior internal system has no multi-tenant
+  governance). Also backs `wait_for_lease`/`wait_for_capacity` bounded queues (per-tenant caps).
 - `tier_router.py` — new, API-shaped (Firecrawl `basic|stealth|enhanced|auto`): `"auto"` =
   retry-with-escalation — start cheap `httpx` (egress-guarded), on failure signal re-run on full
   Patchright+residential, record `tier_used`. Where §Capacity economics become operational.
-- `proxy_vendor.py` — pluggable `ProxyVendorLoader` per vendor (Browser4 `ProxyLoader` family).
+- `proxy_vendor.py` — pluggable `ProxyVendorLoader` per vendor, generalizing the prior internal
+  system's per-vendor proxy loader family.
 
 ### P5 — consumer SDKs + MCP server (the agent-tool surface)
 

@@ -8,8 +8,8 @@ token-budget filtering (`roles`/`max_nodes`/`viewport_only`), and the
 view-only live-view screencast (`LiveViewCapable`, at the bottom of this
 class). This pass adds multi-tab: one `_Context` per `ContextRef` now owns a
 `dict[page_id, _Page]` (was a single implicit page) -- see the multi-tab plan
-for how this mirrors Browser4's `BrowserTab`/`PulsarWebDriver`/
-`AbstractBrowser.mutableDrivers` shape.
+for how this mirrors a prior internal system's tab/driver-pool/multi-driver
+container shape.
 """
 
 from __future__ import annotations
@@ -115,8 +115,8 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
 }
 
 DEFAULT_MAX_TABS_PER_SESSION = 10
-"""Per-session tab cap (`_Context.max_tabs`). Browser4's equivalent
-(`LoadingWebDriverPool.capacity`) hard-ceilings at 50, but that governs a
+"""Per-session tab cap (`_Context.max_tabs`). A prior internal system's
+equivalent driver-pool capacity hard-ceilings much higher, but that governs a
 *shared driver pool* spread across many crawls; one baas-crawlpilot session
 is already a dedicated Chrome context per tenant identity, a heavier unit, so
 a smaller default is the right translation, not a straight copy of the
@@ -141,8 +141,9 @@ class _Page:
 @dataclass
 class _Context:
     """One `ContextRef`'s live state -- the per-context wrapper `_Live` used
-    to be (a context WAS a page, 1:1). Mirrors Browser4's `AbstractBrowser`:
-    `pages` is `mutableDrivers`, `active_page_id` is `frontDriver`."""
+    to be (a context WAS a page, 1:1). Mirrors a prior internal system's
+    multi-driver container: `pages` is its driver dict, `active_page_id` is
+    its front-driver pointer."""
 
     context: BrowserContext
     pages: dict[str, _Page]
@@ -157,8 +158,8 @@ class _Context:
     `CdpEndpointCapable` at the bottom of this class."""
     page_changed: bool = False
     """Set when `_on_new_page` auto-focuses a new tab (see multi-tab plan's
-    "New-tab focus" decision: real-browser semantics, matching Browser4's
-    unconditional `onWindowOpen` -> `newDriver` auto-follow). Read once per
+    "New-tab focus" decision: real-browser semantics, matching a prior
+    internal system's unconditional new-window auto-follow). Read once per
     `execute()` call and reset, same lifecycle as before."""
     expecting_explicit_tab: bool = False
     """Set around `_create_tab`'s own `context.new_page()` call.
@@ -383,8 +384,8 @@ class PatchrightDriver:
             new_page_id = str(uuid.uuid4())
             cctx.pages[new_page_id] = _Page(page=new_page)
             # Auto-focus, matching real-browser semantics for a target=_blank
-            # click -- same as Browser4's unconditional `onWindowOpen` ->
-            # `newDriver` auto-follow (confirmed with user, see multi-tab plan).
+            # click -- same as a prior internal system's unconditional
+            # new-window auto-follow (confirmed with user, see multi-tab plan).
             cctx.active_page_id = new_page_id
             cctx.page_changed = True
             _wire_page(new_page_id, new_page)

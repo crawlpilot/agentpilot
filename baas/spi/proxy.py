@@ -16,4 +16,5 @@ class ProxyEndpoint:
     vendor: str | None = None
     sticky_key: Hashable | None = None
     """Defaults to the owning IdentityKey at assignment time (explicit form of
-    Browser4's `activeProxyEntries.computeIfAbsent` pinning)."""
+    the same get-or-create sticky-proxy-pinning pattern used by a prior
+    internal system)."""

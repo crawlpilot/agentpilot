@@ -254,10 +254,10 @@ def _collect_names(node) -> set[str]:
 async def test_export_restore_round_trips_cookies_and_multi_origin_localstorage(
     driver: PatchrightDriver, open_ctx: ContextRef
 ) -> None:
-    """The exact bug fixed vs. Browser4: `saveStorageState()` there only ever
-    captured the single origin loaded at call time. Assert on 2+ origins to
-    prove the native `context.storage_state()` mirror actually captures what
-    Browser4 couldn't."""
+    """The exact bug fixed vs. a prior internal system: its storage-state
+    capture there only ever captured the single origin loaded at call time.
+    Assert on 2+ origins to prove the native `context.storage_state()`
+    mirror actually captures what that system couldn't."""
 
     server_a = HTTPServer(host="127.0.0.1", port=0)
     server_b = HTTPServer(host="127.0.0.1", port=0)
