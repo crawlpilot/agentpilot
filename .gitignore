@@ -4,5 +4,5 @@
 # Local secrets (BAAS_DATABASE_URL, BAAS_ADMIN_TOKEN, etc.) -- see .env.example
 .env
 .localdata/
-*/__pycache__/*
-baas/gateway/routes/__pycache__/gateway_proxy.cpython-312.pyc
+__pycache__/
+*.py[cod]
