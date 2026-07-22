@@ -1,0 +1,38 @@
+services:
+  baas:
+    build: .
+    # Google ships official Chrome (`channel="chrome"`) for linux/amd64 only --
+    # `patchright install chrome` hard-fails on linux/arm64 ("not supported").
+    # The fleet targets amd64 cloud nodes anyway (locked-in decision: real
+    # Chrome, not Chromium, for sandbox fidelity), so this is pinned rather
+    # than silently falling back to Chromium on arm64 dev machines (e.g.
+    # Apple Silicon) -- expect Docker Desktop to emulate via Rosetta/QEMU
+    # locally, which is slower but architecturally correct.
+    platform: linux/amd64
+    ports:
+      - "8000:8000"
+    cap_add:
+      - SYS_ADMIN # real Chrome sandbox (not --no-sandbox) -- untrusted third-party
+      # pages on a shared multi-tenant node need process-level isolation.
+    shm_size: "2gb"
+    volumes:
+      - profiles:/var/lib/baas/profiles
+    environment:
+      BAAS_PROFILES_DIR: /var/lib/baas/profiles
+    depends_on:
+      - detection-page
+
+  detection-page:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim-bookworm
+        WORKDIR /app
+        COPY tests/fixtures/detection_page /app
+        EXPOSE 8090
+        CMD ["python", "serve.py"]
+    ports:
+      - "8090:8090"
+
+volumes:
+  profiles:
