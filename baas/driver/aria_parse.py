@@ -1,5 +1,7 @@
 """Parses Playwright/Patchright's `aria_snapshot(mode="ai")` text format into
-`spi.snapshot` types.
+`spi.snapshot` types, plus the P1 "snapshot token budget" filters
+(`plan.md`: "aria_snapshot on a real commerce page is enormous; agents choke
+without it").
 
 The format is indented (2 spaces/level) lines like:
 
@@ -10,13 +12,14 @@ The format is indented (2 spaces/level) lines like:
 
 Lines are `- role "name"? [attr]* :?`. Metadata lines (e.g. `/url:`) carry no
 `ref=` attribute; they're kept as informational tree nodes with `ref=""` so
-depth/nesting stays correct, but the ref->locator cascade (P1) only ever
-resolves nodes with a non-empty ref.
+depth/nesting stays correct, but the ref->locator cascade (P1's
+`driver/ref_cache.py`) only ever resolves nodes with a non-empty ref.
 """
 
 from __future__ import annotations
 
 import re
+from collections import deque
 
 from baas.spi.snapshot import SnapshotNode
 
@@ -64,3 +67,96 @@ def parse_aria_snapshot(text: str, epoch: int) -> SnapshotNode:
         stack.append((depth, node))
 
     return root
+
+
+def _copy_shallow(node: SnapshotNode) -> SnapshotNode:
+    return SnapshotNode(epoch=node.epoch, ref=node.ref, role=node.role, name=node.name)
+
+
+def filter_snapshot(
+    root: SnapshotNode, *, roles: tuple[str, ...] | None, max_nodes: int | None
+) -> SnapshotNode:
+    """Pure, tree-shape-only filtering -- no page access needed, unlike
+    `viewport_only` (see `patchright_driver.py`), so it's unit-testable
+    against static trees.
+
+    `roles`: prunes any subtree whose root role isn't in `roles`, *unless* it
+    has a matching descendant -- structural nodes (no `ref`, e.g. the
+    synthetic `role="root"`) are always kept as scaffolding around whatever
+    they contain, since dropping them would silently reparent unrelated
+    matches. `max_nodes`: breadth-first budget so a truncated tree still
+    reads as a coherent (if incomplete) page rather than one deep sliver.
+    """
+
+    def keep(node: SnapshotNode) -> SnapshotNode | None:
+        children = [c for c in (keep(child) for child in node.children) if c is not None]
+        is_structural = not node.ref
+        matches = roles is None or node.role in roles or is_structural
+        if not matches and not children:
+            return None
+        copy = _copy_shallow(node)
+        copy.children = children
+        return copy
+
+    filtered = keep(root) or _copy_shallow(root)
+    if max_nodes is not None:
+        filtered = _truncate_snapshot(filtered, max_nodes)
+    return filtered
+
+
+def _truncate_snapshot(root: SnapshotNode, max_nodes: int) -> SnapshotNode:
+    """Breadth-first: keeps the root, then fills the node budget level by
+    level (rather than depth-first, which would keep one whole deep branch
+    and drop entire unrelated sections)."""
+
+    budget = max(max_nodes - 1, 0)
+    new_root = _copy_shallow(root)
+    queue: deque[tuple[SnapshotNode, SnapshotNode]] = deque([(root, new_root)])
+    while queue and budget > 0:
+        orig, copy = queue.popleft()
+        for child in orig.children:
+            if budget <= 0:
+                break
+            child_copy = _copy_shallow(child)
+            copy.children.append(child_copy)
+            budget -= 1
+            queue.append((child, child_copy))
+    return new_root
+
+
+def collect_leaf_refs(root: SnapshotNode) -> list[str]:
+    """Refs belonging to nodes with no children -- the candidates
+    `viewport_only` resolves bounding boxes for. Container nodes are skipped
+    since their own box roughly spans their children's anyway, halving the
+    number of `bounding_box()` round trips without changing which content is
+    judged visible."""
+
+    refs: list[str] = []
+
+    def walk(node: SnapshotNode) -> None:
+        if not node.children and node.ref:
+            refs.append(node.ref)
+        for child in node.children:
+            walk(child)
+
+    walk(root)
+    return refs
+
+
+def prune_to_refs(root: SnapshotNode, visible: set[str]) -> SnapshotNode:
+    """Keeps only nodes whose ref is in `visible`, plus structural
+    (ref-less) ancestors of any kept node -- the counterpart filter to
+    `collect_leaf_refs`, applied after `viewport_only` bounding-box checks."""
+
+    def keep(node: SnapshotNode) -> SnapshotNode | None:
+        children = [c for c in (keep(child) for child in node.children) if c is not None]
+        if node.children:
+            if not children:
+                return None  # container whose children were all pruned
+        elif node.ref and node.ref not in visible:
+            return None  # leaf ref judged off-screen
+        copy = _copy_shallow(node)
+        copy.children = children
+        return copy
+
+    return keep(root) or _copy_shallow(root)

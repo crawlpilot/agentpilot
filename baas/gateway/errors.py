@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from baas.observability.metrics import error_responses_total
 from baas.spi import errors as spi_errors
 
 log = structlog.get_logger(__name__)
@@ -30,6 +31,7 @@ class ErrorCode(StrEnum):
     CHALLENGE_UNRESOLVED = "CHALLENGE_UNRESOLVED"
     CONTEXT_CRASHED = "CONTEXT_CRASHED"
     EGRESS_BLOCKED = "EGRESS_BLOCKED"
+    STALE_REF = "STALE_REF"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -41,6 +43,10 @@ _DRIVER_ERROR_MAPPING: dict[type[Exception], tuple[int, ErrorCode]] = {
     spi_errors.ChallengeDetected: (422, ErrorCode.CHALLENGE_UNRESOLVED),
     spi_errors.ContextCrashed: (500, ErrorCode.CONTEXT_CRASHED),
     spi_errors.EgressBlocked: (403, ErrorCode.EGRESS_BLOCKED),
+    # A ref from a superseded epoch or one that no longer resolves is a
+    # client-side "you're acting on a stale snapshot" error (re-snapshot and
+    # retry), not a server fault -- 409, same family as SESSION_LEASE_CONFLICT.
+    spi_errors.StaleRefError: (409, ErrorCode.STALE_REF),
 }
 
 _RETRY_AFTER_CODES = (ErrorCode.SESSION_LEASE_CONFLICT, ErrorCode.CAPACITY_EXHAUSTED)
@@ -54,6 +60,7 @@ def _error_response(
     retry_after: int | None = None,
     details: object | None = None,
 ) -> JSONResponse:
+    error_responses_total.labels(code=code.value).inc()
     headers = {"Retry-After": str(retry_after)} if retry_after is not None else None
     return JSONResponse(
         status_code=status_code,

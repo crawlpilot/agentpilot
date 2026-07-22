@@ -18,10 +18,12 @@ from baas.driver.patchright_driver import PatchrightDriver
 from baas.spi.actions import (
     ClickAction,
     ExtractAction,
+    FillAction,
     NavigateAction,
     SnapshotAction,
 )
 from baas.spi.egress import EgressPolicy
+from baas.spi.errors import StaleRefError
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef
 
@@ -35,7 +37,10 @@ than boilerplate noise.</p>
 <p>A second paragraph continues with different wording so extraction has
 real multi-paragraph content to check against.</p>
 </article>
-<button id="probe">Click me</button>
+<button id="probe" onclick="document.getElementById('result').textContent='clicked'">
+Click me</button>
+<input type="text" id="search-box" placeholder="Search" />
+<div id="result"></div>
 <footer>Copyright 2026</footer>
 </body></html>"""
 
@@ -109,18 +114,115 @@ async def test_extract_markdown_returns_clean_main_content(
     assert "Copyright" not in text
 
 
-async def test_interaction_actions_are_not_yet_dispatchable(
+async def test_click_dispatches_via_ref_cache(
     driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
 ) -> None:
-    """Click/Fill/... are defined in `spi.actions` for shape completeness but
-    need P1's `ref_cache` to resolve a `ref` -- P0's driver must reject them
-    loudly (`NotImplementedError`), never silently no-op."""
+    """P1's real interaction dispatch: snapshot a ref, then click it, and
+    confirm the click actually landed on the live page (not just that no
+    exception was raised)."""
+
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    snap = await driver.execute(
+        open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
+    )
+    button = _find_role(snap.snapshots[0].root, "button")
+    assert button is not None and button.ref
+
+    await driver.execute(open_ctx, [ClickAction(ref=button.ref)])
+
+    result = await driver.execute(open_ctx, [ExtractAction(format="html")])
+    assert "clicked" in result.extracts[0]
+
+
+async def test_fill_dispatches_via_ref_cache(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    snap = await driver.execute(
+        open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
+    )
+    textbox = _find_role(snap.snapshots[0].root, "textbox")
+    assert textbox is not None and textbox.ref
+
+    await driver.execute(open_ctx, [FillAction(ref=textbox.ref, text="hello")])
+
+    result = await driver.execute(open_ctx, [ExtractAction(format="html")])
+    assert 'value="hello"' in result.extracts[0]
+
+
+async def test_click_with_unknown_ref_raises_stale_ref_error(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    """A ref that was never recorded by a snapshot (typo, or a snapshot from
+    a different context) must fail loudly and typed, never silently no-op or
+    raise a raw Playwright error."""
 
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
 
-    with pytest.raises(NotImplementedError):
-        await driver.execute(open_ctx, [ClickAction(ref="e1")])
+    with pytest.raises(StaleRefError) as exc_info:
+        await driver.execute(open_ctx, [ClickAction(ref="e999")])
+    assert exc_info.value.epoch_superseded is False
+
+
+async def test_ref_from_superseded_epoch_raises_stale_ref_error(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    """A ref minted by an earlier snapshot must be rejected once a newer
+    snapshot has superseded it -- no cascade, no lookalike click on stale DOM."""
+
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    snap1 = await driver.execute(
+        open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
+    )
+    old_button = _find_role(snap1.snapshots[0].root, "button")
+    assert old_button is not None
+
+    await driver.execute(open_ctx, [SnapshotAction()])  # bumps the epoch
+
+    with pytest.raises(StaleRefError) as exc_info:
+        await driver.execute(open_ctx, [ClickAction(ref=old_button.ref)])
+    assert exc_info.value.epoch_superseded is True
+
+
+async def test_snapshot_viewport_only_drops_offscreen_elements(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    html = """<html><body>
+    <button id="onscreen">Visible</button>
+    <button id="offscreen" style="position:absolute; top:9000px;">Hidden</button>
+    </body></html>"""
+    httpserver.expect_request("/").respond_with_data(html, content_type="text/html")
+
+    result = await driver.execute(
+        open_ctx,
+        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(viewport_only=True)],
+    )
+
+    names = _collect_names(result.snapshots[0].root)
+    assert "Visible" in names
+    assert "Hidden" not in names
+
+
+async def test_snapshot_roles_filter_drops_non_matching_leaves(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+
+    result = await driver.execute(
+        open_ctx,
+        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(roles=("button",))],
+    )
+
+    assert _find_role(result.snapshots[0].root, "button") is not None
+    assert _find_role(result.snapshots[0].root, "link") is None
+
+
+def _collect_names(node) -> set[str]:
+    names = {node.name} if node.name else set()
+    for child in node.children:
+        names |= _collect_names(child)
+    return names
 
 
 async def test_export_restore_round_trips_cookies_and_multi_origin_localstorage(

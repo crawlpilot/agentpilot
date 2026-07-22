@@ -8,24 +8,31 @@ batching a whole `list[Action]` into one `ActionResult`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, assert_never, cast
 
 import structlog
-from patchright.async_api import BrowserContext, CDPSession, Page, ProxySettings
+from patchright.async_api import BrowserContext, CDPSession, Locator, Page, ProxySettings
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from baas.driver.aria_parse import parse_aria_snapshot
+from baas.driver.aria_parse import (
+    collect_leaf_refs,
+    filter_snapshot,
+    parse_aria_snapshot,
+    prune_to_refs,
+)
 from baas.driver.live_view import (
     SCREENCAST_START_PARAMS,
     parse_screencast_frame,
     to_cdp_input_params,
 )
 from baas.driver.process_launcher import ProcessLauncher
+from baas.driver.ref_cache import RefCache
 from baas.egress.policy import apply_baseline
 from baas.extraction.extractor import extract
 from baas.spi.actions import (
@@ -38,24 +45,33 @@ from baas.spi.actions import (
     GoBackAction,
     HoverAction,
     NavigateAction,
+    PressAction,
     ScreenshotAction,
+    ScrollAction,
     SelectOptionAction,
     SnapshotAction,
     WaitAction,
 )
 from baas.spi.egress import EgressPolicy
-from baas.spi.errors import ContextCrashed, NavigationTimeout
+from baas.spi.errors import ContextCrashed, NavigationTimeout, StaleRefError
 from baas.spi.health import HealthStatus
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef, ContextState
 from baas.spi.proxy import ProxyEndpoint
-from baas.spi.snapshot import AXSnapshot
+from baas.spi.snapshot import AXSnapshot, SnapshotNode
 from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 from baas.spi.streaming import InputEvent, LiveViewFrame
 
 log = structlog.get_logger(__name__)
 
 _REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
+
+_SCROLL_DELTAS: dict[str, tuple[float, float]] = {
+    "down": (0, 600),
+    "up": (0, -600),
+    "right": (600, 0),
+    "left": (-600, 0),
+}
 
 
 @dataclass
@@ -69,6 +85,7 @@ class _Live:
     page_changed: bool = False
     cdp_session: CDPSession | None = None
     frame_queue: asyncio.Queue[LiveViewFrame] | None = None
+    ref_cache: RefCache = field(default_factory=RefCache)
 
 
 def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
@@ -99,6 +116,12 @@ def _to_playwright_storage_state(state: StorageState) -> PlaywrightStorageState:
             ],
         },
     )
+
+
+def _record_ref_metadata(cache: RefCache, node: SnapshotNode) -> None:
+    cache.record(node.ref, role=node.role, name=node.name)
+    for child in node.children:
+        _record_ref_metadata(cache, child)
 
 
 def _from_playwright_storage_state(raw: Mapping[str, Any]) -> StorageState:
@@ -208,7 +231,7 @@ class PatchrightDriver:
         stale = False
         for action in actions:
             consumes_ref = isinstance(action, _REF_CONSUMING) or (
-                isinstance(action, WaitAction) and action.ref is not None
+                isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
             )
             if stale and consumes_ref:
                 result.sequence_aborted = True
@@ -231,6 +254,11 @@ class PatchrightDriver:
             live.epoch += 1
             text = await live.page.aria_snapshot(mode="ai")
             root = parse_aria_snapshot(text, epoch=live.epoch)
+            live.ref_cache.reset(live.epoch)
+            _record_ref_metadata(live.ref_cache, root)
+            if action.viewport_only:
+                root = await self._apply_viewport_filter(live, root)
+            root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
             result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
         elif isinstance(action, ExtractAction):
             html = await live.page.content()
@@ -241,14 +269,91 @@ class PatchrightDriver:
             result.screenshots.append(await live.page.screenshot(full_page=action.full_page))
         elif isinstance(action, WaitAction):
             if action.ref is not None:
-                raise NotImplementedError("WaitAction(ref=...) needs P1's ref_cache")
-            await asyncio.sleep((action.ms or 0) / 1000)
+                await self._resolve_ref(live, action.ref)
+            else:
+                await asyncio.sleep((action.ms or 0) / 1000)
         elif isinstance(action, ExecuteJsAction):
             result.js_returns.append(await live.page.evaluate(action.script))
+        elif isinstance(action, ClickAction):
+            locator = await self._resolve_ref(live, action.ref)
+            if action.all:
+                for i in range(await locator.count()):
+                    await locator.nth(i).click()
+            else:
+                await locator.click()
+        elif isinstance(action, FillAction):
+            locator = await self._resolve_ref(live, action.ref)
+            await locator.fill(action.text)
+        elif isinstance(action, SelectOptionAction):
+            locator = await self._resolve_ref(live, action.ref)
+            await locator.select_option(action.values)
+        elif isinstance(action, HoverAction):
+            locator = await self._resolve_ref(live, action.ref)
+            await locator.hover()
+        elif isinstance(action, PressAction):
+            await live.page.keyboard.press(action.key)
+        elif isinstance(action, ScrollAction):
+            if action.ref is not None:
+                locator = await self._resolve_ref(live, action.ref)
+                await locator.scroll_into_view_if_needed()
+            else:
+                dx, dy = _SCROLL_DELTAS[action.direction]
+                await live.page.mouse.wheel(dx, dy)
         else:
-            raise NotImplementedError(
-                f"{type(action).__name__} needs P1's ref_cache to resolve refs"
+            assert_never(action)
+
+    async def _resolve_ref(self, live: _Live, ref: str) -> Locator:
+        """Resolves via `RefCache`, then enforces visibility: a ref that
+        resolves to a zero-size box (`display:none`, collapsed, off-canvas)
+        is treated the same as a ref that failed to resolve at all -- both
+        mean "don't dispatch a click/fill nobody would see land"."""
+
+        locator = await live.ref_cache.resolve(live.page, ref)
+        box = await locator.bounding_box()
+        if box is None or box["width"] <= 0 or box["height"] <= 0:
+            raise StaleRefError(ref, epoch_superseded=False)
+        return locator
+
+    async def _apply_viewport_filter(self, live: _Live, root: SnapshotNode) -> SnapshotNode:
+        """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`
+        (Page domain -- never Runtime, same constraint as live-view) rather
+        than Playwright's own `viewport_size()`, since `open()` launches with
+        `no_viewport=True` and would report `None` otherwise. Leaf-ref
+        bounding boxes are resolved concurrently (`asyncio.gather`) so CDP
+        pipelines the round trips instead of paying N sequential ones --
+        the whole reason `viewport_only` exists is to shrink an otherwise
+        enormous snapshot, so serializing this would defeat the point."""
+
+        leaf_refs = collect_leaf_refs(root)
+        if not leaf_refs:
+            return root
+        cdp = live.cdp_session
+        owns_session = cdp is None
+        if cdp is None:
+            cdp = await live.context.new_cdp_session(live.page)
+        try:
+            metrics = await cdp.send("Page.getLayoutMetrics")
+            viewport = metrics["cssVisualViewport"]
+            vw, vh = viewport["clientWidth"], viewport["clientHeight"]
+            boxes = await asyncio.gather(
+                *(live.page.locator(f"aria-ref={ref}").bounding_box() for ref in leaf_refs),
+                return_exceptions=True,
             )
+        finally:
+            if owns_session:
+                with contextlib.suppress(Exception):
+                    await cdp.detach()
+
+        visible = {
+            ref
+            for ref, box in zip(leaf_refs, boxes, strict=True)
+            if isinstance(box, dict)
+            and box["x"] + box["width"] > 0
+            and box["x"] < vw
+            and box["y"] + box["height"] > 0
+            and box["y"] < vh
+        }
+        return prune_to_refs(root, visible)
 
     async def export_state(self, ctx: ContextRef) -> StorageState:
         live = self._require_live(ctx)

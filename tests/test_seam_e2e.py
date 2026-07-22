@@ -19,12 +19,11 @@ DETECTION_PAGE_INTERNAL = "http://detection-page:8090/"
 
 
 def _unique_name(label: str) -> str:
-    """P0 has no reaper -- a released (IDLE) session's Chrome process is
-    never actually closed, so its profile dir keeps holding Chrome's
-    SingletonLock indefinitely. Reusing a fixed identity name across repeated
-    test runs against the same long-lived compose stack collides with that
-    leftover lock (`ProcessSingleton ... already in use`); a fresh identity
-    per run sidesteps the documented P0->P1 gap instead of tripping over it.
+    """P1's registry reuses a released (IDLE) identity's still-warm context on
+    reopen, and the reaper eventually destroys genuinely idle ones -- so a
+    fixed name is no longer unsafe. Kept anyway: a fresh identity per run
+    means concurrent/repeated test runs against the same long-lived compose
+    stack never contend for the same `IdentityKey`'s <=1-ACTIVE lock.
     """
 
     return f"{label}-{uuid.uuid4().hex[:8]}"

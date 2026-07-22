@@ -1,8 +1,9 @@
 """Session lifecycle: open -> execute (batched) -> release.
 
 `POST /v1/sessions` (open) -> `POST /v1/sessions/{id}/execute` (batched Action
-list) -> `DELETE /v1/sessions/{id}` (release to IDLE -- P0 has no reaper yet,
-so IDLE sessions aren't destroyed automatically; that lands in P1).
+list, renewing the P1 lease each call) -> `DELETE /v1/sessions/{id}` (release
+to IDLE -- the `session.Reaper` is what actually destroys IDLE contexts now,
+on its own schedule, not this route).
 """
 
 from __future__ import annotations
@@ -37,11 +38,16 @@ from baas.gateway.schemas import (
     WaitActionIn,
 )
 from baas.gateway.wiring import Session, Wiring, get_wiring
+from baas.observability.metrics import (
+    execute_duration_seconds,
+    requests_total,
+    session_open_duration_seconds,
+)
 from baas.spi import actions as spi_actions
 from baas.spi.egress import EgressPolicy
-from baas.spi.errors import LeaseConflict
+from baas.spi.errors import NodeLost
 from baas.spi.identity import IdentityKey
-from baas.spi.lease import ContextState
+from baas.spi.lease import ContextRef
 
 router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
@@ -117,44 +123,30 @@ async def open_session(
     req: SessionOpenRequest, wiring: Wiring = Depends(get_wiring)
 ) -> SessionOpenResponse:
     identity = IdentityKey(tenant=req.tenant, domain=req.domain, name=req.name)
+    owner = f"{req.tenant}:{req.name}"  # P1 has no tenant auth yet; informational until P2
+    requests_total.labels(tenant=req.tenant, route="open_session").inc()
 
-    async with wiring.lock:
-        if identity in wiring.active_identities:
-            raise LeaseConflict(f"identity {identity.slug()!r} already has an active session")
-        wiring.active_identities[identity] = None  # reserve
+    async def _opener() -> ContextRef:
+        profile_dir = wiring.profiles_root / identity.slug()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        return await wiring.driver.open(identity, profile_dir, None, req.headful, EgressPolicy())
 
     started = time.monotonic()
-    try:
-        warm_ctx = wiring.warm_contexts.get(identity)
-        if warm_ctx is not None:
-            # Reuse the still-running Chrome from a prior release instead of
-            # launching a second one onto the same profile dir (see
-            # wiring.py's module docstring for why that crashes).
-            warm_ctx.state = ContextState.ACTIVE
-            ctx = warm_ctx
-        else:
-            profile_dir = wiring.profiles_root / identity.slug()
-            profile_dir.mkdir(parents=True, exist_ok=True)
-            ctx = await wiring.driver.open(
-                identity, profile_dir, None, req.headful, EgressPolicy()
-            )
-    except BaseException:
-        async with wiring.lock:
-            wiring.active_identities.pop(identity, None)
-        raise
+    with session_open_duration_seconds.time():
+        ctx, lease = await wiring.registry.acquire(
+            identity, owner, wiring.lease_ttl_seconds, _opener
+        )
 
     session_id = str(uuid.uuid4())
     wiring.sessions[session_id] = Session(
         session_id=session_id,
         identity=identity,
         ctx=ctx,
+        lease_id=lease.lease_id,
         tier=req.tier,
         headful=req.headful,
         block_popups=req.block_popups,
     )
-    wiring.warm_contexts[identity] = ctx
-    async with wiring.lock:
-        wiring.active_identities[identity] = session_id
 
     return SessionOpenResponse(
         session_id=session_id,
@@ -171,15 +163,22 @@ async def execute_session(
     session_id: str, req: ExecuteRequest, wiring: Wiring = Depends(get_wiring)
 ) -> ActionResultOut:
     session = _get_session(wiring, session_id)
+    requests_total.labels(tenant=session.identity.tenant, route="execute_session").inc()
+    try:
+        await wiring.registry.renew(session.lease_id)
+    except KeyError as exc:
+        raise NodeLost(f"session {session_id!r}'s underlying context was reclaimed") from exc
+
     actions = [_to_spi_action(a) for a in req.actions]
-    result = await wiring.driver.execute(session.ctx, actions)
+    with execute_duration_seconds.time():
+        result = await wiring.driver.execute(session.ctx, actions)
     return _to_action_result_out(result)
 
 
 @router.delete("/{session_id}")
 async def release_session(session_id: str, wiring: Wiring = Depends(get_wiring)) -> dict:
     session = _get_session(wiring, session_id)
-    session.ctx.state = ContextState.IDLE
-    async with wiring.lock:
-        wiring.active_identities.pop(session.identity, None)
+    requests_total.labels(tenant=session.identity.tenant, route="release_session").inc()
+    await wiring.registry.release(session.lease_id)
+    wiring.sessions.pop(session_id, None)
     return {"success": True, "state": "idle"}

@@ -58,14 +58,15 @@ strict = true
 [tool.importlinter]
 root_package = "baas"
 
-# P1/P2 packages (baas.session/identity/placement/control) don't exist yet in
-# P0 -- wrapped in parentheses per import-linter's "optional layer" syntax so
+# baas.identity/placement/control are still P2 packages that don't exist yet
+# -- wrapped in parentheses per import-linter's "optional layer" syntax so
 # these contracts are already correct once those packages land, without
-# breaking `lint-imports` today.
+# breaking `lint-imports` today. baas.session landed in P1, so it's no longer
+# parenthesized.
 [[tool.importlinter.contracts]]
 name = "gateway -> session -> identity -> spi"
 type = "layers"
-layers = ["baas.gateway", "(baas.session)", "(baas.identity)", "baas.spi"]
+layers = ["baas.gateway", "baas.session", "(baas.identity)", "baas.spi"]
 
 [[tool.importlinter.contracts]]
 name = "gateway -> placement -> spi"
@@ -82,15 +83,20 @@ name = "driver -> {extraction, egress} -> spi"
 type = "layers"
 layers = ["baas.driver", "baas.extraction | baas.egress", "baas.spi"]
 
-# "session/identity/control/placement never import driver" (a `forbidden`
-# contract) is deferred until P1 (session/identity) and P2 (control/placement)
-# actually create those packages -- `forbidden` contracts, unlike `layers`,
-# have no optional-module syntax and error hard on a missing module.
+# "identity/control/placement never import driver" is still deferred until
+# those P2 packages exist -- `forbidden` contracts, unlike `layers`, have no
+# optional-module syntax and error hard on a missing module. session.py
+# landed in P1, so its own forbidden-import rule is live now.
 
 [[tool.importlinter.contracts]]
 name = "only the composition root imports the concrete driver"
 type = "forbidden"
-source_modules = ["baas.gateway.routes", "baas.gateway.schemas", "baas.gateway.app"]
+source_modules = [
+    "baas.gateway.routes",
+    "baas.gateway.schemas",
+    "baas.gateway.app",
+    "baas.session",
+]
 forbidden_modules = ["baas.driver"]
 # routes/app reach the driver only *through* baas.gateway.wiring (the
 # composition root) -- that's the intended indirection, so only a *direct*

@@ -1,18 +1,18 @@
-"""Liveness/readiness + a minimal `/metrics` (pool-size gauge only; full
-per-tier latency histograms land in P1's `baas.observability`)."""
+"""Liveness/readiness + `/metrics` -- every metric object lives in
+`baas.observability.metrics`; this route only samples current registry state
+into the pool gauges on scrape (pull-model, not pushed on every mutation,
+since a Prometheus scrape interval is the only consumer)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response
-from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from baas.gateway.wiring import Wiring, get_wiring
+from baas.observability.metrics import contexts_active, contexts_idle
 from baas.spi.lease import ContextState
 
 router = APIRouter(tags=["health"])
-
-_contexts_active = Gauge("baas_contexts_active", "Number of ACTIVE browser contexts")
-_contexts_idle = Gauge("baas_contexts_idle", "Number of IDLE browser contexts")
 
 
 @router.get("/healthz")
@@ -27,8 +27,12 @@ async def readiness(wiring: Wiring = Depends(get_wiring)) -> dict:
 
 @router.get("/metrics")
 async def metrics(wiring: Wiring = Depends(get_wiring)) -> Response:
-    active = sum(1 for s in wiring.sessions.values() if s.ctx.state is ContextState.ACTIVE)
-    idle = sum(1 for s in wiring.sessions.values() if s.ctx.state is ContextState.IDLE)
-    _contexts_active.set(active)
-    _contexts_idle.set(idle)
+    active = idle = 0
+    for _identity, ctx, _lease, _released_at in wiring.registry.snapshot():
+        if ctx.state is ContextState.ACTIVE:
+            active += 1
+        elif ctx.state is ContextState.IDLE:
+            idle += 1
+    contexts_active.set(active)
+    contexts_idle.set(idle)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
