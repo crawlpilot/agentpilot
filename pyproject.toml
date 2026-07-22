@@ -4,18 +4,35 @@ version = "0.1.0"
 description = "Multi-tenant Browser-as-a-Service platform"
 requires-python = ">=3.12"
 dependencies = [
-    "patchright>=1.61.2",
-    "re-cdp-patches>=0.9.1",
-    "trafilatura>=2.1.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "prometheus-client>=0.21",
     "structlog>=24.4",
     "redis>=5.0",
-    "cryptography>=43.0",
     "httpx>=0.27",
     "websockets>=13.0",
+]
+
+[project.optional-dependencies]
+# Chrome-adjacent packages -- only ever imported by baas.driver,
+# baas.extraction, and baas.identity.vault's Fernet encryption. Needed by
+# `BAAS_ROLE=worker` (and `monolith`, run outside Docker) -- never installed
+# in docker/gateway.Dockerfile's image, which is the whole point of the
+# split (a genuinely Chrome-free gateway image).
+driver = [
+    "patchright>=1.61.2",
+    "re-cdp-patches>=0.9.1",
+    "trafilatura>=2.1.0",
+    "cryptography>=43.0",
+]
+# Postgres driver (runtime pool) + Alembic (migrations) for baas.auth
+# .store.PostgresApiKeyStore. Needed by `monolith`/`gateway` (both mount
+# tenant-facing auth-gated routes) -- not `worker`, which never touches
+# wiring.api_keys.
+postgres = [
+    "psycopg[binary,pool]>=3.2",
+    "alembic>=1.13",
 ]
 
 [dependency-groups]

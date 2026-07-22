@@ -23,10 +23,9 @@ from pathlib import Path
 import httpx
 from redis.asyncio import Redis
 
-from baas.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, RedisApiKeyStore
+from baas.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from baas.gateway.role import Role, get_role
 from baas.identity.proxy_pinning import ProxyPinner
-from baas.identity.vault import Vault
 from baas.spi.identity import IdentityKey
 from baas.spi.lease import ContextRef, LeaseId
 from baas.spi.proxy import ProxyEndpoint
@@ -70,14 +69,15 @@ class Wiring:
         redis_url = os.environ.get("BAAS_REDIS_URL")
         self.redis: Redis | None = Redis.from_url(redis_url) if redis_url else None
 
-        # Both roles need the API-key store: `monolith`/`gateway` authenticate
-        # tenant-facing requests against it, and `/v1/api-keys` (mounted on
-        # whichever role serves `/v1/...`) issues/revokes through it. `worker`
-        # constructs it too for uniformity even though it never mounts either
-        # surface -- cheap, and avoids a third conditional branch.
-        self.api_keys: ApiKeyStoreProtocol = (
-            RedisApiKeyStore(self.redis) if self.redis is not None else InMemoryApiKeyStore()
-        )
+        # Placeholder until `_connect_api_keys()` (awaited from `get_wiring()`
+        # below) replaces it for `monolith`/`gateway` when `BAAS_DATABASE_URL`
+        # is set. `worker` never mounts an auth-gated route and never touches
+        # `wiring.api_keys` at all -- leaving this as `InMemoryApiKeyStore`
+        # for it is correct, not merely cheap, now that opening the real
+        # backend is an async network round-trip rather than Redis's lazy
+        # client.
+        self.api_keys: ApiKeyStoreProtocol = InMemoryApiKeyStore()
+        self._database_url = os.environ.get("BAAS_DATABASE_URL")
         self.admin_token = os.environ.get("BAAS_ADMIN_TOKEN")
 
         if self.role == "gateway":
@@ -85,15 +85,32 @@ class Wiring:
         else:
             self._init_worker()
 
+    async def _connect_api_keys(self) -> None:
+        """Only `monolith`/`gateway` mount tenant-facing auth-gated routes, so
+        only they ever get a real (Postgres-backed) store -- `worker` keeps
+        the `InMemoryApiKeyStore()` placeholder from `__init__` forever,
+        since it would never be queried anyway. Split out of `__init__`
+        because `AsyncConnectionPool.open()` must be awaited (unlike Redis's
+        lazy `from_url()`), which can only happen inside a coroutine -- see
+        `get_wiring()`'s docstring for why that's where this gets called."""
+
+        if self.role not in ("monolith", "gateway"):
+            return
+        if self._database_url:
+            self.api_keys = await PostgresApiKeyStore.connect(self._database_url)
+        # else: BAAS_DATABASE_URL unset -> keep the InMemoryApiKeyStore()
+        # placeholder (dev/test convenience only -- keys won't survive a
+        # restart or be visible to any other process).
+
     def _init_gateway(self) -> None:
         # Gateway-role graph excludes baas.driver (plan.md) -- these imports
         # are deferred into this method (not hoisted to module level) purely
         # so a gateway-role process's *call stack* never touches driver code,
         # even though the module-level import above this class still exists
         # (wiring.py is the composition root, exempt from that contract
-        # either way -- see baas/gateway/role.py's docstring on why a truly
-        # driver-free gateway image needs a separate Dockerfile this pass
-        # doesn't build).
+        # either way). `docker/gateway.Dockerfile` is a genuinely driver-free
+        # image (no Chrome/Xvfb/Patchright at all) -- see `baas/gateway/
+        # role.py`'s docstring.
         if self.redis is None:
             raise RuntimeError("BAAS_ROLE=gateway requires BAAS_REDIS_URL")
         self.worker_base_url = os.environ.get("BAAS_WORKER_URL", "http://worker:8000")
@@ -102,6 +119,7 @@ class Wiring:
     def _init_worker(self) -> None:
         from baas.driver.patchright_driver import PatchrightDriver
         from baas.driver.process_launcher import ProcessLauncher
+        from baas.identity.vault import Vault
         from baas.session.reaper import Reaper
         from baas.session.redis_registry import RedisRegistry
         from baas.session.registry import Registry, RegistryProtocol
@@ -145,6 +163,8 @@ class Wiring:
             for session in list(self.sessions.values()):
                 await self.driver.close(session.ctx)
             await self.launcher.close()
+        if isinstance(self.api_keys, PostgresApiKeyStore):
+            await self.api_keys.close()
         if self.redis is not None:
             await self.redis.aclose()
 
@@ -160,11 +180,25 @@ async def get_wiring() -> Wiring:
     plain-`def` version of this crashed every request with `RuntimeError: no
     running event loop` the first time it constructed a `Wiring` off-thread.
     `async def` dependencies run directly on the event loop instead, so
-    `create_task` has one."""
+    `create_task` has one. `_connect_api_keys()` is awaited here for the
+    same reason: opening a Postgres pool needs a real `await`, which neither
+    a plain-`def` `Depends()` callable nor `Wiring.__init__` itself (kept
+    synchronous) can do.
+    """
 
     global _wiring
     if _wiring is None:
-        _wiring = Wiring()
+        wiring = Wiring()
+        try:
+            await wiring._connect_api_keys()
+        except BaseException:
+            # Don't leave an orphaned reaper task / launcher / pool behind
+            # from this failed attempt -- clean up so the *next* request
+            # gets a genuinely fresh Wiring() rather than leaking a new one
+            # on every request while Postgres is unreachable.
+            await wiring.close()
+            raise
+        _wiring = wiring
     return _wiring
 
 

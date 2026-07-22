@@ -1,27 +1,28 @@
-"""API-key storage for tenant-facing auth: Redis-backed (persists across
-restarts, shared across gateway/worker processes) when `BAAS_REDIS_URL` is
-set, in-memory otherwise (dev/test only) -- the same dual-backend shape as
+"""API-key storage for tenant-facing auth: Postgres-backed (persists across
+restarts, shared across gateway/monolith processes) when `BAAS_DATABASE_URL`
+is set, in-memory otherwise (dev/test only) -- the same dual-backend shape as
 `baas.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
 persisted (`keygen.hash_key`); the plaintext is returned once, at creation,
 and never again.
+
+Postgres, not Redis: this is "user management" data (tenant, key hash, name,
+revocation), not the ephemeral distributed-lock/routing state `baas.session`
+and `baas.identity.proxy_pinning` use Redis for -- see `alembic/versions/
+0001_create_api_keys.py` for the schema this store reads and writes.
 """
 
 from __future__ import annotations
 
-import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
-from redis.asyncio import Redis
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from baas.auth.keygen import generate_api_key, hash_key
 from baas.auth.models import ApiKeyRecord
-
-_KEY_PREFIX = "apikey:"
-_TENANT_INDEX_PREFIX = "apikey_by_tenant:"
-_ID_INDEX_PREFIX = "apikey_id:"
 
 
 @runtime_checkable
@@ -35,35 +36,9 @@ class ApiKeyStoreProtocol(Protocol):
     async def revoke(self, key_id: str) -> None: ...
 
 
-def _decode(value: bytes | str | None) -> str:
-    if value is None:
-        return ""
-    return value.decode() if isinstance(value, bytes) else str(value)
-
-
-def _record_from_fields(
-    key_id: str,
-    tenant: str,
-    name: str,
-    prefix: str,
-    created_at: str,
-    last_used_at: str,
-    revoked_at: str,
-) -> ApiKeyRecord:
-    return ApiKeyRecord(
-        key_id=key_id,
-        tenant=tenant,
-        name=name,
-        prefix=prefix,
-        created_at=datetime.fromtimestamp(float(created_at or 0), UTC),
-        last_used_at=datetime.fromtimestamp(float(last_used_at), UTC) if last_used_at else None,
-        revoked_at=datetime.fromtimestamp(float(revoked_at), UTC) if revoked_at else None,
-    )
-
-
 class InMemoryApiKeyStore:
     """Dev/test-only fallback -- mirrors `session.registry.Registry`'s role as
-    the no-Redis-available path. Never appropriate for a real multi-process
+    the no-Postgres-available path. Never appropriate for a real multi-process
     deployment: keys created here aren't visible to any other process."""
 
     def __init__(self) -> None:
@@ -106,76 +81,96 @@ class InMemoryApiKeyStore:
             self._by_digest[digest] = replace(record, revoked_at=datetime.now(UTC))
 
 
-class RedisApiKeyStore:
-    """Redis layout: `apikey:{sha256hex}` hash of the record fields,
-    `apikey_by_tenant:{tenant}` set of digests (for listing), and
-    `apikey_id:{key_id}` -> digest (for revoke-by-id, since the hash is
-    keyed by digest, not the caller-facing `key_id`)."""
+class PostgresApiKeyStore:
+    """Postgres-backed `ApiKeyStoreProtocol` implementation -- hand-written
+    SQL against the `api_keys` table (`alembic/versions/0001_create_api_keys
+    .py`), matching this codebase's no-ORM house style (the same idea as
+    `baas.session.redis_registry`'s raw Lua scripts, just SQL instead of
+    Lua). Only a key's sha256 digest is ever persisted, same contract as
+    `InMemoryApiKeyStore`.
+    """
 
-    def __init__(self, redis: Redis) -> None:
-        self._redis = redis
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
 
-    def _key(self, digest: str) -> str:
-        return f"{_KEY_PREFIX}{digest}"
+    @classmethod
+    async def connect(cls, database_url: str) -> PostgresApiKeyStore:
+        """Async factory, not a plain constructor: unlike `redis.asyncio
+        .Redis.from_url()` (lazy, non-blocking), a Postgres pool needs an
+        explicit `await pool.open()` to warm its connections, which can only
+        run inside a coroutine -- see `baas.gateway.wiring.Wiring
+        ._connect_api_keys()`, itself awaited from `get_wiring()`."""
 
-    def _tenant_index(self, tenant: str) -> str:
-        return f"{_TENANT_INDEX_PREFIX}{tenant}"
+        pool = AsyncConnectionPool(
+            database_url,
+            min_size=1,
+            max_size=10,
+            open=False,
+            kwargs={"autocommit": True, "row_factory": dict_row},
+        )
+        await pool.open(wait=True, timeout=10.0)
+        return cls(pool)
 
-    def _id_index(self, key_id: str) -> str:
-        return f"{_ID_INDEX_PREFIX}{key_id}"
+    async def close(self) -> None:
+        await self._pool.close()
 
     async def create(self, tenant: str, name: str) -> tuple[ApiKeyRecord, str]:
         plaintext, prefix, digest = generate_api_key()
         key_id = str(uuid.uuid4())
-        created_at = time.time()
-        await self._redis.hset(
-            self._key(digest),
-            mapping={
-                "key_id": key_id,
-                "tenant": tenant,
-                "name": name,
-                "prefix": prefix,
-                "created_at": created_at,
-                "last_used_at": "",
-                "revoked_at": "",
-            },
+        created_at = datetime.now(UTC)
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO api_keys (key_id, tenant, name, prefix, digest, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (key_id, tenant, name, prefix, digest, created_at),
+            )
+        record = ApiKeyRecord(
+            key_id=key_id, tenant=tenant, name=name, prefix=prefix, created_at=created_at
         )
-        await self._redis.sadd(self._tenant_index(tenant), digest)
-        await self._redis.set(self._id_index(key_id), digest)
-        record = _record_from_fields(key_id, tenant, name, prefix, str(created_at), "", "")
         return record, plaintext
-
-    async def _read(self, digest: str) -> ApiKeyRecord | None:
-        raw = await self._redis.hgetall(self._key(digest))
-        if not raw:
-            return None
-        return _record_from_fields(
-            _decode(raw.get(b"key_id")),
-            _decode(raw.get(b"tenant")),
-            _decode(raw.get(b"name")),
-            _decode(raw.get(b"prefix")),
-            _decode(raw.get(b"created_at")),
-            _decode(raw.get(b"last_used_at")),
-            _decode(raw.get(b"revoked_at")),
-        )
 
     async def resolve(self, plaintext: str) -> ApiKeyRecord | None:
         digest = hash_key(plaintext)
-        record = await self._read(digest)
-        if record is None or record.revoked_at is not None:
-            return None
-        now = time.time()
-        await self._redis.hset(self._key(digest), "last_used_at", now)
-        return replace(record, last_used_at=datetime.fromtimestamp(now, UTC))
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT key_id, tenant, name, prefix, created_at, last_used_at, revoked_at "
+                    "FROM api_keys WHERE digest = %s",
+                    (digest,),
+                )
+                row = await cur.fetchone()
+            if row is None or row["revoked_at"] is not None:
+                return None
+            now = datetime.now(UTC)
+            await conn.execute(
+                "UPDATE api_keys SET last_used_at = %s WHERE digest = %s", (now, digest)
+            )
+        return ApiKeyRecord(
+            key_id=row["key_id"],
+            tenant=row["tenant"],
+            name=row["name"],
+            prefix=row["prefix"],
+            created_at=row["created_at"],
+            last_used_at=now,
+            revoked_at=None,
+        )
 
     async def list(self, tenant: str) -> list[ApiKeyRecord]:
-        digests = await self._redis.smembers(self._tenant_index(tenant))
-        records = [r for d in digests if (r := await self._read(_decode(d))) is not None]
-        records.sort(key=lambda r: r.created_at, reverse=True)
-        return records
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT key_id, tenant, name, prefix, created_at, last_used_at, revoked_at "
+                    "FROM api_keys WHERE tenant = %s ORDER BY created_at DESC",
+                    (tenant,),
+                )
+                rows = await cur.fetchall()
+        return [ApiKeyRecord(**row) for row in rows]
 
     async def revoke(self, key_id: str) -> None:
-        raw_digest = await self._redis.get(self._id_index(key_id))
-        if raw_digest is None:
-            return
-        await self._redis.hset(self._key(_decode(raw_digest)), "revoked_at", time.time())
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE api_keys SET revoked_at = %s WHERE key_id = %s AND revoked_at IS NULL",
+                (datetime.now(UTC), key_id),
+            )
