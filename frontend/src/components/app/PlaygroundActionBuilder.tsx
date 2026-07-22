@@ -1,5 +1,11 @@
 import { Plus } from 'lucide-react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { PlaygroundActionRow } from '@/components/app/PlaygroundActionRow'
 import { ACTION_TYPES, type ActionIn } from '@/lib/api/types'
 
@@ -73,19 +79,21 @@ export function PlaygroundActionBuilder({
           onPickRef={() => onPickRefForIndex(i)}
         />
       ))}
-      <Select onValueChange={(v) => addAction(v as ActionIn['type'])}>
-        <SelectTrigger className="w-48">
-          <Plus className="size-3.5" />
-          <SelectValue placeholder="Add action" />
-        </SelectTrigger>
-        <SelectContent>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" className="w-48 justify-start">
+            <Plus className="size-3.5" />
+            Add action
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
           {ACTION_TYPES.map((t) => (
-            <SelectItem key={t} value={t}>
+            <DropdownMenuItem key={t} onClick={() => addAction(t)}>
               {t}
-            </SelectItem>
+            </DropdownMenuItem>
           ))}
-        </SelectContent>
-      </Select>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   )
 }

@@ -23,7 +23,11 @@ export function PlaygroundPage() {
   const { data: sessionsData } = useSessionsList()
   const sessions = (sessionsData?.sessions ?? []).filter((s) => s.state === 'active')
 
-  const [sessionId, setSessionId] = useState<string | null>(searchParams.get('session'))
+  // Empty string, not `null`, as the "no selection" sentinel -- Radix's
+  // `Select` must receive the same *type* of `value` on every render or it
+  // logs a "changing from uncontrolled to controlled" warning the first
+  // time a session is picked.
+  const [sessionId, setSessionId] = useState<string>(searchParams.get('session') ?? '')
   const [actions, setActions] = useState<ActionIn[]>([{ type: 'navigate', url: '' }])
   const execute = useExecuteSession()
   const refPicker = useExecuteSession()
@@ -76,7 +80,7 @@ export function PlaygroundPage() {
       </div>
 
       <div className="flex items-center gap-3">
-        <Select value={sessionId ?? undefined} onValueChange={setSessionId}>
+        <Select value={sessionId} onValueChange={setSessionId}>
           <SelectTrigger className="w-72">
             <SelectValue placeholder="Choose a session" />
           </SelectTrigger>
@@ -101,7 +105,7 @@ export function PlaygroundPage() {
               <Play className="size-4" />
               {execute.isPending ? 'Running…' : 'Run sequence'}
             </Button>
-            <CodeSnippetPanel sessionId={sessionId} apiKey={apiKey} actions={actions} />
+            <CodeSnippetPanel sessionId={sessionId || null} apiKey={apiKey} actions={actions} />
           </div>
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Result</p>
