@@ -74,7 +74,7 @@ async def _receive_input(websocket: WebSocket, driver: LiveViewCapable, ctx: Any
 
 @router.websocket("/v1/sessions/{session_id}/live-view")
 async def live_view(websocket: WebSocket, session_id: str, mode: str = "view") -> None:
-    wiring = get_wiring()
+    wiring = await get_wiring()
     session = wiring.sessions.get(session_id)
     if session is None:
         await websocket.close(code=_NOT_FOUND, reason="no such session")

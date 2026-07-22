@@ -65,7 +65,15 @@ class Wiring:
 _wiring: Wiring | None = None
 
 
-def get_wiring() -> Wiring:
+async def get_wiring() -> Wiring:
+    """`async def`, not plain `def`: FastAPI/Starlette runs sync `Depends()`
+    callables in a worker thread (`anyio.to_thread`), which has no running
+    asyncio event loop of its own. `Wiring.__init__` starts the P1 reaper via
+    `asyncio.create_task`, which needs one -- a plain-`def` version of this
+    crashed every request with `RuntimeError: no running event loop` the
+    first time it constructed a `Wiring` off-thread. `async def` dependencies
+    run directly on the event loop instead, so `create_task` has one."""
+
     global _wiring
     if _wiring is None:
         _wiring = Wiring()
