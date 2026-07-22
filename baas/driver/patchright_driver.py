@@ -23,6 +23,15 @@ from pathlib import Path
 from typing import Any, assert_never, cast
 
 import structlog
+
+# Not re-exported from `patchright.async_api` (unlike upstream Playwright,
+# which does publicly expose this) -- observed directly: a page/context that
+# closed for a reason other than a renderer crash (e.g. torn down mid-poll,
+# or a race between a tab close and an in-flight action) previously surfaced
+# as a raw "TargetClosedError: ... has been closed" 500, not a typed error,
+# since only the "crash" event was ever wired up. Importing from the private
+# module is the pragmatic tradeoff here over not catching this at all.
+from patchright._impl._errors import TargetClosedError
 from patchright.async_api import (
     BrowserContext,
     CDPSession,
@@ -269,7 +278,20 @@ class PatchrightDriver:
                     live_page.death_reason = "page_crash"
                 log.warning("driver.page_crashed", context_id=context_id, page_id=pid)
 
+            def _on_close(_page: Page) -> None:
+                # A page can close for reasons that aren't a renderer crash
+                # (browser/context tearing down, `window.close()`, a race
+                # with tab management elsewhere) -- without this, `_Page.
+                # alive` stayed `True` forever for those cases, so the next
+                # action against it hit a raw `TargetClosedError` instead of
+                # a typed, expected `ContextCrashed`.
+                live_page = cctx.pages.get(pid)
+                if live_page is not None and live_page.alive:
+                    live_page.alive = False
+                    live_page.death_reason = "page_closed"
+
             pg.on("crash", _on_crash)
+            pg.on("close", _on_close)
 
         def _on_context_close(_context: BrowserContext) -> None:
             cctx.alive = False
@@ -359,8 +381,20 @@ class PatchrightDriver:
             if stale and consumes_ref:
                 result.sequence_aborted = True
                 break
-            pre_url = live.page.url
-            await self._dispatch(cctx, live, action, result)
+            try:
+                pre_url = live.page.url
+                await self._dispatch(cctx, live, action, result)
+            except TargetClosedError as exc:
+                # Belt-and-suspenders alongside `_wire_page`'s "close"
+                # listener above: that listener and the actual close can
+                # still race (this action's own CDP call landing in the gap
+                # between the page closing and the event handler running),
+                # so this is the last line of defense against a raw
+                # Playwright error leaking out as an opaque 500 instead of
+                # the typed `ContextCrashed` every other dead-page path uses.
+                live.alive = False
+                live.death_reason = live.death_reason or "page_closed"
+                raise ContextCrashed(str(exc)) from exc
             if live.page.url != pre_url:
                 stale = True
         return result
