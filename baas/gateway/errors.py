@@ -7,7 +7,7 @@ into Firecrawl's friendly-4xx/5xx shape.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from baas.spi import errors as spi_errors
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     BAD_REQUEST = "BAD_REQUEST"
     NOT_FOUND = "NOT_FOUND"
     SESSION_LEASE_CONFLICT = "SESSION_LEASE_CONFLICT"

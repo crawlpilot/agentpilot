@@ -15,7 +15,7 @@ until P1's `ref_cache` can resolve a `ref` to a live element.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Union
+from typing import Literal
 
 from baas.spi.artifact import ArtifactRef
 from baas.spi.snapshot import AXSnapshot
@@ -115,21 +115,21 @@ class ScrollAction:
     terminates_sequence: bool = False
 
 
-Action = Union[
-    NavigateAction,
-    GoBackAction,
-    SnapshotAction,
-    ExtractAction,
-    ScreenshotAction,
-    WaitAction,
-    ExecuteJsAction,
-    ClickAction,
-    FillAction,
-    SelectOptionAction,
-    HoverAction,
-    PressAction,
-    ScrollAction,
-]
+Action = (
+    NavigateAction
+    | GoBackAction
+    | SnapshotAction
+    | ExtractAction
+    | ScreenshotAction
+    | WaitAction
+    | ExecuteJsAction
+    | ClickAction
+    | FillAction
+    | SelectOptionAction
+    | HoverAction
+    | PressAction
+    | ScrollAction
+)
 
 # Actions P0's driver actually dispatches; the rest raise NotImplementedError.
 P0_DISPATCHABLE: tuple[type, ...] = (

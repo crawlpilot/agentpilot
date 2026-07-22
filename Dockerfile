@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11-utils \
     curl \
     ca-certificates \
+    iptables \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv

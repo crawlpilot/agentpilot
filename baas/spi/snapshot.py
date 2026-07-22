@@ -16,7 +16,7 @@ class SnapshotNode:
     ref: str
     role: str
     name: str
-    children: list["SnapshotNode"] = field(default_factory=list)
+    children: list[SnapshotNode] = field(default_factory=list)
 
 
 @dataclass

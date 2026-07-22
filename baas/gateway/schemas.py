@@ -7,7 +7,7 @@ validation on top of it.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -131,21 +131,19 @@ class ScrollActionIn(BaseModel):
 
 
 ActionIn = Annotated[
-    Union[
-        NavigateActionIn,
-        GoBackActionIn,
-        SnapshotActionIn,
-        ExtractActionIn,
-        ScreenshotActionIn,
-        WaitActionIn,
-        ExecuteJsActionIn,
-        ClickActionIn,
-        FillActionIn,
-        SelectOptionActionIn,
-        HoverActionIn,
-        PressActionIn,
-        ScrollActionIn,
-    ],
+    NavigateActionIn
+    | GoBackActionIn
+    | SnapshotActionIn
+    | ExtractActionIn
+    | ScreenshotActionIn
+    | WaitActionIn
+    | ExecuteJsActionIn
+    | ClickActionIn
+    | FillActionIn
+    | SelectOptionActionIn
+    | HoverActionIn
+    | PressActionIn
+    | ScrollActionIn,
     Field(discriminator="type"),
 ]
 
@@ -164,7 +162,7 @@ class SnapshotNodeOut(BaseModel):
     ref: str
     role: str
     name: str
-    children: list["SnapshotNodeOut"] = Field(default_factory=list)
+    children: list[SnapshotNodeOut] = Field(default_factory=list)
 
 
 class AXSnapshotOut(BaseModel):

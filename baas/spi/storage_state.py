@@ -10,6 +10,7 @@ calls the native method directly and wraps the result in these types.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -26,5 +27,5 @@ class OriginState:
 
 @dataclass
 class StorageState:
-    cookies: list[dict] = field(default_factory=list)
+    cookies: list[dict[str, Any]] = field(default_factory=list)
     origins: list[OriginState] = field(default_factory=list)

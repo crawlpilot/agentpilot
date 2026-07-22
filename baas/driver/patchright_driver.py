@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import structlog
-from patchright.async_api import BrowserContext, Page
+from patchright.async_api import BrowserContext, Page, ProxySettings
+from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from baas.driver.aria_parse import parse_aria_snapshot
@@ -35,8 +38,6 @@ from baas.spi.actions import (
     SnapshotAction,
     WaitAction,
 )
-
-_REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
 from baas.spi.egress import EgressPolicy
 from baas.spi.errors import ContextCrashed, NavigationTimeout
 from baas.spi.health import HealthStatus
@@ -47,6 +48,8 @@ from baas.spi.snapshot import AXSnapshot
 from baas.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 log = structlog.get_logger(__name__)
+
+_REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
 
 
 @dataclass
@@ -60,10 +63,10 @@ class _Live:
     page_changed: bool = False
 
 
-def _proxy_settings(proxy: ProxyEndpoint | None) -> dict | None:
+def _proxy_settings(proxy: ProxyEndpoint | None) -> ProxySettings | None:
     if proxy is None:
         return None
-    settings: dict = {"server": f"{proxy.scheme}://{proxy.host}:{proxy.port}"}
+    settings: ProxySettings = {"server": f"{proxy.scheme}://{proxy.host}:{proxy.port}"}
     if proxy.username:
         settings["username"] = proxy.username
     if proxy.password:
@@ -71,22 +74,26 @@ def _proxy_settings(proxy: ProxyEndpoint | None) -> dict | None:
     return settings
 
 
-def _to_playwright_storage_state(state: StorageState) -> dict:
-    return {
-        "cookies": state.cookies,
-        "origins": [
-            {
-                "origin": origin.origin,
-                "localStorage": [
-                    {"name": entry.name, "value": entry.value} for entry in origin.local_storage
-                ],
-            }
-            for origin in state.origins
-        ],
-    }
+def _to_playwright_storage_state(state: StorageState) -> PlaywrightStorageState:
+    return cast(
+        PlaywrightStorageState,
+        {
+            "cookies": state.cookies,
+            "origins": [
+                {
+                    "origin": origin.origin,
+                    "localStorage": [
+                        {"name": entry.name, "value": entry.value}
+                        for entry in origin.local_storage
+                    ],
+                }
+                for origin in state.origins
+            ],
+        },
+    )
 
 
-def _from_playwright_storage_state(raw: dict) -> StorageState:
+def _from_playwright_storage_state(raw: Mapping[str, Any]) -> StorageState:
     origins = [
         OriginState(
             origin=o["origin"],
@@ -141,7 +148,7 @@ class PatchrightDriver:
             live.death_reason = "page_crash"
             log.warning("driver.page_crashed", context_id=context_id)
 
-        def _on_context_close() -> None:
+        def _on_context_close(_context: BrowserContext) -> None:
             live.alive = False
             live.death_reason = live.death_reason or "context_closed"
 

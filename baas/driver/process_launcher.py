@@ -21,7 +21,7 @@ class ProcessLauncher:
     def __init__(self) -> None:
         self._playwright: Playwright | None = None
         self._lock = asyncio.Lock()
-        self._xvfb_proc: subprocess.Popen | None = None
+        self._xvfb_proc: subprocess.Popen[bytes] | None = None
 
     async def get_playwright(self) -> Playwright:
         async with self._lock:
