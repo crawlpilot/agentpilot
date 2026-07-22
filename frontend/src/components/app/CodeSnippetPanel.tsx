@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import { API_BASE_URL } from '@/lib/config'
 import type { ActionIn } from '@/lib/api/types'
 
 function maskKey(key: string): string {
@@ -50,7 +51,7 @@ export function CodeSnippetPanel({
   actions: ActionIn[]
 }) {
   const [revealed, setRevealed] = useState(false)
-  const host = window.location.origin
+  const host = API_BASE_URL
   const effectiveKey = apiKey ?? 'bk_live_...'
   const displayKey = revealed ? effectiveKey : maskKey(effectiveKey)
 
