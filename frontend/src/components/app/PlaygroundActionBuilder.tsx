@@ -37,6 +37,14 @@ function defaultActionFor(type: ActionIn['type']): ActionIn {
       return { type, key: 'Enter' }
     case 'scroll':
       return { type, direction: 'down' }
+    case 'new_tab':
+      return { type }
+    case 'close_tab':
+      return { type, page_id: '' }
+    case 'switch_tab':
+      return { type, page_id: '' }
+    case 'list_tabs':
+      return { type }
   }
 }
 

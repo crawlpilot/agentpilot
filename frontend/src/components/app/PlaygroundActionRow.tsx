@@ -129,6 +129,26 @@ export function PlaygroundActionRow({ action, onChange, onRemove, onMoveUp, onMo
             </SelectContent>
           </Select>
         )
+      case 'new_tab':
+        return (
+          <Input
+            placeholder="https://example.com (optional)"
+            value={action.url ?? ''}
+            onChange={(e) => onChange({ ...action, url: e.target.value || null })}
+          />
+        )
+      case 'close_tab':
+      case 'switch_tab':
+        return (
+          <Input
+            placeholder="page_id"
+            value={action.page_id}
+            onChange={(e) => onChange({ ...action, page_id: e.target.value })}
+            className="w-40 font-mono"
+          />
+        )
+      case 'list_tabs':
+        return <span className="text-xs text-muted-foreground">lists this session's open tabs</span>
     }
   }
 
