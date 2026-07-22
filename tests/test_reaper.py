@@ -50,7 +50,7 @@ async def test_idle_ttl_destroys_context_past_ttl() -> None:
     await reaper.scan_once()
 
     assert driver.closed == [ctx.context_id]
-    assert registry.snapshot() == []
+    assert await registry.snapshot() == []
 
 
 async def test_idle_ttl_leaves_fresh_idle_context_alone() -> None:
@@ -62,7 +62,7 @@ async def test_idle_ttl_leaves_fresh_idle_context_alone() -> None:
     await reaper.scan_once()
 
     assert driver.closed == []
-    assert len(registry.snapshot()) == 1
+    assert len(await registry.snapshot()) == 1
 
 
 async def test_lease_expiry_force_releases_without_destroying() -> None:
@@ -121,5 +121,5 @@ async def test_memory_pressure_evicts_oldest_idle_first(monkeypatch: pytest.Monk
     await reaper.scan_once()
 
     assert driver.closed == [older.context_id]
-    remaining_ids = [ctx.context_id for _identity, ctx, _lease, _released_at in registry.snapshot()]
+    remaining_ids = [ctx.context_id for _identity, ctx, _lease, _released_at in await registry.snapshot()]
     assert remaining_ids == [newer.context_id]

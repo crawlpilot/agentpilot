@@ -81,7 +81,15 @@ class RedisRegistry:
         try:
             reuse, context_id, pid_raw, node_id = await self._acquire(
                 keys=[key],
-                args=[owner, ttl_seconds, lease_id, now, identity.tenant, identity.domain, identity.name],
+                args=[
+                    owner,
+                    ttl_seconds,
+                    lease_id,
+                    now,
+                    identity.tenant,
+                    identity.domain,
+                    identity.name,
+                ],
             )
         except ResponseError as exc:
             if "LEASE_CONFLICT" in str(exc):
@@ -212,7 +220,9 @@ class RedisRegistry:
         context_id = _decode(context_id)
         if not context_id:
             return None
-        return _to_context_ref(identity, context_id, _decode(pid_raw), _decode(node_id), ContextState.IDLE)
+        return _to_context_ref(
+            identity, context_id, _decode(pid_raw), _decode(node_id), ContextState.IDLE
+        )
 
     async def force_release(self, identity: IdentityKey) -> None:
         await self._force_release(keys=[_active_key(identity)], args=[time.time()])

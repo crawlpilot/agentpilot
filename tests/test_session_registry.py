@@ -101,7 +101,7 @@ async def test_evict_removes_entry_and_forgets_lease() -> None:
 
     evicted = await registry.evict(IDENTITY)
     assert evicted is ctx
-    assert registry.snapshot() == []
+    assert await registry.snapshot() == []
 
     # A fresh acquire after eviction must open a *new* context, not reuse.
     calls: list[int] = []
