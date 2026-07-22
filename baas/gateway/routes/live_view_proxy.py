@@ -62,9 +62,18 @@ async def live_view_proxy(websocket: WebSocket, session_id: str, mode: str = "vi
         await websocket.close(code=_NOT_FOUND, reason="no such session")
         return
 
+    # No `&api_key=...` forwarded here: this proxy already authenticated the
+    # caller above, and the worker's `wiring.api_keys` is permanently an
+    # empty placeholder (`wiring.py`'s `_connect_api_keys` docstring --
+    # `worker` never mounts an auth-gated route), so a forwarded key can
+    # never resolve there and `live_view.py`'s check would always 403. The
+    # internal mount already trusts network position alone for every other
+    # route reached through this proxy; matching that here (an absent
+    # `api_key` takes `live_view.py`'s pre-auth-compatible trust path)
+    # rather than re-validating against a store that can't ever succeed.
     ws_url = (
         worker_url.replace("http://", "ws://").replace("https://", "wss://")
-        + f"/internal/sessions/{session_id}/live-view?mode={mode}&api_key={api_key}"
+        + f"/internal/sessions/{session_id}/live-view?mode={mode}"
     )
 
     await websocket.accept()
