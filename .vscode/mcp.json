@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "code-review-graph": {
+      "command": "uvx",
+      "args": [
+        "code-review-graph",
+        "serve"
+      ],
+      "cwd": "/Users/rahulbisht/Documents/Github/baas-crawlpilot",
+      "type": "stdio"
+    }
+  }
+}
