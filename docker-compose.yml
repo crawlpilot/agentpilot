@@ -1,4 +1,9 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
   baas:
     build: .
     # Google ships official Chrome (`channel="chrome"`) for linux/amd64 only --
@@ -19,10 +24,22 @@ services:
     shm_size: "2gb"
     volumes:
       - profiles:/var/lib/baas/profiles
+      - vault:/var/lib/baas/vault
     environment:
+      BAAS_ROLE: monolith
       BAAS_PROFILES_DIR: /var/lib/baas/profiles
+      # `BAAS_ROLE=monolith` (this service's default) serves the full
+      # `/v1/sessions` API directly, same as P0/P1 -- pointing it at Redis
+      # here just swaps the *registry backend* (plan.md: "registry.py ->
+      # Redis, same interface"); it does not turn this into two processes.
+      # See the `gateway`/`worker` services (the `split` profile) below for
+      # the actual role split demo.
+      BAAS_REDIS_URL: redis://redis:6379/0
+      BAAS_VAULT_DIR: /var/lib/baas/vault
+      BAAS_VAULT_KEY: ${BAAS_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
     depends_on:
       - detection-page
+      - redis
 
   detection-page:
     build:
@@ -36,5 +53,50 @@ services:
     ports:
       - "8090:8090"
 
+  # --- P2 role-split demo: `docker compose --profile split up worker gateway redis` ---
+  # Runs gateway<->worker over real HTTP on one Docker host (no second
+  # physical node exists to prove out cross-node placement/failover -- that
+  # needs real multi-node infra this repo doesn't have -- but the actual
+  # code path (gateway proxies to worker's /internal surface, Redis holds
+  # the session routing table) is real and exercised here).
+
+  worker:
+    build: .
+    profiles: ["split"]
+    platform: linux/amd64
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    shm_size: "2gb"
+    volumes:
+      - profiles:/var/lib/baas/profiles
+      - vault:/var/lib/baas/vault
+    environment:
+      BAAS_ROLE: worker
+      BAAS_PROFILES_DIR: /var/lib/baas/profiles
+      BAAS_REDIS_URL: redis://redis:6379/0
+      BAAS_VAULT_DIR: /var/lib/baas/vault
+      BAAS_VAULT_KEY: ${BAAS_VAULT_KEY:-}
+    depends_on:
+      - detection-page
+      - redis
+    # No published port -- "internal-only, VPC-bound, never tenant-exposed"
+    # per plan.md's topology; only the `gateway` service talks to it.
+
+  gateway:
+    build: .
+    profiles: ["split"]
+    platform: linux/amd64
+    ports:
+      - "8001:8000"
+    environment:
+      BAAS_ROLE: gateway
+      BAAS_REDIS_URL: redis://redis:6379/0
+      BAAS_WORKER_URL: http://worker:8000
+    depends_on:
+      - worker
+      - redis
+
 volumes:
   profiles:
+  vault:
