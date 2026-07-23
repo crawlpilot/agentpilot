@@ -94,6 +94,6 @@ class SessionPlacer:
                     "created_at": time.time(),
                 },
             )
-            pipe.expire(f"session:{session_id}", ttl_seconds)
+            pipe.expire(f"session:{session_id}", int(ttl_seconds))
             pipe.sadd(f"node_sessions:{node_id}", session_id)
             await pipe.execute()

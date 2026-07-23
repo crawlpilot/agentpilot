@@ -114,7 +114,9 @@ services:
     environment:
       AGENTPILOT_ROLE: gateway
       AGENTPILOT_REDIS_URL: redis://redis:6379/0
-      AGENTPILOT_WORKER_URL: http://worker:8000
+      # No AGENTPILOT_WORKER_URL -- placement is real now (agentpilot.
+      # placement.placer.SessionPlacer), discovering live workers via Redis
+      # (each worker self-registers at boot), not a fixed configured target.
       # Gates `/v1/api-keys` (issuing/revoking tenant API keys) and nothing
       # else -- unset means that control-plane surface 401s unconditionally
       # (fails closed), not that auth is disabled fleet-wide.
@@ -122,10 +124,13 @@ services:
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
     depends_on:
       - worker
+      - worker-2
       - postgres
 
 volumes:
   profiles:
   vault:
+  profiles-2:
+  vault-2:
   redis-data:
   postgres-data:

@@ -121,7 +121,9 @@ async def list_sessions(
             resp.raise_for_status()
             return list(resp.json().get("sessions", []))
         except Exception as exc:
-            log.warning("gateway_proxy.list_sessions_node_unreachable", node_id=node_id, error=str(exc))
+            log.warning(
+                "gateway_proxy.list_sessions_node_unreachable", node_id=node_id, error=str(exc)
+            )
             return []
 
     results = await asyncio.gather(*(_fetch(n) for n in node_ids))

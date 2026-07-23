@@ -120,6 +120,6 @@ class NodeRegistry:
                     "cpu_used_pct": cpu_used_pct if cpu_used_pct is not None else "",
                 },
             )
-            pipe.expire(f"capacity:{self._node_id}", self._ttl_seconds)
+            pipe.expire(f"capacity:{self._node_id}", int(self._ttl_seconds))
             pipe.sadd("live_nodes", self._node_id)
             await pipe.execute()
