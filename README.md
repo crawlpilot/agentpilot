@@ -38,13 +38,63 @@ See `plan.md` for the full design rationale and phased build history.
 
 ## Quickstart (Docker Compose)
 
+### Prerequisites
+
+- Docker + Docker Compose v2 (`docker compose version`)
+- On Apple Silicon / other arm64 hosts: the `worker` image is pinned to `linux/amd64` (real Chrome
+  is amd64-only), so Docker Desktop will emulate it via Rosetta/QEMU — expect `worker`/`worker-2` to
+  build and boot noticeably slower than `gateway`. This is intentional, not a misconfiguration.
+
+### 1. Configure environment
+
 ```bash
 cp .env.example .env   # fill in AGENTPILOT_ADMIN_TOKEN at minimum
-docker compose up
 ```
 
-This starts Redis, Postgres, a `worker` (Chrome/Patchright, internal-only), and a `gateway`
-(publishes `8000:8000`) — the real two-tier topology. Open a session:
+`AGENTPILOT_ADMIN_TOKEN` gates `/v1/api-keys` (issuing/revoking tenant API keys) — leave it unset
+and that surface 401s unconditionally. `AGENTPILOT_VAULT_KEY` is optional (unset disables
+encryption-at-rest for saved browser profiles). See `.env.example` for the rest; a handful of
+tuning knobs (lease/idle/reaper TTLs, per-node context/tab ceilings, memory watermark) have
+in-code defaults in `agentpilot/gateway/wiring.py` and don't need to be set for local use.
+
+### 2. Build and start the stack
+
+```bash
+docker compose up --build
+```
+
+This starts Redis, Postgres, two `worker` instances (Chrome/Patchright, internal-only, each
+self-registering into the fleet), and a `gateway` (publishes `8000:8000`) — the real two-tier
+topology, not the single-process `monolith` role. `--build` forces a rebuild after pulling or
+editing a Dockerfile; plain `docker compose up` reuses images already built. First build pulls
+and installs Chrome inside the `worker` images, so expect it to take a few minutes.
+
+Redis (`6379`) and Postgres (`5432`) are also published, but loopback-only
+(`127.0.0.1:...`), so you can `redis-cli`/`psql` into them from the host for debugging or to run
+migrations, without exposing them to the network.
+
+### 3. Run database migrations
+
+`AGENTPILOT_DATABASE_URL` persists tenant API keys in Postgres and has no automatic migration step
+— run Alembic yourself, from the host, against the compose Postgres before issuing any API keys:
+
+```bash
+AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot uv run alembic upgrade head
+```
+
+(Requires `uv sync --group dev` locally so `alembic` is on the path — this doesn't need to run
+inside a container.)
+
+### 4. Verify it's up
+
+```bash
+curl http://localhost:8000/healthz   # liveness -> {"status": "ok"}
+curl http://localhost:8000/readyz    # readiness
+docker compose ps                    # all services should be "running"
+docker compose logs -f gateway       # tail a specific service; swap in worker/worker-2/postgres/redis
+```
+
+### 5. Open a session
 
 ```bash
 curl -X POST http://localhost:8000/v1/api-keys \
@@ -58,6 +108,30 @@ curl -X POST http://localhost:8000/v1/sessions \
   -H "Content-Type: application/json" \
   -d '{"tenant":"dev","domain":"example.com","name":"my-session","tier":"auto"}'
 ```
+
+### Tearing down
+
+```bash
+docker compose down          # stop containers, keep volumes (Postgres/Redis data, browser profiles, vault)
+docker compose down -v       # also wipe volumes -- next `up` starts from an empty DB/Redis/profiles
+```
+
+### Troubleshooting
+
+- **`worker`/`worker-2` fail to become healthy, or Chrome crashes on launch**: check
+  `docker compose logs worker` for Xvfb/Chrome sandbox errors. The container needs
+  `cap_add: [SYS_ADMIN, NET_ADMIN]` (already set in `docker-compose.yml`) for a real Chrome sandbox
+  and `agentpilot.egress` iptables rules — don't strip these caps.
+- **`/v1/api-keys` returns 401 even with a token**: confirm `AGENTPILOT_ADMIN_TOKEN` is set in `.env`
+  *before* `docker compose up` (compose reads `.env` at container-creation time, not live) and that
+  you're passing the same value in `Authorization: Bearer ...`.
+- **Session creation fails / no worker available**: the `gateway` discovers workers via Redis
+  self-registration, not compose service names — give `worker`/`worker-2` a few seconds after
+  startup to register before creating sessions; check `docker compose logs worker` for registration
+  errors.
+- **Migrations fail to connect**: `alembic/env.py` requires `AGENTPILOT_DATABASE_URL` to be set
+  explicitly (no fallback) and expects it reachable from the host, i.e. `localhost:5432`, not
+  `postgres:5432` (that hostname only resolves inside the compose network).
 
 ## Local development (no Docker)
 
