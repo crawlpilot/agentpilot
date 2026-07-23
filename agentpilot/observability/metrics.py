@@ -12,10 +12,10 @@ Observability section:
   `reaper_lease_reclaimed_total`.
 - Per-tenant: `requests_total` labeled by tenant + route.
 
-`placement_affinity_hit_ratio` and challenge-detection/identity-burn rate
-are skipped here -- they're meaningless before P2's affinity routing and
-P3's challenge detector exist to feed them; adding empty/always-1.0 gauges
-now would just be metrics theatre.
+Challenge-detection/identity-burn rate are still skipped here -- P3's
+challenge detector doesn't exist yet to feed them; adding an empty/always-0
+counter now would just be metrics theatre. Placement metrics (below) are
+real as of this pass: multi-worker placement/routing/admission.
 """
 
 from __future__ import annotations
@@ -44,4 +44,17 @@ reaper_destroyed_total = Counter(
 )
 reaper_lease_reclaimed_total = Counter(
     "agentpilot_reaper_lease_reclaimed_total", "ACTIVE leases force-released for expiring unrenewed"
+)
+
+placement_decisions_total = Counter(
+    "agentpilot_placement_decisions_total",
+    "Gateway session-placement decisions by outcome",
+    ["outcome"],  # affinity_hit | relocated | least_loaded | no_capacity
+)
+node_reaper_nodes_reaped_total = Counter(
+    "agentpilot_node_reaper_nodes_reaped_total", "Dead worker nodes cleaned up by the node-reaper"
+)
+node_reaper_sessions_reclaimed_total = Counter(
+    "agentpilot_node_reaper_sessions_reclaimed_total",
+    "Sessions force-evicted because their worker node died",
 )

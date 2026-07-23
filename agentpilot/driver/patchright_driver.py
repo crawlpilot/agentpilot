@@ -260,10 +260,14 @@ def _from_playwright_storage_state(raw: Mapping[str, Any]) -> StorageState:
 
 class PatchrightDriver:
     def __init__(
-        self, launcher: ProcessLauncher, max_tabs_per_session: int = DEFAULT_MAX_TABS_PER_SESSION
+        self,
+        launcher: ProcessLauncher,
+        max_tabs_per_session: int = DEFAULT_MAX_TABS_PER_SESSION,
+        node_id: str = "local",
     ) -> None:
         self._launcher = launcher
         self._max_tabs_per_session = max_tabs_per_session
+        self._node_id = node_id
         self._contexts: dict[str, _Context] = {}
 
     def _require_context(self, ctx: ContextRef) -> _Context:
@@ -400,7 +404,7 @@ class PatchrightDriver:
             identity=identity,
             state=ContextState.ACTIVE,
             pid=None,  # resolved via cdp_patches on demand in P1, when interaction actions need it
-            node_id="local",
+            node_id=self._node_id,
         )
 
     async def close(self, ctx: ContextRef) -> None:

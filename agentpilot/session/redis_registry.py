@@ -48,7 +48,7 @@ def _load(name: str) -> str:
     return (_LUA_DIR / name).read_text()
 
 
-def _active_key(identity: IdentityKey) -> str:
+def active_key(identity: IdentityKey) -> str:
     return f"active:{identity.slug()}"
 
 
@@ -74,7 +74,7 @@ class RedisRegistry:
     async def acquire(
         self, identity: IdentityKey, owner: str, ttl_seconds: float, opener: Opener
     ) -> tuple[ContextRef, Lease]:
-        key = _active_key(identity)
+        key = active_key(identity)
         now = time.time()
         lease_id = LeaseId(str(uuid.uuid4()))
 
@@ -215,7 +215,7 @@ class RedisRegistry:
         return results
 
     async def evict(self, identity: IdentityKey) -> ContextRef | None:
-        key = _active_key(identity)
+        key = active_key(identity)
         context_id, pid_raw, node_id = await self._evict(keys=[key])
         context_id = _decode(context_id)
         if not context_id:
@@ -225,7 +225,7 @@ class RedisRegistry:
         )
 
     async def force_release(self, identity: IdentityKey) -> None:
-        await self._force_release(keys=[_active_key(identity)], args=[time.time()])
+        await self._force_release(keys=[active_key(identity)], args=[time.time()])
 
 
 def _decode(value: bytes | str | int | None) -> str:

@@ -19,12 +19,13 @@ import contextlib
 
 import structlog
 import websockets
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 
 from agentpilot.gateway.auth_deps import resolve_query_api_key
-from agentpilot.gateway.routing import resolve_worker
+from agentpilot.gateway.routing import resolve_route
 from agentpilot.gateway.wiring import get_wiring
+from agentpilot.spi.errors import NodeLost
 
 log = structlog.get_logger(__name__)
 
@@ -59,9 +60,13 @@ async def live_view_proxy(
         return
 
     try:
-        worker_url = await resolve_worker(wiring, session_id)
-    except Exception:
-        await websocket.close(code=_NOT_FOUND, reason="no such session")
+        _node_id, addr = await resolve_route(wiring, session_id, authed.tenant)
+    except HTTPException as exc:
+        code = _UNAUTHORIZED if exc.status_code == 403 else _NOT_FOUND
+        await websocket.close(code=code, reason=str(exc.detail))
+        return
+    except NodeLost:
+        await websocket.close(code=_BAD_UPSTREAM, reason="worker node is gone")
         return
 
     # No `&api_key=...` forwarded here: this proxy already authenticated the
@@ -74,7 +79,7 @@ async def live_view_proxy(
     # `api_key` takes `live_view.py`'s pre-auth-compatible trust path)
     # rather than re-validating against a store that can't ever succeed.
     ws_url = (
-        worker_url.replace("http://", "ws://").replace("https://", "wss://")
+        addr.replace("http://", "ws://").replace("https://", "wss://")
         + f"/internal/sessions/{session_id}/live-view?mode={mode}"
         + (f"&page_id={page_id}" if page_id is not None else "")
     )

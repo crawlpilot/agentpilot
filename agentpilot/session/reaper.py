@@ -49,7 +49,7 @@ from agentpilot.spi.lease import ContextRef, ContextState
 log = structlog.get_logger(__name__)
 
 
-def _read_meminfo_used_pct() -> float | None:
+def read_meminfo_used_pct() -> float | None:
     """Best-effort node memory pressure from `/proc/meminfo` -- same style as
     `egress/policy.py`'s `/proc/net/route` parsing, to avoid pulling in
     `psutil` for one gauge. `MemAvailable` (not `MemFree`) already accounts
@@ -161,7 +161,7 @@ class Reaper:
                 await self._destroy(identity, ctx, reason="idle_ttl")
 
     async def _reap_memory_pressure(self) -> None:
-        used_pct = _read_meminfo_used_pct()
+        used_pct = read_meminfo_used_pct()
         if used_pct is None or used_pct < self.mem_pressure_watermark_pct:
             return
 
@@ -174,7 +174,7 @@ class Reaper:
             key=lambda row: row[2],
         )
         for identity, ctx, _released_at in idle_oldest_first:
-            used_pct = _read_meminfo_used_pct()
+            used_pct = read_meminfo_used_pct()
             if used_pct is None or used_pct < self.mem_pressure_watermark_pct:
                 break
             log.warning(

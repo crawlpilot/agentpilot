@@ -4,9 +4,13 @@ Role-aware (see `agentpilot.gateway.role`): a `worker`/`monolith` process owns t
 shared Patchright singleton, the `PatchrightDriver`, the registry (Redis-
 backed when `AGENTPILOT_REDIS_URL` is set, in-memory otherwise -- see
 `agentpilot.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
-layer (`Vault`/`ProxyPinner`, both optional). A `gateway` process constructs
-none of that -- just an httpx client and a Redis client for the
-`session_id -> worker` routing table, and never touches `agentpilot.driver`.
+layer (`Vault`/`ProxyPinner`, both optional). A `worker` (not `monolith` --
+see `_init_worker()`) additionally self-registers into the fleet via
+`agentpilot.placement.node_registry.NodeRegistry`, so the gateway's
+`SessionPlacer`/`NodeReaper` can see it. A `gateway` process constructs none
+of the driver-side state -- just an httpx client, a Redis client, and the
+placement layer (`SessionPlacer`, `NodeReaper`, a `RedisRegistry` used only
+for the reaper's lease-eviction calls) -- and never touches `agentpilot.driver`.
 
 The `session_id -> Session` dict is worker/monolith-local: `Registry` is
 keyed by `IdentityKey`, not `session_id`, since one warm context can be
@@ -106,6 +110,25 @@ class Wiring:
         # placeholder (dev/test convenience only -- keys won't survive a
         # restart or be visible to any other process).
 
+    async def _register_node(self) -> None:
+        """`NodeRegistry.register()` (the `node:{id}` HSET) needs a real
+        `await`, same reason `_connect_api_keys()` is split out of the sync
+        `__init__` -- see `get_wiring()`'s docstring. Starting the heartbeat
+        loop itself (`start()`, sync) happens right after: the loop's first
+        tick is 2s away regardless, so `register()` landing first here isn't
+        just timing luck.
+
+        `self.node_registry` only exists on `worker`-role instances
+        (`_init_worker()`) -- `gateway` never sets the attribute at all, so
+        this must bail on role first, not just `None`-check, to avoid an
+        `AttributeError` when `get_wiring()` calls this unconditionally."""
+
+        if self.role != "worker":
+            return
+        if self.node_registry is not None:
+            await self.node_registry.register()
+            self.node_registry.start()
+
     def _init_gateway(self) -> None:
         # Gateway-role graph excludes agentpilot.driver (plan.md) -- these imports
         # are deferred into this method (not hoisted to module level) purely
@@ -115,24 +138,49 @@ class Wiring:
         # either way). `docker/gateway.Dockerfile` is a genuinely driver-free
         # image (no Chrome/Xvfb/Patchright at all) -- see `agentpilot/gateway/
         # role.py`'s docstring.
+        from agentpilot.placement.node_reaper import NodeReaper
+        from agentpilot.placement.placer import SessionPlacer
+        from agentpilot.session.redis_registry import RedisRegistry
+
         if self.redis is None:
             raise RuntimeError("AGENTPILOT_ROLE=gateway requires AGENTPILOT_REDIS_URL")
-        self.worker_base_url = os.environ.get("AGENTPILOT_WORKER_URL", "http://worker:8000")
         self.http_client = httpx.AsyncClient(timeout=90.0)
+        self.affinity_ttl_seconds = float(
+            os.environ.get("AGENTPILOT_AFFINITY_TTL_SECONDS", "86400")
+        )
+
+        self.placer = SessionPlacer(self.redis)
+        # A second RedisRegistry construction, gateway-side this time (the
+        # worker-side one lives in _init_worker()) -- harmless: RedisRegistry
+        # has no dependency on agentpilot.driver, and Redis dedupes
+        # registered Lua scripts by SHA, so this isn't wasted work, just
+        # used here only for the node-reaper's registry.evict() calls.
+        self._gateway_registry = RedisRegistry(self.redis)
+        self.node_reaper = NodeReaper(self.redis, self._gateway_registry)
+        self.node_reaper.start()
 
     def _init_worker(self) -> None:
+        import socket
+        import uuid
+
         from agentpilot.driver.patchright_driver import PatchrightDriver
         from agentpilot.driver.process_launcher import ProcessLauncher
         from agentpilot.identity.vault import Vault
+        from agentpilot.placement.node_registry import NodeRegistry
         from agentpilot.session.reaper import Reaper
         from agentpilot.session.redis_registry import RedisRegistry
         from agentpilot.session.registry import Registry, RegistryProtocol
         from agentpilot.spi.driver import BrowserDriver
 
+        self.node_id = os.environ.get(
+            "AGENTPILOT_NODE_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+        )
+
         self.launcher = ProcessLauncher()
         self.driver: BrowserDriver = PatchrightDriver(
             self.launcher,
             max_tabs_per_session=int(os.environ.get("AGENTPILOT_MAX_TABS_PER_SESSION", "10")),
+            node_id=self.node_id,
         )
         assert isinstance(self.driver, BrowserDriver)
 
@@ -163,6 +211,26 @@ class Wiring:
         )
         self.reaper.start()
 
+        # Fleet self-registration -- only a real `worker` (not `monolith`,
+        # which never goes through the gateway's placement/routing at all,
+        # serving `/v1/sessions/...` directly) and only when there's a
+        # shared Redis for the gateway to actually see it in.
+        self.node_registry: NodeRegistry | None = None
+        if self.role == "worker" and self.redis is not None:
+            node_addr = os.environ.get("AGENTPILOT_NODE_ADDR")
+            if not node_addr:
+                raise RuntimeError(
+                    "AGENTPILOT_ROLE=worker with AGENTPILOT_REDIS_URL set requires "
+                    "AGENTPILOT_NODE_ADDR (the address the gateway reaches this worker at)"
+                )
+            self.node_registry = NodeRegistry(
+                self.redis,
+                self.registry,
+                node_id=self.node_id,
+                addr=node_addr,
+                max_contexts=int(os.environ.get("AGENTPILOT_MAX_CONTEXTS_PER_NODE", "25")),
+            )
+
         self.vault: Vault | None = None
         vault_key = os.environ.get("AGENTPILOT_VAULT_KEY")
         if vault_key:
@@ -176,8 +244,13 @@ class Wiring:
 
     async def close(self) -> None:
         if self.role == "gateway":
+            await self.node_reaper.stop()
             await self.http_client.aclose()
         else:
+            if self.node_registry is not None:
+                # Stop registration before the reaper/driver so no new
+                # placement can land on this node mid-teardown.
+                await self.node_registry.stop()
             await self.reaper.stop()
             for session in list(self.sessions.values()):
                 await self.driver.close(session.ctx)
@@ -200,10 +273,10 @@ async def get_wiring() -> Wiring:
     plain-`def` version of this crashed every request with `RuntimeError: no
     running event loop` the first time it constructed a `Wiring` off-thread.
     `async def` dependencies run directly on the event loop instead, so
-    `create_task` has one. `_connect_api_keys()` is awaited here for the
-    same reason: opening a Postgres pool needs a real `await`, which neither
-    a plain-`def` `Depends()` callable nor `Wiring.__init__` itself (kept
-    synchronous) can do.
+    `create_task` has one. `_connect_api_keys()`/`_register_node()` are
+    awaited here for the same reason: a Postgres pool open and the
+    `node:{id}` HSET both need a real `await`, which neither a plain-`def`
+    `Depends()` callable nor `Wiring.__init__` itself (kept synchronous) can do.
     """
 
     global _wiring
@@ -211,6 +284,7 @@ async def get_wiring() -> Wiring:
         wiring = Wiring()
         try:
             await wiring._connect_api_keys()
+            await wiring._register_node()
         except BaseException:
             # Don't leave an orphaned reaper task / launcher / pool behind
             # from this failed attempt -- clean up so the *next* request

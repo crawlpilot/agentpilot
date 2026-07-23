@@ -115,7 +115,7 @@ async def test_memory_pressure_evicts_oldest_idle_first(monkeypatch: pytest.Monk
 
     # Simulate memory pressure that clears after exactly one eviction.
     pct_sequence = iter([90.0, 90.0, 40.0])
-    monkeypatch.setattr(reaper_module, "_read_meminfo_used_pct", lambda: next(pct_sequence))
+    monkeypatch.setattr(reaper_module, "read_meminfo_used_pct", lambda: next(pct_sequence))
     reaper = Reaper(registry, driver, idle_ttl_seconds=300.0, mem_pressure_watermark_pct=85.0)
 
     await reaper.scan_once()

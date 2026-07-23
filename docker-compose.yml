@@ -14,7 +14,12 @@ services:
   # gateway+worker (each with a purpose-built image) is the only process
   # topology this file offers -- `monolith` (one process, no HTTP hop to
   # itself) is still a valid `AGENTPILOT_ROLE` for non-Docker use (this repo's own
-  # test suite), just no longer a compose service.
+  # test suite), just no longer a compose service. Two worker services
+  # (worker, worker-2) so multi-worker placement is actually demonstrable
+  # locally, not just unit-tested -- each self-registers into the fleet
+  # under its own AGENTPILOT_NODE_ADDR; the gateway discovers both via Redis,
+  # not via any compose-level service name, so this isn't relying on
+  # Compose's (unreliable) DNS round-robin for scaling.
   #
   # Redis and Postgres run as compose services too (below), each on its own
   # named volume -- not host-installed. Reaching host-bound services from
@@ -68,11 +73,36 @@ services:
       AGENTPILOT_REDIS_URL: redis://redis:6379/0
       AGENTPILOT_VAULT_DIR: /var/lib/agentpilot/vault
       AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-} # unset -> vault disabled (no encryption-at-rest key configured)
+      # The address the gateway reaches *this* worker at -- required once
+      # AGENTPILOT_REDIS_URL is set (the worker self-registers into the
+      # fleet at boot; see agentpilot/placement/node_registry.py). Left
+      # unset here would mean the gateway can never place a session on this
+      # node, so wiring.py fails fast at startup instead.
+      AGENTPILOT_NODE_ADDR: http://worker:8000
+      # Left unset deliberately -- AGENTPILOT_NODE_ID defaults to hostname
+      # + a fresh uuid suffix per container start, so a restarted node never
+      # advertises a stale node_id whose addr might have changed. Don't pin
+      # this to a stable value without re-reading agentpilot/gateway/
+      # routing.py's docstring on why node_id -> addr stays a live lookup.
     depends_on:
       - detection-page
       - redis
     # No published port -- internal-only, VPC-bound, never tenant-exposed
     # per plan.md's topology; only the `gateway` service talks to it.
+
+  worker-2:
+    extends:
+      service: worker
+    volumes:
+      - profiles-2:/var/lib/agentpilot/profiles
+      - vault-2:/var/lib/agentpilot/vault
+    environment:
+      AGENTPILOT_ROLE: worker
+      AGENTPILOT_PROFILES_DIR: /var/lib/agentpilot/profiles
+      AGENTPILOT_REDIS_URL: redis://redis:6379/0
+      AGENTPILOT_VAULT_DIR: /var/lib/agentpilot/vault
+      AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-}
+      AGENTPILOT_NODE_ADDR: http://worker-2:8000
 
   gateway:
     build:

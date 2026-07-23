@@ -19,13 +19,22 @@ import json
 
 import structlog
 import websockets
-from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from websockets.asyncio.client import ClientConnection
 
 from agentpilot.auth.models import AuthedTenant
 from agentpilot.gateway.auth_deps import bearer_token, require_tenant_auth, resolve_query_api_key
-from agentpilot.gateway.routing import resolve_worker
+from agentpilot.gateway.routing import resolve_route
 from agentpilot.gateway.wiring import Wiring, get_wiring
+from agentpilot.spi.errors import NodeLost
 
 log = structlog.get_logger(__name__)
 
@@ -43,10 +52,8 @@ async def cdp_json_version_proxy(
     wiring: Wiring = Depends(get_wiring),
     authed: AuthedTenant = Depends(require_tenant_auth),
 ) -> Response:
-    worker_url = await resolve_worker(wiring, session_id)
-    resp = await wiring.http_client.get(
-        f"{worker_url}/internal/sessions/{session_id}/cdp/json/version"
-    )
+    _node_id, addr = await resolve_route(wiring, session_id, authed.tenant)
+    resp = await wiring.http_client.get(f"{addr}/internal/sessions/{session_id}/cdp/json/version")
     if resp.status_code != 200:
         return Response(
             content=resp.content, status_code=resp.status_code, media_type="application/json"
@@ -85,16 +92,20 @@ async def cdp_relay_proxy(websocket: WebSocket, session_id: str) -> None:
         return
 
     try:
-        worker_url = await resolve_worker(wiring, session_id)
-    except Exception:
-        await websocket.close(code=_NOT_FOUND, reason="no such session")
+        _node_id, addr = await resolve_route(wiring, session_id, authed.tenant)
+    except HTTPException as exc:
+        code = _UNAUTHORIZED if exc.status_code == 403 else _NOT_FOUND
+        await websocket.close(code=code, reason=str(exc.detail))
+        return
+    except NodeLost:
+        await websocket.close(code=_BAD_UPSTREAM, reason="worker node is gone")
         return
 
     # No `&api_key=...` forwarded here: same reasoning as
     # `live_view_proxy.py` -- the internal mount trusts network position, and
     # the worker's `wiring.api_keys` is a permanent empty placeholder there.
     ws_url = (
-        worker_url.replace("http://", "ws://").replace("https://", "wss://")
+        addr.replace("http://", "ws://").replace("https://", "wss://")
         + f"/internal/sessions/{session_id}/cdp"
     )
 
