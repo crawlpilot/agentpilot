@@ -112,7 +112,7 @@ async def list_sessions(
         for n in await wiring.redis.smembers("live_nodes")
     ]
 
-    async def _fetch(node_id: str) -> list[dict]:
+    async def _fetch(node_id: str) -> list[dict[str, object]]:
         try:
             addr = await resolve_node_addr(wiring, node_id)
             resp = await wiring.http_client.get(
@@ -158,7 +158,7 @@ async def execute_session(
         # by this same request) only renews the *lease*; it never touches
         # the gateway's separate session:{id} route hash.
         assert wiring.redis is not None
-        await wiring.redis.expire(session_route_key(session_id), wiring.lease_ttl_seconds)
+        await wiring.redis.expire(session_route_key(session_id), int(wiring.lease_ttl_seconds))
     return Response(
         content=resp.content, status_code=resp.status_code, media_type="application/json"
     )
