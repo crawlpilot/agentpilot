@@ -23,6 +23,7 @@ and docker-compose entirely.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -44,7 +45,7 @@ from agentpilot.gateway.wiring import reset_wiring
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI):
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await reset_wiring()
 

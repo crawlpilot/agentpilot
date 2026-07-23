@@ -16,12 +16,12 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/healthz")
-async def liveness() -> dict:
+async def liveness() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @router.get("/readyz")
-async def readiness(wiring: Wiring = Depends(get_wiring)) -> dict:
+async def readiness(wiring: Wiring = Depends(get_wiring)) -> dict[str, str]:
     return {"status": "ready"}
 
 

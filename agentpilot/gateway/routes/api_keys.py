@@ -50,6 +50,6 @@ async def list_api_keys(tenant: str, wiring: Wiring = Depends(get_wiring)) -> Ap
 
 
 @router.delete("/{key_id}")
-async def revoke_api_key(key_id: str, wiring: Wiring = Depends(get_wiring)) -> dict:
+async def revoke_api_key(key_id: str, wiring: Wiring = Depends(get_wiring)) -> dict[str, bool]:
     await wiring.api_keys.revoke(key_id)
     return {"success": True}

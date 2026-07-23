@@ -17,12 +17,15 @@ from __future__ import annotations
 import base64
 import time
 import uuid
+from collections.abc import Callable
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
+    ActionIn,
     ActionResultOut,
     ArtifactRefOut,
     AXSnapshotOut,
@@ -65,12 +68,13 @@ from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import NodeLost
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef
+from agentpilot.spi.snapshot import SnapshotNode
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["sessions"])
 
-_ACTION_CONVERTERS = {
+_ACTION_CONVERTERS: dict[type, Callable[[Any], spi_actions.Action]] = {
     NavigateActionIn: lambda a: spi_actions.NavigateAction(url=a.url, timeout_ms=a.timeout_ms),
     GoBackActionIn: lambda a: spi_actions.GoBackAction(),
     SnapshotActionIn: lambda a: spi_actions.SnapshotAction(
@@ -97,11 +101,11 @@ _ACTION_CONVERTERS = {
 }
 
 
-def _to_spi_action(action_in) -> spi_actions.Action:
+def _to_spi_action(action_in: ActionIn) -> spi_actions.Action:
     return _ACTION_CONVERTERS[type(action_in)](action_in)
 
 
-def _snapshot_node_out(node) -> SnapshotNodeOut:
+def _snapshot_node_out(node: SnapshotNode) -> SnapshotNodeOut:
     return SnapshotNodeOut(
         epoch=node.epoch,
         ref=node.ref,
@@ -292,7 +296,9 @@ async def execute_session(
 
 
 @router.delete("/{session_id}")
-async def release_session(session_id: str, wiring: Wiring = Depends(get_wiring)) -> dict:
+async def release_session(
+    session_id: str, wiring: Wiring = Depends(get_wiring)
+) -> dict[str, bool | str]:
     session = _get_session(wiring, session_id)
     requests_total.labels(tenant=session.identity.tenant, route="release_session").inc()
 
