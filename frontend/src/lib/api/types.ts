@@ -32,6 +32,7 @@ export interface SessionOut {
   name: string
   tier: string
   headful: boolean
+  enable_cdp: boolean
   node_id: string
   pid: number | null
   rss_mb: number | null

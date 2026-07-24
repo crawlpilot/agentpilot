@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ExternalLink, MoreHorizontal } from 'lucide-react'
+import { Copy, ExternalLink, MoreHorizontal } from 'lucide-react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +13,18 @@ import {
 import { SessionStateBadge } from '@/components/app/SessionStateBadge'
 import { useReleaseSession } from '@/hooks/useSessionMutations'
 import { useToast } from '@/components/ui/toast'
+import { useAuth } from '@/lib/auth/AuthContext'
+import { API_BASE_URL } from '@/lib/config'
 import type { SessionOut } from '@/lib/api/types'
+
+// Mirrors `_rewrite_ws_url` in `agentpilot/gateway/routes/cdp.py`: the CDP
+// relay is fully addressable client-side from session_id + host + api_key,
+// with no need to round-trip through `/cdp/json/version` just to display it.
+function buildCdpUrl(sessionId: string, apiKey: string): string {
+  const proto = API_BASE_URL.startsWith('https://') ? 'wss' : 'ws'
+  const host = API_BASE_URL.replace(/^https?:\/\//, '')
+  return `${proto}://${host}/v1/sessions/${sessionId}/cdp?api_key=${encodeURIComponent(apiKey)}`
+}
 
 function LeaseCountdown({ expiresAt }: { expiresAt: number | null }) {
   const [now, setNow] = useState(() => Date.now())
@@ -30,6 +41,7 @@ export function SessionsTable({ sessions }: { sessions: SessionOut[] }) {
   const navigate = useNavigate()
   const releaseSession = useReleaseSession()
   const { toast } = useToast()
+  const { apiKey } = useAuth()
 
   return (
     <Table>
@@ -42,6 +54,7 @@ export function SessionsTable({ sessions }: { sessions: SessionOut[] }) {
           <TableHead>Memory</TableHead>
           <TableHead>Lease expires</TableHead>
           <TableHead>Live</TableHead>
+          <TableHead>CDP</TableHead>
           <TableHead />
         </TableRow>
       </TableHeader>
@@ -75,6 +88,24 @@ export function SessionsTable({ sessions }: { sessions: SessionOut[] }) {
                   Live
                   <ExternalLink className="size-3.5" />
                 </a>
+              ) : (
+                <span className="text-sm text-muted-foreground">--</span>
+              )}
+            </TableCell>
+            <TableCell onClick={(e) => e.stopPropagation()}>
+              {s.enable_cdp && s.state === 'active' && apiKey ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="gap-1 text-sm"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(buildCdpUrl(s.session_id, apiKey))
+                    toast({ title: 'CDP URL copied' })
+                  }}
+                >
+                  <Copy className="size-3.5" />
+                  Copy URL
+                </Button>
               ) : (
                 <span className="text-sm text-muted-foreground">--</span>
               )}
