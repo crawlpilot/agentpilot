@@ -41,11 +41,21 @@ from agentpilot.gateway.routes import (
     live_view_proxy,
     sessions,
 )
-from agentpilot.gateway.wiring import reset_wiring
+from agentpilot.gateway.wiring import get_wiring, reset_wiring
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # `get_wiring()` is otherwise built lazily on the first request that
+    # `Depends()`s it. For a `worker`, that first-request trigger is exactly
+    # what starts `NodeRegistry`'s self-registration heartbeat -- but a
+    # worker is internal-only (never gets a stray tenant request) and
+    # nothing else pings it, so without this, a freshly booted worker never
+    # writes itself into `live_nodes` and every placement 503s with
+    # CAPACITY_EXHAUSTED until *something* happens to hit it. Eager-init at
+    # startup instead, for every role, matching this codebase's existing
+    # fail-fast-at-boot convention (e.g. AGENTPILOT_NODE_ADDR's check).
+    await get_wiring()
     yield
     await reset_wiring()
 

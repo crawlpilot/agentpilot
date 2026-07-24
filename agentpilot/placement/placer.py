@@ -44,7 +44,7 @@ class SessionPlacer:
         try:
             node_id, outcome = await self._place(
                 keys=["live_nodes", f"active:{identity.slug()}"],
-                args=[identity.slug(), affinity_ttl_seconds],
+                args=[identity.slug(), int(affinity_ttl_seconds)],
             )
         except ResponseError as exc:
             if "IDENTITY_ACTIVE_ELSEWHERE" in str(exc):
