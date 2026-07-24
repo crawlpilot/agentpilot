@@ -109,6 +109,15 @@ curl -X POST http://localhost:8000/v1/sessions \
   -d '{"tenant":"dev","domain":"example.com","name":"my-session","tier":"auto"}'
 ```
 
+### Local test credentials
+
+For quick manual testing, set `AGENTPILOT_ADMIN_TOKEN=dev-admin-token` in `.env` (any fixed string
+works locally — it isn't a real secret, just what gates `/v1/api-keys`) and mint a tenant key
+against it with the exact command from step 5 above. The minted `bk_live_...` key isn't stable
+across environments: it's a row in *this* Postgres volume, so it stops working the moment the
+volume is wiped (`docker compose down -v`, a fresh `postgres-data` volume, etc.) — re-run the mint
+command to get a new one rather than hardcoding an old key anywhere.
+
 ### Tearing down
 
 ```bash

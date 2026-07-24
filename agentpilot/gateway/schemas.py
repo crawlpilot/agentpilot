@@ -24,7 +24,7 @@ class SessionOpenRequest(BaseModel):
     headful: bool = False
     block_popups: bool = False
     live_view: bool = False
-    enable_cdp: bool = False
+    enable_cdp: bool = True
 
 
 class SessionMetadata(BaseModel):

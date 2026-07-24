@@ -39,7 +39,7 @@ export function OpenSessionSheet({ trigger }: { trigger?: React.ReactNode }) {
     if (nextErrors.domain || nextErrors.name) return
 
     openSession.mutate(
-      { domain: domain.trim(), name: name.trim(), tier, headful, live_view: true },
+      { domain: domain.trim(), name: name.trim(), tier, headful, live_view: true, enable_cdp: true },
       {
         onSuccess: (resp) => {
           toast({ title: 'Session opened', description: resp.session_id })

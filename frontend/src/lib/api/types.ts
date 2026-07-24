@@ -12,6 +12,7 @@ export interface SessionOpenRequest {
   headful?: boolean
   block_popups?: boolean
   live_view?: boolean
+  enable_cdp?: boolean
 }
 
 export interface SessionMetadata {
