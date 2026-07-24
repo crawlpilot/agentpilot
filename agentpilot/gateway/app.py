@@ -39,6 +39,7 @@ from agentpilot.gateway.routes import (
     health,
     live_view,
     live_view_proxy,
+    nodes,
     sessions,
 )
 from agentpilot.gateway.wiring import get_wiring, reset_wiring
@@ -93,3 +94,4 @@ if _role == "gateway":
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
+    app.include_router(nodes.router, prefix="/v1/nodes", dependencies=[Depends(require_admin)])

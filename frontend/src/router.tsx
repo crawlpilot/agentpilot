@@ -7,6 +7,7 @@ import { SessionDetailPage } from '@/routes/SessionDetailPage'
 import { LiveViewPage } from '@/routes/LiveViewPage'
 import { PlaygroundPage } from '@/routes/PlaygroundPage'
 import { ApiKeysPage } from '@/routes/ApiKeysPage'
+import { NodesPage } from '@/routes/NodesPage'
 
 export const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
       { path: 'sessions/:sessionId', element: <SessionDetailPage /> },
       { path: 'playground', element: <PlaygroundPage /> },
       { path: 'api-keys', element: <ApiKeysPage /> },
+      { path: 'nodes', element: <NodesPage /> },
     ],
   },
 ])

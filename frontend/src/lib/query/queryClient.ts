@@ -13,4 +13,5 @@ export const queryKeys = {
   health: ['health'] as const,
   sessions: ['sessions'] as const,
   apiKeys: (tenant: string) => ['api-keys', tenant] as const,
+  nodes: ['nodes'] as const,
 }

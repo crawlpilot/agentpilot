@@ -262,6 +262,33 @@ class SessionListOut(BaseModel):
     sessions: list[SessionOut]
 
 
+# --- fleet (enterprise UI's nodes dashboard) ---
+
+
+class NodeOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str
+    addr: str | None
+    started_at: float | None
+    """Unix timestamp from `node:{id}`'s HSET, written once at the worker's boot."""
+    live: bool
+    """Whether `capacity:{id}` currently exists (its 10s TTL, refreshed every
+    2s, is the actual liveness signal -- `live_nodes` SET membership alone is
+    never trusted, same rule `place_session.lua`/`NodeReaper` follow). A node
+    can appear here with `live=False` in the narrow window before the next
+    `NodeReaper` cycle (every 5s) reaps it."""
+    max_contexts: int | None
+    active: int | None
+    idle: int | None
+    mem_used_pct: float | None
+    cpu_used_pct: float | None
+
+
+class NodeListOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nodes: list[NodeOut]
+
+
 # --- API keys (enterprise UI control plane, admin-gated) ---
 
 

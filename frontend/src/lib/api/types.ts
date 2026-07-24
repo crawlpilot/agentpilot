@@ -44,6 +44,24 @@ export interface SessionListOut {
   sessions: SessionOut[]
 }
 
+// --- fleet (nodes dashboard) ---
+
+export interface NodeOut {
+  node_id: string
+  addr: string | null
+  started_at: number | null
+  live: boolean
+  max_contexts: number | null
+  active: number | null
+  idle: number | null
+  mem_used_pct: number | null
+  cpu_used_pct: number | null
+}
+
+export interface NodeListOut {
+  nodes: NodeOut[]
+}
+
 // --- actions (discriminated union mirroring schemas.py's ActionIn) ---
 
 export interface NavigateAction {

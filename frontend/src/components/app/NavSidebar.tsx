@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
-import { Globe, KeyRound, LayoutDashboard, PlaySquare } from 'lucide-react'
+import { Globe, KeyRound, LayoutDashboard, PlaySquare, Server } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/sessions', label: 'Sessions', icon: Globe },
   { to: '/playground', label: 'Playground', icon: PlaySquare },
+  { to: '/nodes', label: 'Nodes', icon: Server },
   { to: '/api-keys', label: 'API Keys', icon: KeyRound },
 ]
 
