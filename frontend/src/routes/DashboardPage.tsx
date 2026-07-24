@@ -1,9 +1,12 @@
 import { useSessionsList } from '@/hooks/useSessionsList'
 import { StatCard } from '@/components/app/StatCard'
 import { OpenSessionSheet } from '@/components/app/OpenSessionSheet'
+import { EmptyState } from '@/components/app/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuth } from '@/lib/auth/AuthContext'
 
 export function DashboardPage() {
+  const { isAuthed } = useAuth()
   const { data, isLoading } = useSessionsList()
   const sessions = data?.sessions ?? []
   const active = sessions.filter((s) => s.state === 'active').length
@@ -22,7 +25,12 @@ export function DashboardPage() {
         <OpenSessionSheet />
       </div>
 
-      {isLoading ? (
+      {!isAuthed ? (
+        <EmptyState
+          title="Tenant API key required"
+          description="Sign in with a tenant API key to see session stats -- try Nodes or API Keys instead."
+        />
+      ) : isLoading ? (
         <div className="grid grid-cols-3 gap-4">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-24" />

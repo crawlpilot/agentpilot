@@ -4,8 +4,10 @@ import { SessionsTable } from '@/components/app/SessionsTable'
 import { OpenSessionSheet } from '@/components/app/OpenSessionSheet'
 import { EmptyState } from '@/components/app/EmptyState'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuth } from '@/lib/auth/AuthContext'
 
 export function SessionsListPage() {
+  const { isAuthed } = useAuth()
   const { data, isLoading, isError } = useSessionsList()
   const sessions = data?.sessions ?? []
 
@@ -21,7 +23,13 @@ export function SessionsListPage() {
         <OpenSessionSheet />
       </div>
 
-      {isLoading ? (
+      {!isAuthed ? (
+        <EmptyState
+          icon={<Globe className="size-8" />}
+          title="Tenant API key required"
+          description="Sign in with a tenant API key to view sessions -- an admin token alone doesn't carry tenant scope."
+        />
+      ) : isLoading ? (
         <div className="flex flex-col gap-2">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-12" />

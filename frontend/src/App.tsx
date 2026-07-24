@@ -4,10 +4,14 @@ import { TopBar } from '@/components/app/TopBar'
 import { useAuth } from '@/lib/auth/AuthContext'
 
 function App() {
-  const { isAuthed } = useAuth()
+  const { isAuthed, isAdmin } = useAuth()
   const location = useLocation()
 
-  if (!isAuthed) {
+  // An admin-token-only session (no tenant API key) is a valid way into the
+  // shell -- the admin-gated pages (API Keys, Nodes) never touch `apiKey` at
+  // all. Tenant-only pages (Dashboard/Sessions/Playground) each guard
+  // themselves on `isAuthed` specifically, not on reaching this shell.
+  if (!isAuthed && !isAdmin) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
 

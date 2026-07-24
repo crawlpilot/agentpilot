@@ -70,6 +70,15 @@ export function PlaygroundPage() {
     setPickerOpen(false)
   }
 
+  if (!apiKey) {
+    return (
+      <EmptyState
+        title="Tenant API key required"
+        description="Sign in with a tenant API key to run sessions -- an admin token alone doesn't carry tenant scope."
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div>
