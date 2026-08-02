@@ -48,6 +48,23 @@ async def _pump_input(websocket: WebSocket, upstream: ClientConnection) -> None:
         await upstream.send(msg)
 
 
+async def _watch_disconnect(websocket: WebSocket) -> None:
+    """`view` mode's only await is `_pump_frames`, which blocks on the
+    *upstream* (worker) side -- it has no way to notice the *downstream*
+    (browser) side going away. Without this, a browser that disconnects
+    before the worker ever sends a frame leaves `async with
+    websockets.connect(ws_url)` never exiting, so the proxy's upstream
+    connection to the worker never closes either -- which is exactly what
+    `routes/live_view.py`'s own `_watch_disconnect` needs to see to
+    decrement its reference-counted screencast. One leaked hop here
+    silently reproduces that same leak one layer up."""
+
+    while True:
+        msg = await websocket.receive()
+        if msg["type"] == "websocket.disconnect":
+            return
+
+
 @router.websocket("/{session_id}/live-view")
 async def live_view_proxy(
     websocket: WebSocket, session_id: str, mode: str = "view", page_id: str | None = None
@@ -92,7 +109,14 @@ async def live_view_proxy(
                 if mode == "interact":
                     await _pump_input(websocket, upstream)
                 else:
-                    await sender
+                    watcher = asyncio.create_task(_watch_disconnect(websocket))
+                    _done, pending = await asyncio.wait(
+                        {sender, watcher}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.gather(*pending, return_exceptions=True)
             except WebSocketDisconnect:
                 pass
             finally:

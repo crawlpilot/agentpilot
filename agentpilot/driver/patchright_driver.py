@@ -135,6 +135,9 @@ class _Page:
     death_reason: str | None = None
     cdp_session: CDPSession | None = None
     frame_queue: asyncio.Queue[LiveViewFrame] | None = None
+    frame_queue_refs: int = 0
+    """Count of live-view websocket connections currently sharing
+    `frame_queue` -- see `start_screencast`/`stop_screencast`."""
     ref_cache: RefCache = field(default_factory=RefCache)
 
 
@@ -734,6 +737,7 @@ class PatchrightDriver:
         cctx = self._require_context(ctx)
         live = self._require_page(cctx, page_id)
         if live.frame_queue is not None:
+            live.frame_queue_refs += 1
             return live.frame_queue
 
         queue: asyncio.Queue[LiveViewFrame] = asyncio.Queue(maxsize=2)
@@ -748,14 +752,37 @@ class PatchrightDriver:
         cdp.on("Page.screencastFrame", lambda params: asyncio.create_task(_ack_and_enqueue(params)))
         await cdp.send("Page.startScreencast", SCREENCAST_START_PARAMS)
 
+        # Only set once the screencast is confirmed started -- if `new_cdp_session`
+        # or `startScreencast` raised above, `frame_queue`/`frame_queue_refs`
+        # are left untouched rather than half-initialized.
         live.cdp_session = cdp
         live.frame_queue = queue
+        live.frame_queue_refs = 1
         return queue
 
     async def stop_screencast(self, ctx: ContextRef, page_id: str | None = None) -> None:
+        """Reference-counted, not unconditional: `routes/live_view.py` calls
+        this from every websocket's own `finally`, but `useLiveView`'s
+        reconnect-on-`page_id`-resolution dance (mount with `page_id=None`,
+        then immediately reconnect once the real id is known) means a second
+        connection routinely calls `start_screencast` again -- and reuses
+        this same queue/cdp_session, per the check above -- before the first
+        connection's teardown runs. Tearing down unconditionally here used to
+        detach the *shared* `cdp_session` and null out `frame_queue` out from
+        under that second, still-open connection, orphaning its `_send_frames`
+        loop on a queue nothing would ever `put` to again: the live view
+        would show "Connecting..." forever despite a healthy, `(open)`
+        websocket. Only the last consumer's `stop_screencast` may actually
+        tear anything down.
+        """
+
         cctx = self._require_context(ctx)
         live = self._require_page(cctx, page_id)
         if live.cdp_session is None:
+            return
+        if live.frame_queue_refs > 0:
+            live.frame_queue_refs -= 1
+        if live.frame_queue_refs > 0:
             return
         try:
             await live.cdp_session.send("Page.stopScreencast")

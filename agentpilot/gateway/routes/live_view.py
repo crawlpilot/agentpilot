@@ -89,6 +89,24 @@ async def _receive_input(
             await driver.dispatch_input(ctx, event, page_id)
 
 
+async def _watch_disconnect(websocket: WebSocket) -> None:
+    """`view` mode never expects inbound messages, but a client-initiated
+    close is *only* ever surfaced through `receive()` -- without this,
+    `await sender` alone can block forever once `_send_frames`' `queue.get()`
+    has nothing left to feed it (the client is long gone, or the screencast
+    never produced a frame to begin with). That leaves this connection's
+    `finally: stop_screencast()` never running, which -- since
+    `start_screencast`/`stop_screencast` are reference-counted precisely so
+    a reconnect can share an in-flight screencast -- permanently leaks this
+    connection's reference and wedges every future connection to the same
+    page behind a queue nothing will ever feed again."""
+
+    while True:
+        msg = await websocket.receive()
+        if msg["type"] == "websocket.disconnect":
+            return
+
+
 @router.websocket("/{session_id}/live-view")
 async def live_view(
     websocket: WebSocket,
@@ -121,7 +139,12 @@ async def live_view(
         if mode == "interact":
             await _receive_input(websocket, driver, session.ctx, page_id)
         else:
-            await sender
+            watcher = asyncio.create_task(_watch_disconnect(websocket))
+            _done, pending = await asyncio.wait({sender, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.gather(*pending, return_exceptions=True)
     except WebSocketDisconnect:
         pass
     finally:

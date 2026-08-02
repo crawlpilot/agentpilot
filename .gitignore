@@ -19,3 +19,4 @@ __pycache__/
 opencode.jsonc
 *.bak
 scripts/node_modules/*
+scripts/cdp_demo_screenshots/*
