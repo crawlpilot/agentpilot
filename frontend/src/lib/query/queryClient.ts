@@ -14,4 +14,5 @@ export const queryKeys = {
   sessions: ['sessions'] as const,
   apiKeys: (tenant: string) => ['api-keys', tenant] as const,
   nodes: ['nodes'] as const,
+  cdpInfo: (sessionId: string) => ['cdp-info', sessionId] as const,
 }

@@ -299,6 +299,22 @@ class PatchrightDriver:
         if headful:
             self._launcher.ensure_xvfb()
 
+        # Chrome's own `Singleton{Lock,Cookie,Socket}` guard against two
+        # live processes sharing one profile dir concurrently -- redundant
+        # here, since `Registry.acquire()` already gives each identity
+        # exclusive ownership of its `profile_dir` fleet-wide, so nothing
+        # legitimate is ever running against it when `open()` is called.
+        # Left behind by a process that never exited gracefully (a worker
+        # container recreated under a new hostname, a hard kill), the lock
+        # symlink's target hostname never matches again -- Chrome then
+        # refuses to launch ("profile appears to be in use by another
+        # process") forever, since nothing else ever clears it. Observed
+        # directly: several `profile_dir`s in the dev fleet permanently
+        # wedged this way after a worker container outlived the hostname
+        # its profiles were locked under.
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            (profile_dir / name).unlink(missing_ok=True)
+
         cdp_port: int | None = None
         launch_args: list[str] = []
         if enable_cdp:

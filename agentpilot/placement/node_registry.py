@@ -110,6 +110,22 @@ class NodeRegistry:
         cpu_used_pct = read_cpu_used_pct()
 
         async with self._redis.pipeline() as pipe:
+            # `node:{id}` (addr, no TTL) is re-asserted on every heartbeat,
+            # not just once at boot in `register()`: a node that briefly
+            # missed its `capacity:{id}` TTL gets reaped (`NodeReaper`
+            # deletes both `capacity:{id}` *and* `node:{id}`), but this loop
+            # never stops and unconditionally re-adds `live_nodes` +
+            # `capacity:{id}` on the very next tick either way -- without
+            # re-asserting `node:{id}` here too, that self-heal was a lie:
+            # the node looked live (`live_nodes`/`capacity:{id}` present)
+            # while `resolve_node_addr()` kept raising `NodeLost` for it
+            # forever, since nothing ever wrote `node:{id}` again short of a
+            # full process restart. Observed directly: both dev workers
+            # stuck exactly in that state after a single reap, permanently
+            # unroutable despite `docker ps` showing them healthy.
+            pipe.hset(
+                f"node:{self._node_id}", mapping={"addr": self._addr, "started_at": time.time()}
+            )
             pipe.hset(
                 f"capacity:{self._node_id}",
                 mapping={

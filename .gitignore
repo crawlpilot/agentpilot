@@ -18,3 +18,4 @@ __pycache__/
 .vscode/mcp.json
 opencode.jsonc
 *.bak
+scripts/node_modules/*

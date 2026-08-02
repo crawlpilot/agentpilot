@@ -45,6 +45,20 @@ export interface SessionListOut {
   sessions: SessionOut[]
 }
 
+// --- CDP discovery (routes/cdp.py's `GET .../cdp/json/version` -- Chrome's
+// own `/json/version` shape verbatim, field names included, so any
+// off-the-shelf CDP client that already knows how to read a real browser's
+// discovery doc reads this one identically) ---
+
+export interface CdpDiscoveryOut {
+  Browser: string
+  'Protocol-Version': string
+  'User-Agent': string
+  'V8-Version': string
+  'WebKit-Version': string
+  webSocketDebuggerUrl: string
+}
+
 // --- fleet (nodes dashboard) ---
 
 export interface NodeOut {

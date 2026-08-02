@@ -1,0 +1,9 @@
+{
+  "name": "agentpilot-cdp-validate-node",
+  "private": true,
+  "description": "Node-side half of validate_cdp.py -- proves the exposed CDP endpoint works with real Puppeteer, not just Playwright/our own driver. Run `npm install` here once before using --admin-token/--api-key with scripts/validate_cdp.py.",
+  "type": "module",
+  "dependencies": {
+    "puppeteer-core": "^23"
+  }
+}

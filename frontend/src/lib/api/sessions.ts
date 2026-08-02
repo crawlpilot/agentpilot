@@ -1,5 +1,12 @@
 import { apiRequest } from './client'
-import type { ActionResult, ExecuteRequest, SessionListOut, SessionOpenRequest, SessionOpenResponse } from './types'
+import type {
+  ActionResult,
+  CdpDiscoveryOut,
+  ExecuteRequest,
+  SessionListOut,
+  SessionOpenRequest,
+  SessionOpenResponse,
+} from './types'
 
 export function openSession(token: string, req: SessionOpenRequest) {
   return apiRequest<SessionOpenResponse>('/v1/sessions', { method: 'POST', body: req, token })
@@ -15,6 +22,10 @@ export function executeSession(token: string, sessionId: string, req: ExecuteReq
     body: req,
     token,
   })
+}
+
+export function getCdpInfo(token: string, sessionId: string) {
+  return apiRequest<CdpDiscoveryOut>(`/v1/sessions/${sessionId}/cdp/json/version`, { token })
 }
 
 export function releaseSession(token: string, sessionId: string) {
