@@ -441,6 +441,99 @@ class AgentRunStatusResponse(BaseModel):
     next: str | None
 
 
+# --- recipes (Phase 2: selector-generation & self-healing data collection --
+# routes/recipes.py) ---
+
+
+class RecipeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    name: str
+    url: str
+    field_schema: dict[str, Any]
+    """The caller's data contract -- `{field_name: {type: "scalar"|"array",
+    description, item_schema?}}`, see `agentpilot.recipe.schema.FieldSpec`."""
+    schedule_interval_seconds: float | None = None
+    """`None` (the default) means on-demand only -- set to enqueue a
+    `replay` run automatically every N seconds via `RecipeSchedulerLoop`."""
+
+
+class RecipeCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipe_id: str
+    build_run_id: str
+
+
+class RecipeOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipe_id: str
+    tenant: str
+    name: str
+    url_pattern: str
+    field_schema: dict[str, Any]
+    version: int
+    global_setup: list[dict[str, Any]]
+    field_groups: list[dict[str, Any]]
+    health_status: Literal["healthy", "degraded", "broken"]
+    last_verified_at: str | None
+    last_run_at: str | None
+    schedule_interval_seconds: float | None
+    created_at: str
+    updated_at: str
+
+
+class RecipeGetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: RecipeOut
+
+
+class RecipeRunOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    recipe_id: str
+    tenant: str
+    kind: Literal["build", "replay", "heal", "codegen"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    data: dict[str, Any] | None
+    field_failures: dict[str, Any] | None
+    error: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+
+
+class RecipeRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: RecipeRunOut
+
+
+class RecipeRunQueuedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    run_id: str
+
+
+class RecipeVersionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int
+    diff_summary: str | None
+    created_at: str
+
+
+class RecipeVersionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    versions: list[RecipeVersionOut]
+
+
+class RecipeCodegenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = "python-playwright"
+
+
 # --- action results ---
 
 

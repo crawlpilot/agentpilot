@@ -44,12 +44,15 @@ if TYPE_CHECKING:
     # even though agentpilot.jobs.worker_loop doesn't touch agentpilot.driver
     # and so isn't *required* to be deferred by that contract specifically.
     from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
+    from agentpilot.jobs.recipe_scheduler_loop import RecipeSchedulerLoop
+    from agentpilot.jobs.recipe_worker_loop import RecipeWorkerLoop
     from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
+from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
 from agentpilot.session.interactive import InteractiveSession
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -113,6 +116,9 @@ class Wiring:
         self.jobs_store: PostgresJobStore | None = None
         self.agent_store: PostgresAgentStore | None = None
         """Same connect/role rules as `jobs_store` -- see `_connect_agent_store()`."""
+        self.recipe_store: PostgresRecipeStore | None = None
+        """Same connect/role rules as `jobs_store`/`agent_store` -- see
+        `_connect_recipe_store()`."""
 
         if self.role == "gateway":
             self._init_gateway()
@@ -153,6 +159,14 @@ class Wiring:
 
         if self._database_url:
             self.agent_store = await PostgresAgentStore.connect(self._database_url)
+
+    async def _connect_recipe_store(self) -> None:
+        """Same rules as `_connect_agent_store()`: monolith/gateway serve
+        `/v1/recipes` directly, worker (and monolith again) needs it for
+        `_start_recipe_worker_loop()`/`_start_recipe_scheduler_loop()`."""
+
+        if self._database_url:
+            self.recipe_store = await PostgresRecipeStore.connect(self._database_url)
 
     async def _register_node(self) -> None:
         """`NodeRegistry.register()` (the `node:{id}` HSET) needs a real
@@ -293,6 +307,9 @@ class Wiring:
         self.crawl_worker_loop: CrawlWorkerLoop | None = None
         self.agent_worker_loop: AgentWorkerLoop | None = None
         """Same two-step placeholder-then-replace reason as `crawl_worker_loop`."""
+        self.recipe_worker_loop: RecipeWorkerLoop | None = None
+        self.recipe_scheduler_loop: RecipeSchedulerLoop | None = None
+        """Same two-step placeholder-then-replace reason as `crawl_worker_loop`."""
 
     async def _start_crawl_worker_loop(self) -> None:
         """Only worker/monolith have a real local driver+registry to run
@@ -336,6 +353,36 @@ class Wiring:
         )
         self.agent_worker_loop.start()
 
+    async def _start_recipe_worker_loop(self) -> None:
+        """Same rules as `_start_agent_worker_loop()`."""
+
+        if self.role not in ("worker", "monolith") or self.recipe_store is None:
+            return
+        from agentpilot.jobs.recipe_worker_loop import RecipeWorkerLoop
+
+        self.recipe_worker_loop = RecipeWorkerLoop(
+            self.recipe_store,
+            self.registry,
+            self.driver,
+            self.profiles_root,
+            self.proxy_pinner,
+            lease_ttl_seconds=self.lease_ttl_seconds,
+        )
+        self.recipe_worker_loop.start()
+
+    async def _start_recipe_scheduler_loop(self) -> None:
+        """The minimal internal per-recipe scheduler -- needs no driver at
+        all (it only enqueues `recipe_runs` rows), but stays folded into
+        worker/monolith same as the other loops, for one consistent "who
+        runs background loops" story."""
+
+        if self.role not in ("worker", "monolith") or self.recipe_store is None:
+            return
+        from agentpilot.jobs.recipe_scheduler_loop import RecipeSchedulerLoop
+
+        self.recipe_scheduler_loop = RecipeSchedulerLoop(self.recipe_store)
+        self.recipe_scheduler_loop.start()
+
     async def close(self) -> None:
         if self.role == "gateway":
             await self.node_reaper.stop()
@@ -352,6 +399,10 @@ class Wiring:
                 await self.crawl_worker_loop.stop()
             if self.agent_worker_loop is not None:
                 await self.agent_worker_loop.stop()
+            if self.recipe_worker_loop is not None:
+                await self.recipe_worker_loop.stop()
+            if self.recipe_scheduler_loop is not None:
+                await self.recipe_scheduler_loop.stop()
             await self.reaper.stop()
             for session in list(self.sessions.values()):
                 await self.driver.close(session.ctx)
@@ -363,6 +414,8 @@ class Wiring:
             await self.jobs_store.close()
         if self.agent_store is not None:
             await self.agent_store.close()
+        if self.recipe_store is not None:
+            await self.recipe_store.close()
         if self.redis is not None:
             await self.redis.aclose()
 
@@ -393,6 +446,9 @@ async def get_wiring() -> Wiring:
             await wiring._start_crawl_worker_loop()
             await wiring._connect_agent_store()
             await wiring._start_agent_worker_loop()
+            await wiring._connect_recipe_store()
+            await wiring._start_recipe_worker_loop()
+            await wiring._start_recipe_scheduler_loop()
             await wiring._register_node()
         except BaseException:
             # Don't leave an orphaned reaper task / launcher / pool behind

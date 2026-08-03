@@ -56,6 +56,7 @@ from agentpilot.gateway.routes import (
     live_view,
     live_view_proxy,
     nodes,
+    recipes,
     scrape,
     scrape_proxy,
     sessions,
@@ -113,6 +114,10 @@ if _role == "monolith":
     # agentpilot.driver either (agentpilot.jobs.agent_worker_loop does the
     # actual browsing, as a background task, not through this route at all).
     app.include_router(agent_runs.router, prefix="/v1/agent/runs")
+    # Same reasoning again -- recipes.router's routes each declare their own
+    # Depends(require_tenant_auth); run CRUD never touches agentpilot.driver
+    # either (agentpilot.jobs.recipe_worker_loop does the actual browsing).
+    app.include_router(recipes.router, prefix="/v1/recipes")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
@@ -140,6 +145,8 @@ if _role == "gateway":
     app.include_router(crawl.router, prefix="/v1/crawl")
     # Same router as the monolith mount above, same reason.
     app.include_router(agent_runs.router, prefix="/v1/agent/runs")
+    # Same router as the monolith mount above, same reason.
+    app.include_router(recipes.router, prefix="/v1/recipes")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )

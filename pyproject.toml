@@ -154,6 +154,23 @@ name = "jobs -> agent -> session -> llm -> spi"
 type = "layers"
 layers = ["agentpilot.jobs", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
 
+# agentpilot.recipe (Phase 2: selector-generation/self-healing recipes) sits
+# between gateway/jobs and agentpilot.agent -- it orchestrates run_agent_loop
+# calls (build.py/heal.py) and drives replay (replay.py/dispatch.py) via
+# agentpilot.session.interactive directly, but never touches agentpilot.driver
+# itself. Persistence + the worker/scheduler loops live in agentpilot.jobs
+# (recipe_store.py/recipe_worker_loop.py/recipe_scheduler_loop.py), the same
+# precedent agent_store.py/agent_worker_loop.py already set for agentpilot.agent.
+[[tool.importlinter.contracts]]
+name = "gateway -> recipe -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.recipe", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> recipe -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.recipe", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
 # agentpilot.jobs (the async job queue behind /v1/crawl and /v1/batch/scrape)
 # is a second top-level consumer of agentpilot.placement, alongside
 # agentpilot.gateway -- the same shape placement already supports, not a
@@ -221,6 +238,7 @@ source_modules = [
     "agentpilot.jobs",
     "agentpilot.crawl",
     "agentpilot.agent",
+    "agentpilot.recipe",
 ]
 forbidden_modules = ["agentpilot.driver"]
 # routes/app reach the driver only *through* agentpilot.gateway.wiring (the
