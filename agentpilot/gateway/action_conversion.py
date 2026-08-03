@@ -40,6 +40,7 @@ _ACTION_CONVERTERS: dict[type, Callable[[Any], spi_actions.Action]] = {
         viewport_only=a.viewport_only,
         max_nodes=a.max_nodes,
         roles=tuple(a.roles) if a.roles is not None else None,
+        with_bbox=a.with_bbox,
     ),
     ExtractActionIn: lambda a: spi_actions.ExtractAction(
         format=a.format,

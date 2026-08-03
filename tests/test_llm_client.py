@@ -8,7 +8,12 @@ import json
 import httpx
 import pytest
 
-from agentpilot.llm.client import LLMConfig, LLMNotConfiguredError, chat_json
+from agentpilot.llm.client import (
+    LLMConfig,
+    LLMNotConfiguredError,
+    chat_json,
+    chat_json_conversation,
+)
 
 CONFIG = LLMConfig(
     api_key="test-key", base_url="https://llm.test/v1", model="test-model", timeout_s=5.0
@@ -83,3 +88,29 @@ async def test_chat_json_without_schema_uses_json_object_response_format(monkeyp
 
     result = await chat_json("system", "user", config=CONFIG)
     assert result == {}
+
+
+async def test_chat_json_conversation_sends_the_full_message_list_verbatim(monkeypatch) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_async_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 1 reply"},
+        {"role": "user", "content": "turn 2"},
+    ]
+    result = await chat_json_conversation(messages, config=CONFIG)
+
+    assert result == {}
+    assert captured["body"]["messages"] == messages

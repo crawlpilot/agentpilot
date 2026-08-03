@@ -133,6 +133,27 @@ name = "session -> llm -> spi"
 type = "layers"
 layers = ["agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
 
+# agentpilot.agent (the LLM-driven web-agent step loop) sits between gateway
+# and session, the same shape jobs/crawl already have -- it drives a browser
+# only via agentpilot.session.interactive (never agentpilot.driver directly)
+# and calls agentpilot.llm for its own multi-turn tool-calling loop, skipping
+# over session directly for that (layers contracts permit importing any
+# lower layer, not just the immediately adjacent one).
+[[tool.importlinter.contracts]]
+name = "gateway -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+# `agentpilot.jobs.agent_store`/`agentpilot.jobs.agent_worker_loop` (the
+# Postgres-backed agent-run queue + its processing loop) sit *above*
+# agentpilot.agent, the same shape jobs.worker_loop already has over
+# session/crawl (jobs claims a row, then reaches down into the layer that
+# does the actual work -- ephemeral scrapes there, `run_agent_loop` here).
+[[tool.importlinter.contracts]]
+name = "jobs -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
 # agentpilot.jobs (the async job queue behind /v1/crawl and /v1/batch/scrape)
 # is a second top-level consumer of agentpilot.placement, alongside
 # agentpilot.gateway -- the same shape placement already supports, not a
@@ -199,6 +220,7 @@ source_modules = [
     "agentpilot.auth",
     "agentpilot.jobs",
     "agentpilot.crawl",
+    "agentpilot.agent",
 ]
 forbidden_modules = ["agentpilot.driver"]
 # routes/app reach the driver only *through* agentpilot.gateway.wiring (the

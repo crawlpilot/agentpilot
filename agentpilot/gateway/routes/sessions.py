@@ -18,7 +18,6 @@ import base64
 import time
 import uuid
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agentpilot.gateway.action_conversion import to_spi_action
@@ -27,6 +26,7 @@ from agentpilot.gateway.schemas import (
     ActionResultOut,
     ArtifactRefOut,
     AXSnapshotOut,
+    BoundingBoxOut,
     ExecuteRequest,
     SessionListOut,
     SessionMetadata,
@@ -37,32 +37,37 @@ from agentpilot.gateway.schemas import (
     TabInfoOut,
 )
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
-from agentpilot.identity.profile_store import resolve_profile_dir
 from agentpilot.observability.metrics import (
     execute_duration_seconds,
     requests_total,
     session_open_duration_seconds,
 )
+from agentpilot.session.interactive import (
+    execute_on_session,
+    open_interactive_session,
+    release_interactive_session,
+)
 from agentpilot.session.reaper import _read_pid_rss_mb
 from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.identity import IdentityKey, ProfileKind
-from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.snapshot import SnapshotNode
-
-log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["sessions"])
 
 
 def _snapshot_node_out(node: SnapshotNode) -> SnapshotNodeOut:
+    bbox = (
+        BoundingBoxOut(x=node.bbox.x, y=node.bbox.y, width=node.bbox.width, height=node.bbox.height)
+        if node.bbox
+        else None
+    )
     return SnapshotNodeOut(
         epoch=node.epoch,
         ref=node.ref,
         role=node.role,
         name=node.name,
         children=[_snapshot_node_out(c) for c in node.children],
+        bbox=bbox,
     )
 
 
@@ -116,70 +121,35 @@ async def open_session(
     if authed is not None and authed.tenant != req.tenant:
         raise HTTPException(status_code=403, detail="tenant mismatch: api key does not own tenant")
 
-    # kind=DEFAULT (not the dataclass's own TEMPORARY default): an
-    # interactive, caller-named identity is exactly what `ProfileKind
-    # .is_permanent` means -- kept warm across release/reopen, vault-backed.
-    # `/v1/scrape` (`routes/scrape.py`) is the one caller that wants the
-    # actual default (`TEMPORARY`, a one-shot identity it mints itself with
-    # a random `name`), which is why this is set explicitly here rather than
-    # left to fall through -- `identity.is_temporary` only means anything as
-    # a signal if session-open identities don't all pick it up by accident.
-    identity = IdentityKey(
-        tenant=req.tenant, domain=req.domain, name=req.name, kind=ProfileKind.DEFAULT
-    )
-    owner = f"{req.tenant}:{req.name}"
     requests_total.labels(tenant=req.tenant, route="open_session").inc()
 
-    async def _opener() -> ContextRef:
-        profile_dir = resolve_profile_dir(wiring.profiles_root, identity)
-        # A profile dir existing *before* this call is exactly "warm dir" in
-        # vault.py's restore-trigger sense -- restore_state() must never run
-        # against it (see Vault's module docstring on the persistent-dir
-        # conflict). Checked before mkdir(), since mkdir() would otherwise
-        # make every open look "already existed".
-        is_fresh = not profile_dir.exists()
-        profile_dir.mkdir(parents=True, exist_ok=True)
-
-        proxy = await wiring.proxy_pinner.get_or_assign(identity) if wiring.proxy_pinner else None
-        ctx = await wiring.driver.open(
-            identity,
-            profile_dir,
-            proxy,
-            req.headful,
-            EgressPolicy(),
-            req.block_popups,
-            req.enable_cdp,
-        )
-
-        if is_fresh and wiring.vault is not None:
-            state = wiring.vault.load(identity)
-            if state is not None:
-                await wiring.driver.restore_state(ctx, state)
-        return ctx
-
+    session_id = str(uuid.uuid4())
     started = time.monotonic()
     with session_open_duration_seconds.time():
-        ctx, lease = await wiring.registry.acquire(
-            identity, owner, wiring.lease_ttl_seconds, _opener
+        session = await open_interactive_session(
+            session_id=session_id,
+            tenant=req.tenant,
+            domain=req.domain,
+            name=req.name,
+            tier=req.tier,
+            headful=req.headful,
+            block_popups=req.block_popups,
+            enable_cdp=req.enable_cdp,
+            registry=wiring.registry,
+            driver=wiring.driver,
+            profiles_root=wiring.profiles_root,
+            proxy_pinner=wiring.proxy_pinner,
+            vault=wiring.vault,
+            lease_ttl_seconds=wiring.lease_ttl_seconds,
         )
 
-    session_id = str(uuid.uuid4())
-    wiring.sessions[session_id] = Session(
-        session_id=session_id,
-        identity=identity,
-        ctx=ctx,
-        lease_id=lease.lease_id,
-        tier=req.tier,
-        headful=req.headful,
-        block_popups=req.block_popups,
-        enable_cdp=req.enable_cdp,
-    )
+    wiring.sessions[session_id] = session
 
     return SessionOpenResponse(
         session_id=session_id,
         metadata=SessionMetadata(
             tier_used=req.tier,
-            node_id=ctx.node_id,
+            node_id=session.ctx.node_id,
             duration_ms=(time.monotonic() - started) * 1000,
         ),
     )
@@ -245,14 +215,19 @@ async def execute_session(
 ) -> ActionResultOut:
     session = _get_session(wiring, session_id)
     requests_total.labels(tenant=session.identity.tenant, route="execute_session").inc()
-    try:
-        await wiring.registry.renew(session.lease_id)
-    except KeyError as exc:
-        raise NodeLost(f"session {session_id!r}'s underlying context was reclaimed") from exc
 
     actions = [to_spi_action(a) for a in req.actions]
-    with execute_duration_seconds.time():
-        result = await wiring.driver.execute(session.ctx, actions, req.page_id)
+    try:
+        with execute_duration_seconds.time():
+            result = await execute_on_session(
+                session,
+                actions,
+                registry=wiring.registry,
+                driver=wiring.driver,
+                page_id=req.page_id,
+            )
+    except KeyError as exc:
+        raise NodeLost(f"session {session_id!r}'s underlying context was reclaimed") from exc
     return _to_action_result_out(result)
 
 
@@ -263,17 +238,10 @@ async def release_session(
     session = _get_session(wiring, session_id)
     requests_total.labels(tenant=session.identity.tenant, route="release_session").inc()
 
-    if wiring.vault is not None:
-        # Checkpoint on release-to-IDLE (not only at destroy) bounds
-        # node-loss staleness to one session's delta -- plan.md's vault
-        # trigger #2. Best-effort: a vault write failure must not block the
-        # release itself (the context still needs to go IDLE either way).
-        try:
-            state = await wiring.driver.export_state(session.ctx)
-            wiring.vault.save(session.identity, state)
-        except Exception:
-            log.warning("sessions.vault_checkpoint_failed", session_id=session_id)
-
-    await wiring.registry.release(session.lease_id)
+    # Checkpoint on release-to-IDLE (not only at destroy) bounds node-loss
+    # staleness to one session's delta -- plan.md's vault trigger #2.
+    await release_interactive_session(
+        session, registry=wiring.registry, driver=wiring.driver, vault=wiring.vault
+    )
     wiring.sessions.pop(session_id, None)
     return {"success": True, "state": "idle"}

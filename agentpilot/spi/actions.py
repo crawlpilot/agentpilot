@@ -41,6 +41,10 @@ class SnapshotAction:
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: tuple[str, ...] | None = None
+    with_bbox: bool = False
+    """Populate `SnapshotNode.bbox` for leaf refs in the resulting tree --
+    extra CDP round trips per call, so opt-in (used by `agentpilot.agent`'s
+    step loop; not requested by ordinary interactive-session/crawl callers)."""
     terminates_sequence: bool = False
 
 

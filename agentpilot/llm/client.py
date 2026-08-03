@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -52,12 +52,30 @@ async def chat_json(
     config: LLMConfig,
     json_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One `/chat/completions` call, structured-output mode. Returns the
-    parsed JSON object the model produced. A malformed/non-JSON model
-    response raises `json.JSONDecodeError`/`KeyError` -- the caller
-    (`schema_extract.extract_structured`, in turn `session.ephemeral`)
-    catches broadly and surfaces it as `Document.extract_error` rather than
-    failing the whole scrape."""
+    """One-shot system+user call -- a thin wrapper over `chat_json_conversation`
+    for the single-turn callers (`schema_extract.extract_structured`) that
+    predate the agent loop's multi-turn need."""
+
+    return await chat_json_conversation(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        config=config,
+        json_schema=json_schema,
+    )
+
+
+async def chat_json_conversation(
+    messages: list[dict[str, str]],
+    *,
+    config: LLMConfig,
+    json_schema: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One `/chat/completions` call, structured-output mode, over an
+    arbitrary message list -- the primitive `agentpilot.agent`'s step loop
+    needs (system + rendered-history-as-text + current state each turn, not
+    a raw growing transcript -- see `agent/prompts.py`). Returns the parsed
+    JSON object the model produced. A malformed/non-JSON model response
+    raises `json.JSONDecodeError`/`KeyError` -- callers catch broadly and
+    surface it as an error field rather than crashing the whole run."""
 
     if json_schema is not None:
         response_format: dict[str, Any] = {
@@ -73,10 +91,7 @@ async def chat_json(
             headers={"Authorization": f"Bearer {config.api_key}"},
             json={
                 "model": config.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                "messages": messages,
                 "response_format": response_format,
             },
         )
@@ -84,4 +99,4 @@ async def chat_json(
         body = response.json()
 
     content = body["choices"][0]["message"]["content"]
-    return json.loads(content)
+    return cast("dict[str, Any]", json.loads(content))

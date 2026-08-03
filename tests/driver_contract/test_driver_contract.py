@@ -70,7 +70,11 @@ async def test_navigate_snapshot_yields_refs_with_epoch(
 
     assert len(result.snapshots) == 1
     snapshot = result.snapshots[0]
-    assert snapshot.epoch == 1
+    # NavigateAction and SnapshotAction each bump the epoch (invalidating
+    # refs across a navigation, not just across snapshots) -- assert it
+    # advanced past the initial 0, not a specific count that's an
+    # implementation detail of how many internal events happened to fire.
+    assert snapshot.epoch > 0
 
     button = _find_role(snapshot.root, "button")
     assert button is not None
@@ -262,6 +266,23 @@ async def test_snapshot_viewport_only_drops_offscreen_elements(
     names = _collect_names(result.snapshots[0].root)
     assert "Visible" in names
     assert "Hidden" not in names
+
+
+async def test_snapshot_with_bbox_populates_leaf_bounding_boxes(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+
+    result = await driver.execute(
+        open_ctx,
+        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(with_bbox=True)],
+    )
+
+    button = _find_role(result.snapshots[0].root, "button")
+    assert button is not None
+    assert button.bbox is not None
+    assert button.bbox.width > 0
+    assert button.bbox.height > 0
 
 
 async def test_snapshot_roles_filter_drops_non_matching_leaves(

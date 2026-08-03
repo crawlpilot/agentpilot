@@ -459,9 +459,10 @@ class PostgresJobStore:
                 job_id = row[0]
 
                 meta = document.metadata
+                placeholders = ", ".join(["%s"] * (2 + len(_DOCUMENT_COLUMNS.split(", "))))
                 await cur.execute(
                     f"INSERT INTO documents (job_id, task_id, {_DOCUMENT_COLUMNS}) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    f"VALUES ({placeholders})",
                     (
                         job_id,
                         task_id,

@@ -95,7 +95,7 @@ from agentpilot.spi.health import HealthStatus
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from agentpilot.spi.snapshot import AXSnapshot, BoundingBox, SnapshotNode
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 from agentpilot.spi.streaming import InputEvent, LiveViewFrame
 
@@ -495,8 +495,19 @@ class PatchrightDriver:
                 await live.page.goto(action.url, timeout=action.timeout_ms)
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
+            # Any ref taken before this navigation must not resolve against
+            # the new page -- bump the epoch and reset the ref cache the
+            # same way SnapshotAction does, rather than relying on every
+            # caller to always re-snapshot before reusing a ref. Without
+            # this, RefCache's AX_NAME fallback tier could spuriously
+            # resolve a stale ref against an unrelated element on the new
+            # page instead of correctly raising StaleRefError.
+            live.epoch += 1
+            live.ref_cache.reset(live.epoch)
         elif isinstance(action, GoBackAction):
             await live.page.go_back()
+            live.epoch += 1
+            live.ref_cache.reset(live.epoch)
         elif isinstance(action, SnapshotAction):
             live.epoch += 1
             text = await live.page.aria_snapshot(mode="ai")
@@ -506,6 +517,10 @@ class PatchrightDriver:
             if action.viewport_only:
                 root = await self._apply_viewport_filter(live, root)
             root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
+            if action.with_bbox:
+                # After filtering, not before: only pays for refs that
+                # actually survived viewport/role/max_nodes pruning.
+                await self._annotate_bounding_boxes(live, root)
             result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
         elif isinstance(action, ExtractAction):
             # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
@@ -711,15 +726,7 @@ class PatchrightDriver:
             metrics = await cdp.send("Page.getLayoutMetrics")
             viewport = metrics["cssVisualViewport"]
             vw, vh = viewport["clientWidth"], viewport["clientHeight"]
-            boxes = await asyncio.gather(
-                *(
-                    live.page.locator(f"aria-ref={ref}").bounding_box(
-                        timeout=_BOUNDING_BOX_TIMEOUT_MS
-                    )
-                    for ref in leaf_refs
-                ),
-                return_exceptions=True,
-            )
+            boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
         finally:
             if owns_session:
                 with contextlib.suppress(Exception):
@@ -742,10 +749,53 @@ class PatchrightDriver:
         # silently discarding real content because one lookup was flaky.
         visible = {
             ref
-            for ref, box in zip(leaf_refs, boxes, strict=True)
+            for ref, box in boxes_by_ref.items()
             if (isinstance(box, dict) and _in_viewport(box)) or isinstance(box, Exception)
         }
         return prune_to_refs(root, visible)
+
+    async def _resolve_bounding_boxes(
+        self, live: _Page, refs: list[str]
+    ) -> dict[str, FloatRect | None | BaseException]:
+        """Concurrently resolves bounding boxes for `refs` via CDP-backed
+        Playwright locators, so callers pipeline the round trips instead of
+        paying N sequential ones -- shared by `_apply_viewport_filter` (which
+        interprets `None`/exception itself) and `_annotate_bounding_boxes`
+        (which only cares about the successful `dict` case)."""
+
+        if not refs:
+            return {}
+        boxes = await asyncio.gather(
+            *(
+                live.page.locator(f"aria-ref={ref}").bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+                for ref in refs
+            ),
+            return_exceptions=True,
+        )
+        return dict(zip(refs, boxes, strict=True))
+
+    async def _annotate_bounding_boxes(self, live: _Page, root: SnapshotNode) -> None:
+        """Populates `SnapshotNode.bbox` in place for every leaf ref in the
+        (already-filtered) tree -- `agentpilot.agent`'s step loop uses this to
+        give the LLM coordinate grounding alongside a screenshot. Best
+        effort: a ref whose box can't be resolved (detached, transient CDP
+        hiccup) is simply left with `bbox=None`, the same fail-open posture
+        `_apply_viewport_filter` uses for lookup failures."""
+
+        leaf_refs = collect_leaf_refs(root)
+        boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
+
+        def walk(node: SnapshotNode) -> None:
+            if not node.children and node.ref:
+                box = boxes_by_ref.get(node.ref)
+                if isinstance(box, dict):
+                    node.bbox = BoundingBox(
+                        x=box["x"], y=box["y"], width=box["width"], height=box["height"]
+                    )
+            for child in node.children:
+                walk(child)
+
+        walk(root)
 
     async def export_state(self, ctx: ContextRef) -> StorageState:
         cctx = self._require_context(ctx)

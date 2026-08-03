@@ -11,12 +11,25 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class BoundingBox:
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass
 class SnapshotNode:
     epoch: int
     ref: str
     role: str
     name: str
     children: list[SnapshotNode] = field(default_factory=list)
+    bbox: BoundingBox | None = None
+    """Populated only for leaf/interactive nodes, only after
+    `agentpilot.agent`-driven snapshots ask for it -- see `patchright_driver
+    .py`'s `_annotate_bounding_boxes`. `None` for a node whose box wasn't
+    resolved (not requested, detached, or a transient lookup failure)."""
 
 
 @dataclass

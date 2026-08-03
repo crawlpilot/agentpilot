@@ -63,6 +63,7 @@ class SnapshotActionIn(BaseModel):
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: list[str] | None = None
+    with_bbox: bool = False
 
 
 class ExtractActionIn(BaseModel):
@@ -381,7 +382,74 @@ class CrawlStatusResponse(BaseModel):
     still-running crawl)."""
 
 
+# --- agent runs (async, Postgres-queue-backed -- routes/agent_runs.py) ---
+
+
+class AgentRunCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    domain: str
+    """Same role `SessionOpenRequest.domain` plays -- identity/proxy-pinning
+    scope for the session this run opens, not necessarily the task's first
+    URL (the agent may navigate anywhere the task requires)."""
+    task: str
+    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    max_steps: int = 50
+    output_schema: dict[str, Any] | None = None
+    """Plain JSON Schema -- embedded into the `done` action's `extracted_data`
+    field, same convention as `ExtractConfigIn.json_schema`."""
+
+
+class AgentRunCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    run_id: str
+
+
+class AgentStepOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seq: int
+    step_number: int
+    evaluation_previous_goal: str | None
+    memory: str | None
+    next_goal: str | None
+    actions: list[dict[str, Any]]
+    action_results: list[str]
+    created_at: str
+
+
+class AgentRunOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    tenant: str
+    task: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    current_step: int
+    max_steps: int
+    result: dict[str, Any] | None
+    error: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+
+
+class AgentRunStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: AgentRunOut
+    steps: list[AgentStepOut]
+    next: str | None
+
+
 # --- action results ---
+
+
+class BoundingBoxOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 class SnapshotNodeOut(BaseModel):
@@ -391,6 +459,7 @@ class SnapshotNodeOut(BaseModel):
     role: str
     name: str
     children: list[SnapshotNodeOut] = Field(default_factory=list)
+    bbox: BoundingBoxOut | None = None
 
 
 class AXSnapshotOut(BaseModel):
