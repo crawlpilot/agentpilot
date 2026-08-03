@@ -188,6 +188,67 @@ class ExecuteRequest(BaseModel):
     execute`'s docstring."""
 
 
+# --- scrape (one-shot: Navigate -> [actions] -> Extract(s) [-> Screenshot],
+# composed server-side around an ephemeral identity -- see routes/scrape.py) ---
+
+
+class ScrapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant: str
+    url: str
+    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    """Same not-yet-routed field as `SessionOpenRequest.tier` -- every scrape
+    takes the same full-Patchright path today regardless of this value; see
+    that model's field for the reasoning."""
+    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    only_main_content: bool = True
+    timeout_ms: int = 30_000
+    wait_for_ms: int | None = None
+    actions: list[ActionIn] = Field(default_factory=list)
+    """Dispatched after navigate, before extraction -- e.g. dismiss a cookie
+    banner. Reuses the exact same `ActionIn` union `/v1/sessions/{id}/execute`
+    takes; `navigate`/`extract`/`screenshot` entries here are redundant with
+    (and simply layered before) the ones `routes/scrape.py` appends itself,
+    not rejected -- there's no reason to special-case that combination."""
+    screenshot: bool = False
+    full_page_screenshot: bool = False
+
+
+class ScrapeMetadataOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None
+    status_code: int | None
+    tier_used: str
+    node_id: str
+    duration_ms: float
+    source_url: str
+
+
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    document_id: str
+    url: str
+    markdown: str | None = None
+    text: str | None = None
+    html: str | None = None
+    links: list[str] = Field(default_factory=list)
+    screenshot: str | None = None
+    """Base64-encoded PNG, same encoding `ActionResultOut.screenshots` uses.
+    Inline, not persisted -- `/v1/scrape` doesn't write a `documents` row
+    (see `agentpilot.jobs.store`'s module docstring); a job-backed
+    `/v1/crawl`/`/v1/batch/scrape` result instead carries a
+    `screenshot_artifact_id` once an artifact store exists to upload to."""
+    metadata: ScrapeMetadataOut | None = None
+    error: str | None = None
+
+
+class ScrapeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: DocumentOut
+
+
 # --- action results ---
 
 

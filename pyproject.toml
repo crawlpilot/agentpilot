@@ -91,7 +91,7 @@ python_version = "3.12"
 strict = false
 
 [[tool.mypy.overrides]]
-module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*"]
+module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*"]
 strict = true
 
 [tool.importlinter]
@@ -122,10 +122,42 @@ name = "driver -> {extraction, egress} -> spi"
 type = "layers"
 layers = ["agentpilot.driver", "agentpilot.extraction | agentpilot.egress", "agentpilot.spi"]
 
+# agentpilot.jobs (the async job queue behind /v1/crawl and /v1/batch/scrape)
+# is a second top-level consumer of agentpilot.placement, alongside
+# agentpilot.gateway -- the same shape placement already supports, not a
+# layering violation. agentpilot.crawl/agentpilot.webhook are still future
+# packages (crawl discovery / webhook delivery, not yet built) -- wrapped in
+# parentheses per import-linter's "optional layer" syntax, same idiom this
+# file already used for placement/control before they existed, so these
+# contracts are already correct once those packages land.
+
+[[tool.importlinter.contracts]]
+name = "gateway -> jobs -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.jobs", "agentpilot.spi"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> crawl -> egress -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "(agentpilot.crawl)", "agentpilot.egress", "agentpilot.spi"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> webhook -> egress -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "(agentpilot.webhook)", "agentpilot.egress", "agentpilot.spi"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> placement -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.placement", "agentpilot.spi"]
+
 # "control/placement never import driver" is still deferred until those
 # future packages exist -- `forbidden` contracts, unlike `layers`, have no
 # optional-module syntax and error hard on a missing module. session.py and
 # identity.py are real now, so their forbidden-import rules are live.
+# agentpilot.crawl/agentpilot.webhook aren't added here yet for the same
+# reason -- they don't exist until later phases of this feature build; add
+# them to source_modules once they do.
 
 [[tool.importlinter.contracts]]
 name = "only the composition root imports the concrete driver"
@@ -137,6 +169,7 @@ source_modules = [
     "agentpilot.session",
     "agentpilot.identity",
     "agentpilot.auth",
+    "agentpilot.jobs",
 ]
 forbidden_modules = ["agentpilot.driver"]
 # routes/app reach the driver only *through* agentpilot.gateway.wiring (the

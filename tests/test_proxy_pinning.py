@@ -61,3 +61,18 @@ async def test_concurrent_first_assignment_is_race_safe(pinner: ProxyPinner) -> 
 def test_empty_pool_rejected_at_construction() -> None:
     with pytest.raises(ValueError):
         ProxyPinner(fakeredis.aioredis.FakeRedis(), [])
+
+
+def test_pick_ephemeral_matches_the_deterministic_pick_get_or_assign_would_persist(
+    pinner: ProxyPinner,
+) -> None:
+    # Same proxy either way -- the only difference is whether choosing it
+    # touches Redis, not which one gets chosen.
+    assert pinner.pick_ephemeral(IDENTITY) == pinner._pick(IDENTITY)
+
+
+def test_pick_ephemeral_never_writes_to_redis() -> None:
+    redis = fakeredis.aioredis.FakeRedis()
+    pinner = ProxyPinner(redis, POOL)
+    pinner.pick_ephemeral(IDENTITY)
+    assert asyncio.run(redis.exists(f"proxy:{IDENTITY.slug()}")) == 0

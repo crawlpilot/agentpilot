@@ -17,43 +17,24 @@ from __future__ import annotations
 import base64
 import time
 import uuid
-from collections.abc import Callable
-from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
-    ActionIn,
     ActionResultOut,
     ArtifactRefOut,
     AXSnapshotOut,
-    ClickActionIn,
-    CloseTabActionIn,
-    ExecuteJsActionIn,
     ExecuteRequest,
-    ExtractActionIn,
-    FillActionIn,
-    GoBackActionIn,
-    HoverActionIn,
-    ListTabsActionIn,
-    NavigateActionIn,
-    NewTabActionIn,
-    PressActionIn,
-    ScreenshotActionIn,
-    ScrollActionIn,
-    SelectOptionActionIn,
     SessionListOut,
     SessionMetadata,
     SessionOpenRequest,
     SessionOpenResponse,
     SessionOut,
-    SnapshotActionIn,
     SnapshotNodeOut,
-    SwitchTabActionIn,
     TabInfoOut,
-    WaitActionIn,
 )
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
 from agentpilot.identity.profile_store import resolve_profile_dir
@@ -66,43 +47,13 @@ from agentpilot.session.reaper import _read_pid_rss_mb
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.snapshot import SnapshotNode
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["sessions"])
-
-_ACTION_CONVERTERS: dict[type, Callable[[Any], spi_actions.Action]] = {
-    NavigateActionIn: lambda a: spi_actions.NavigateAction(url=a.url, timeout_ms=a.timeout_ms),
-    GoBackActionIn: lambda a: spi_actions.GoBackAction(),
-    SnapshotActionIn: lambda a: spi_actions.SnapshotAction(
-        viewport_only=a.viewport_only,
-        max_nodes=a.max_nodes,
-        roles=tuple(a.roles) if a.roles is not None else None,
-    ),
-    ExtractActionIn: lambda a: spi_actions.ExtractAction(
-        format=a.format, main_content=a.main_content
-    ),
-    ScreenshotActionIn: lambda a: spi_actions.ScreenshotAction(full_page=a.full_page),
-    WaitActionIn: lambda a: spi_actions.WaitAction(ms=a.ms, ref=a.ref),
-    ExecuteJsActionIn: lambda a: spi_actions.ExecuteJsAction(script=a.script),
-    ClickActionIn: lambda a: spi_actions.ClickAction(ref=a.ref, all=a.all),
-    FillActionIn: lambda a: spi_actions.FillAction(ref=a.ref, text=a.text),
-    SelectOptionActionIn: lambda a: spi_actions.SelectOptionAction(ref=a.ref, values=a.values),
-    HoverActionIn: lambda a: spi_actions.HoverAction(ref=a.ref),
-    PressActionIn: lambda a: spi_actions.PressAction(key=a.key),
-    ScrollActionIn: lambda a: spi_actions.ScrollAction(direction=a.direction, ref=a.ref),
-    NewTabActionIn: lambda a: spi_actions.NewTabAction(url=a.url),
-    CloseTabActionIn: lambda a: spi_actions.CloseTabAction(page_id=a.page_id),
-    SwitchTabActionIn: lambda a: spi_actions.SwitchTabAction(page_id=a.page_id),
-    ListTabsActionIn: lambda a: spi_actions.ListTabsAction(),
-}
-
-
-def _to_spi_action(action_in: ActionIn) -> spi_actions.Action:
-    return _ACTION_CONVERTERS[type(action_in)](action_in)
 
 
 def _snapshot_node_out(node: SnapshotNode) -> SnapshotNodeOut:
@@ -165,7 +116,17 @@ async def open_session(
     if authed is not None and authed.tenant != req.tenant:
         raise HTTPException(status_code=403, detail="tenant mismatch: api key does not own tenant")
 
-    identity = IdentityKey(tenant=req.tenant, domain=req.domain, name=req.name)
+    # kind=DEFAULT (not the dataclass's own TEMPORARY default): an
+    # interactive, caller-named identity is exactly what `ProfileKind
+    # .is_permanent` means -- kept warm across release/reopen, vault-backed.
+    # `/v1/scrape` (`routes/scrape.py`) is the one caller that wants the
+    # actual default (`TEMPORARY`, a one-shot identity it mints itself with
+    # a random `name`), which is why this is set explicitly here rather than
+    # left to fall through -- `identity.is_temporary` only means anything as
+    # a signal if session-open identities don't all pick it up by accident.
+    identity = IdentityKey(
+        tenant=req.tenant, domain=req.domain, name=req.name, kind=ProfileKind.DEFAULT
+    )
     owner = f"{req.tenant}:{req.name}"
     requests_total.labels(tenant=req.tenant, route="open_session").inc()
 
@@ -289,7 +250,7 @@ async def execute_session(
     except KeyError as exc:
         raise NodeLost(f"session {session_id!r}'s underlying context was reclaimed") from exc
 
-    actions = [_to_spi_action(a) for a in req.actions]
+    actions = [to_spi_action(a) for a in req.actions]
     with execute_duration_seconds.time():
         result = await wiring.driver.execute(session.ctx, actions, req.page_id)
     return _to_action_result_out(result)

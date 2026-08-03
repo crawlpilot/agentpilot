@@ -43,7 +43,7 @@ from agentpilot.gateway.schemas import SessionOpenRequest
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, session_open_duration_seconds
 from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityKey, ProfileKind
 
 log = structlog.get_logger(__name__)
 
@@ -72,7 +72,11 @@ async def open_session(
     requests_total.labels(tenant=req.tenant, route="open_session").inc()
     started = time.monotonic()
 
-    identity = IdentityKey(tenant=req.tenant, domain=req.domain, name=req.name)
+    # kind=DEFAULT -- see routes/sessions.py's open_session for why this
+    # can't be left at the dataclass's own TEMPORARY default.
+    identity = IdentityKey(
+        tenant=req.tenant, domain=req.domain, name=req.name, kind=ProfileKind.DEFAULT
+    )
     node_id = await wiring.placer.place(identity, wiring.affinity_ttl_seconds)
     try:
         addr = await resolve_node_addr(wiring, node_id)

@@ -70,3 +70,17 @@ class ProxyPinner:
         if raw is None:
             raise RuntimeError(f"proxy pin for {identity.slug()!r} vanished immediately after set")
         return _deserialize(raw.decode() if isinstance(raw, bytes) else raw, identity)
+
+    def pick_ephemeral(self, identity: IdentityKey) -> ProxyEndpoint:
+        """For a one-shot identity (`identity.is_temporary`, e.g.
+        `routes/scrape.py`'s per-call minted identity) only -- `get_or_assign`
+        persists a `proxy:{slug}` Redis key with no TTL, which is the right
+        durability tradeoff for a warm interactive identity that will be
+        reopened, but would leak one permanent, never-read-again key per call
+        for an identity that by construction has a random `name` and is
+        opened exactly once. `_pick()` is already fully deterministic from
+        `identity.slug()` alone, so skipping the Redis round trip changes
+        nothing about *which* proxy is chosen -- only whether choosing it
+        needs to touch Redis at all."""
+
+        return self._pick(identity)

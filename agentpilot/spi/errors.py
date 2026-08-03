@@ -62,3 +62,25 @@ class CdpNotAvailable(DriverError):
     underlying context wasn't opened with `enable_cdp=True`. Same "this
     specific thing isn't available" family as `TabNotFound`/`StaleRefError`,
     not a server fault."""
+
+
+class JobNotFound(DriverError):
+    """No `crawl`/`batch_scrape` job with this id, or it exists but belongs
+    to a different tenant -- same NOT_FOUND family as `TabNotFound`, and
+    deliberately not distinguished from "wrong tenant" in the response, for
+    the same reason `gateway/routes/sessions.py` doesn't leak session
+    existence across tenants."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"no such job {job_id!r}")
+        self.job_id = job_id
+
+
+class JobCancelled(DriverError):
+    """Raised when an operation (e.g. claiming a task) discovers its job was
+    cancelled after the operation started -- distinct from `JobNotFound`
+    (the job exists, it just won't accept further work)."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"job {job_id!r} was cancelled")
+        self.job_id = job_id

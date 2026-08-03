@@ -33,6 +33,8 @@ class ErrorCode(StrEnum):
     EGRESS_BLOCKED = "EGRESS_BLOCKED"
     STALE_REF = "STALE_REF"
     CDP_NOT_AVAILABLE = "CDP_NOT_AVAILABLE"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
+    JOB_CANCELLED = "JOB_CANCELLED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -53,6 +55,8 @@ _DRIVER_ERROR_MAPPING: dict[type[Exception], tuple[int, ErrorCode]] = {
     # deployment/session can't do CDP. 409 ("retry differently"), same family
     # as SESSION_LEASE_CONFLICT/STALE_REF, not a bare 404.
     spi_errors.CdpNotAvailable: (409, ErrorCode.CDP_NOT_AVAILABLE),
+    spi_errors.JobNotFound: (404, ErrorCode.JOB_NOT_FOUND),
+    spi_errors.JobCancelled: (409, ErrorCode.JOB_CANCELLED),
 }
 
 _RETRY_AFTER_CODES = (ErrorCode.SESSION_LEASE_CONFLICT, ErrorCode.CAPACITY_EXHAUSTED)

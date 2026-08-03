@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.identity.profile_store import PathTraversalError, resolve_profile_dir
+from agentpilot.identity.profile_store import (
+    PathTraversalError,
+    delete_profile_dir,
+    resolve_profile_dir,
+)
 from agentpilot.spi.identity import IdentityKey
 
 
@@ -41,3 +45,19 @@ def test_symlinked_domain_dir_escaping_tenant_root_is_rejected(tmp_path) -> None
 def test_identity_key_itself_rejects_dotdot_segments() -> None:
     with pytest.raises(ValueError):
         IdentityKey(tenant="..", domain="example.com", name="alice").slug()
+
+
+def test_delete_profile_dir_removes_an_existing_dir(tmp_path) -> None:
+    identity = IdentityKey(tenant="acme", domain="example.com", name="scrape-1")
+    path = resolve_profile_dir(tmp_path, identity)
+    path.mkdir(parents=True)
+    (path / "Default").mkdir()
+
+    delete_profile_dir(tmp_path, identity)
+
+    assert not path.exists()
+
+
+def test_delete_profile_dir_on_a_dir_that_never_existed_is_a_no_op(tmp_path) -> None:
+    identity = IdentityKey(tenant="acme", domain="example.com", name="scrape-1")
+    delete_profile_dir(tmp_path, identity)  # must not raise

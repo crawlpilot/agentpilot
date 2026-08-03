@@ -31,6 +31,9 @@ session_open_duration_seconds = Histogram(
 execute_duration_seconds = Histogram(
     "agentpilot_execute_duration_seconds", "POST /v1/sessions/{id}/execute latency"
 )
+scrape_duration_seconds = Histogram(
+    "agentpilot_scrape_duration_seconds", "POST /v1/scrape latency (ephemeral open+execute+evict)"
+)
 
 error_responses_total = Counter(
     "agentpilot_error_responses_total", "Gateway error responses by typed code", ["code"]

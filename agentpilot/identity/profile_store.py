@@ -13,6 +13,7 @@ by whatever provisions it) still can't walk a tenant out of its own root.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from agentpilot.spi.identity import IdentityKey
@@ -33,3 +34,18 @@ def resolve_profile_dir(profiles_root: Path, identity: IdentityKey) -> Path:
             f"outside its tenant root {tenant_root}"
         ) from exc
     return resolved
+
+
+def delete_profile_dir(profiles_root: Path, identity: IdentityKey) -> None:
+    """For an ephemeral (`/v1/scrape`) identity only, right after
+    `registry.evict()` + `driver.close()`: a warm/interactive identity's
+    profile dir is meant to outlive its context (that's the entire point of
+    `launch_persistent_context` -- see `driver.close()`'s callers in
+    `routes/sessions.py`, which never delete it), so this must only ever be
+    called for a one-shot identity that will never be reopened. Goes through
+    the same `resolve_profile_dir()` path-traversal guard as every other
+    caller that touches a profile dir on disk -- no separate validation here.
+    """
+
+    path = resolve_profile_dir(profiles_root, identity)
+    shutil.rmtree(path, ignore_errors=True)
