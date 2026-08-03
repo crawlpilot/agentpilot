@@ -241,6 +241,133 @@ export interface ActionResult {
   page_changed: boolean
 }
 
+// --- scrape (routes/scrape.py) ---
+
+export type ScrapeFormat = 'markdown' | 'text' | 'html'
+
+export interface ScrapeRequest {
+  tenant: string
+  url: string
+  tier?: Tier
+  formats?: ScrapeFormat[]
+  only_main_content?: boolean
+  timeout_ms?: number
+  wait_for_ms?: number | null
+  actions?: ActionIn[]
+  screenshot?: boolean
+  full_page_screenshot?: boolean
+}
+
+export interface ScrapeMetadataOut {
+  title: string | null
+  status_code: number | null
+  tier_used: string
+  node_id: string
+  duration_ms: number
+  source_url: string
+}
+
+export interface DocumentOut {
+  document_id: string
+  url: string
+  markdown?: string | null
+  text?: string | null
+  html?: string | null
+  links: string[]
+  screenshot?: string | null // base64 PNG
+  metadata?: ScrapeMetadataOut | null
+  error?: string | null
+}
+
+export interface ScrapeResponse {
+  success: boolean
+  data: DocumentOut
+}
+
+// --- map (routes/map.py) ---
+
+export type SitemapMode = 'skip' | 'include' | 'only'
+
+export interface MapRequest {
+  tenant: string
+  url: string
+  include_paths?: string[]
+  exclude_paths?: string[]
+  sitemap?: SitemapMode
+  include_subdomains?: boolean
+  ignore_query_parameters?: boolean
+  limit?: number
+}
+
+export interface MapLinkOut {
+  url: string
+  title?: string | null
+  description?: string | null
+}
+
+export interface MapResponse {
+  success: boolean
+  links: MapLinkOut[]
+}
+
+// --- crawl (routes/crawl.py, async job -- POST creates, GET polls, DELETE cancels) ---
+
+export interface ScrapeOptionsIn {
+  formats?: ScrapeFormat[]
+  only_main_content?: boolean
+  timeout_ms?: number
+  wait_for_ms?: number | null
+  screenshot?: boolean
+  full_page_screenshot?: boolean
+}
+
+export type WebhookEvent = 'started' | 'page' | 'completed' | 'failed'
+
+export interface WebhookIn {
+  url: string
+  headers?: Record<string, string>
+  events?: WebhookEvent[]
+}
+
+export interface CrawlRequest {
+  tenant: string
+  url: string
+  include_paths?: string[]
+  exclude_paths?: string[]
+  max_discovery_depth?: number | null
+  limit?: number
+  allow_external_links?: boolean
+  allow_subdomains?: boolean
+  allow_backward_crawling?: boolean
+  ignore_robots_txt?: boolean
+  sitemap?: SitemapMode
+  deduplicate_similar_urls?: boolean
+  ignore_query_parameters?: boolean
+  delay_ms?: number | null
+  max_concurrency?: number
+  scrape_options?: ScrapeOptionsIn
+  webhook?: WebhookIn | null
+}
+
+export interface CrawlCreateResponse {
+  success: boolean
+  id: string
+  url: string
+  webhook_secret?: string | null
+}
+
+export type CrawlJobStatus = 'queued' | 'scraping' | 'completed' | 'failed' | 'cancelled'
+
+export interface CrawlStatusResponse {
+  success: boolean
+  status: CrawlJobStatus
+  total: number
+  completed: number
+  failed: number
+  data: DocumentOut[]
+  next: string | null
+}
+
 // --- API keys ---
 
 export interface ApiKeyCreateRequest {
@@ -279,6 +406,9 @@ export type ErrorCode =
   | 'CONTEXT_CRASHED'
   | 'EGRESS_BLOCKED'
   | 'STALE_REF'
+  | 'CDP_NOT_AVAILABLE'
+  | 'JOB_NOT_FOUND'
+  | 'JOB_CANCELLED'
   | 'INTERNAL_ERROR'
 
 export interface ApiErrorBody {

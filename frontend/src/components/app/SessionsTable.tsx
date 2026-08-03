@@ -110,7 +110,7 @@ export function SessionsTable({ sessions }: { sessions: SessionOut[] }) {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => navigate(`/playground?session=${s.session_id}`)}>
+                    <DropdownMenuItem onClick={() => navigate(`/playground/interact?session=${s.session_id}`)}>
                       Open in Playground
                     </DropdownMenuItem>
                     <DropdownMenuItem

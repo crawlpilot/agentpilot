@@ -56,6 +56,33 @@ class ClaimedTask:
     lock: str
 
 
+@dataclass
+class JobForWorker:
+    """The worker-facing view of a job -- distinct from `spi.jobs.Job` (the
+    tenant-facing `/v1/crawl` polling shape), which deliberately excludes
+    `options`/`webhook` fields a caller never needs back. `get_job_for_worker`
+    has no `tenant` filter, unlike `get_job()`: the crawl-worker loop is a
+    trusted internal process processing a claimed task by `job_id` alone, the
+    same "internal, not user-facing HTTP boundary" trust level `/internal/
+    scrape` operates at."""
+
+    job_id: str
+    tenant: str
+    job_type: JobType
+    url: str | None
+    options: dict[str, Any]
+    total: int
+    """A soft, possibly-slightly-stale count as of the moment this row was
+    read -- the crawl-worker loop uses it to cap frontier expansion at
+    roughly `CrawlOptions.limit`, not as a strict guarantee under concurrent
+    expansion from multiple claimed tasks (a small overshoot is accepted
+    rather than adding an atomic quota-check to `enqueue_tasks`)."""
+    webhook_url: str | None
+    webhook_headers: dict[str, str] | None
+    webhook_events: tuple[str, ...]
+    webhook_secret: str | None
+
+
 def _job_from_row(row: dict[str, Any]) -> Job:
     return Job(
         job_id=JobId(row["job_id"]),
@@ -214,6 +241,33 @@ class PostgresJobStore:
                 )
                 row = await cur.fetchone()
         return _job_from_row(row) if row else None
+
+    async def get_job_for_worker(self, job_id: str) -> JobForWorker | None:
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT job_id, tenant, job_type, url, options, total, "
+                    "webhook_url, webhook_headers, webhook_events, webhook_secret "
+                    "FROM jobs WHERE job_id = %s",
+                    (job_id,),
+                )
+                row = await cur.fetchone()
+        if row is None:
+            return None
+        return JobForWorker(
+            job_id=row["job_id"],
+            tenant=row["tenant"],
+            job_type=row["job_type"],
+            url=row["url"],
+            options=row["options"],
+            total=row["total"],
+            webhook_url=row["webhook_url"],
+            webhook_headers=row["webhook_headers"],
+            webhook_events=tuple(row["webhook_events"] or ()),
+            webhook_secret=row["webhook_secret"],
+        )
 
     async def cancel_job(self, job_id: str, tenant: str) -> bool:
         async with self._pool.connection() as conn:

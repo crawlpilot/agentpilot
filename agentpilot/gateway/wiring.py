@@ -16,6 +16,13 @@ The `session_id -> Session` dict is worker/monolith-local: `Registry` is
 keyed by `IdentityKey`, not `session_id`, since one warm context can be
 reused across many session_ids over its lifetime (open, release, reopen
 mints a new session_id for the same underlying context).
+
+P4 adds `jobs_store` (a `PostgresJobStore`, connected for *every* role that
+has `AGENTPILOT_DATABASE_URL` set -- monolith/gateway need it to serve
+`/v1/crawl`/`/v1/batch/scrape`, worker/monolith also need it for
+`crawl_worker_loop`) and `crawl_worker_loop` (a `CrawlWorkerLoop`, only on
+worker/monolith, folded into the existing role rather than a separate one --
+see `agentpilot.jobs.worker_loop`'s module docstring for that decision).
 """
 
 from __future__ import annotations
@@ -23,13 +30,23 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from redis.asyncio import Redis
 
+if TYPE_CHECKING:
+    # Deferred (see _start_crawl_worker_loop()'s docstring): this keeps the
+    # same "role-specific imports stay out of the module-level call stack"
+    # discipline `_init_gateway()`'s own deferred imports already follow,
+    # even though agentpilot.jobs.worker_loop doesn't touch agentpilot.driver
+    # and so isn't *required* to be deferred by that contract specifically.
+    from agentpilot.jobs.worker_loop import CrawlWorkerLoop
+
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.proxy_pinning import ProxyPinner
+from agentpilot.jobs.store import PostgresJobStore
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, LeaseId
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -88,6 +105,16 @@ class Wiring:
         self._database_url = os.environ.get("AGENTPILOT_DATABASE_URL")
         self.admin_token = os.environ.get("AGENTPILOT_ADMIN_TOKEN")
 
+        # Populated by _connect_jobs_store() (awaited from get_wiring(), same
+        # reason _connect_api_keys() is split out of this sync __init__) --
+        # every role can use it (monolith/gateway serve /v1/crawl directly;
+        # worker/monolith also run CrawlWorkerLoop against it), unlike
+        # api_keys there is no in-memory fallback: a durable job queue with
+        # no durability isn't a meaningful stand-in, so routes/crawl.py
+        # checks `wiring.jobs_store is not None` itself and returns a clear
+        # error rather than silently degrading.
+        self.jobs_store: PostgresJobStore | None = None
+
         if self.role == "gateway":
             self._init_gateway()
         else:
@@ -109,6 +136,16 @@ class Wiring:
         # else: AGENTPILOT_DATABASE_URL unset -> keep the InMemoryApiKeyStore()
         # placeholder (dev/test convenience only -- keys won't survive a
         # restart or be visible to any other process).
+
+    async def _connect_jobs_store(self) -> None:
+        """Unlike `_connect_api_keys()`, every role connects this if
+        `AGENTPILOT_DATABASE_URL` is set -- monolith/gateway need it to serve
+        `/v1/crawl`/`/v1/batch/scrape`, worker (and monolith again) needs it
+        for `_start_crawl_worker_loop()`. No role-check, no in-memory
+        fallback: see `jobs_store`'s own docstring in `__init__`."""
+
+        if self._database_url:
+            self.jobs_store = await PostgresJobStore.connect(self._database_url)
 
     async def _register_node(self) -> None:
         """`NodeRegistry.register()` (the `node:{id}` HSET) needs a real
@@ -242,6 +279,34 @@ class Wiring:
         if proxy_pool_raw and self.redis is not None:
             self.proxy_pinner = ProxyPinner(self.redis, _parse_proxy_pool(proxy_pool_raw))
 
+        # Placeholder until _start_crawl_worker_loop() (awaited from
+        # get_wiring(), after _connect_jobs_store() populates jobs_store)
+        # replaces it -- same two-step reason node_registry/api_keys need an
+        # async follow-up after this sync __init__.
+        self.crawl_worker_loop: CrawlWorkerLoop | None = None
+
+    async def _start_crawl_worker_loop(self) -> None:
+        """Only worker/monolith have a real local driver+registry to run
+        ephemeral scrapes against -- gateway never constructs one at all
+        (see `_init_gateway()`). A no-op if `AGENTPILOT_DATABASE_URL` was
+        never set, matching `jobs_store`'s "no in-memory fallback" stance:
+        crawl processing simply doesn't run without a durable queue behind
+        it, rather than silently doing something wrong."""
+
+        if self.role not in ("worker", "monolith") or self.jobs_store is None:
+            return
+        from agentpilot.jobs.worker_loop import CrawlWorkerLoop
+
+        self.crawl_worker_loop = CrawlWorkerLoop(
+            self.jobs_store,
+            self.registry,
+            self.driver,
+            self.profiles_root,
+            self.proxy_pinner,
+            lease_ttl_seconds=self.lease_ttl_seconds,
+        )
+        self.crawl_worker_loop.start()
+
     async def close(self) -> None:
         if self.role == "gateway":
             await self.node_reaper.stop()
@@ -251,6 +316,11 @@ class Wiring:
                 # Stop registration before the reaper/driver so no new
                 # placement can land on this node mid-teardown.
                 await self.node_registry.stop()
+            if self.crawl_worker_loop is not None:
+                # Same reasoning, one step earlier: stop claiming/processing
+                # tasks before the reaper/driver so nothing tries to open a
+                # fresh ephemeral context on a driver that's about to close.
+                await self.crawl_worker_loop.stop()
             await self.reaper.stop()
             for session in list(self.sessions.values()):
                 await self.driver.close(session.ctx)
@@ -258,6 +328,8 @@ class Wiring:
             await self.cdp_http_client.aclose()
         if isinstance(self.api_keys, PostgresApiKeyStore):
             await self.api_keys.close()
+        if self.jobs_store is not None:
+            await self.jobs_store.close()
         if self.redis is not None:
             await self.redis.aclose()
 
@@ -284,6 +356,8 @@ async def get_wiring() -> Wiring:
         wiring = Wiring()
         try:
             await wiring._connect_api_keys()
+            await wiring._connect_jobs_store()
+            await wiring._start_crawl_worker_loop()
             await wiring._register_node()
         except BaseException:
             # Don't leave an orphaned reaper task / launcher / pool behind

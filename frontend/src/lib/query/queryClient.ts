@@ -15,4 +15,5 @@ export const queryKeys = {
   apiKeys: (tenant: string) => ['api-keys', tenant] as const,
   nodes: ['nodes'] as const,
   cdpInfo: (sessionId: string) => ['cdp-info', sessionId] as const,
+  crawlStatus: (jobId: string) => ['crawl-status', jobId] as const,
 }

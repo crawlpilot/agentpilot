@@ -249,6 +249,112 @@ class ScrapeResponse(BaseModel):
     data: DocumentOut
 
 
+# --- map (fast URL discovery, synchronous, no job queue -- routes/map.py) ---
+
+
+class MapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    url: str
+    include_paths: list[str] = Field(default_factory=list)
+    exclude_paths: list[str] = Field(default_factory=list)
+    sitemap: Literal["skip", "include", "only"] = "include"
+    include_subdomains: bool = False
+    ignore_query_parameters: bool = False
+    limit: int = 100_000
+
+
+class MapLinkOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str
+    title: str | None = None
+    description: str | None = None
+
+
+class MapResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    links: list[MapLinkOut]
+
+
+# --- crawl (async, Postgres-queue-backed -- routes/crawl.py, P4) ---
+
+
+class ScrapeOptionsIn(BaseModel):
+    """The subset of `ScrapeRequest` that makes sense nested inside a bulk
+    `CrawlRequest`/`BatchScrapeRequest`: no `tenant`/`url`/`tier` (those
+    belong to the outer request, or per-URL for batch), and deliberately no
+    `actions` -- pre-extract interaction steps are much more a single-page
+    `/v1/scrape` primitive; see `agentpilot.jobs.options_codec`'s module
+    docstring for where that boundary is drawn and why."""
+
+    model_config = ConfigDict(extra="forbid")
+    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    only_main_content: bool = True
+    timeout_ms: int = 30_000
+    wait_for_ms: int | None = None
+    screenshot: bool = False
+    full_page_screenshot: bool = False
+
+
+class WebhookIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    events: list[Literal["started", "page", "completed", "failed"]] = Field(
+        default=["completed", "failed"]
+    )
+
+
+class CrawlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    url: str
+    include_paths: list[str] = Field(default_factory=list)
+    exclude_paths: list[str] = Field(default_factory=list)
+    max_discovery_depth: int | None = None
+    limit: int = 10_000
+    allow_external_links: bool = False
+    allow_subdomains: bool = False
+    allow_backward_crawling: bool = False
+    ignore_robots_txt: bool = False
+    sitemap: Literal["skip", "include", "only"] = "include"
+    deduplicate_similar_urls: bool = True
+    ignore_query_parameters: bool = False
+    delay_ms: int | None = None
+    max_concurrency: int = 10
+    scrape_options: ScrapeOptionsIn = Field(default_factory=ScrapeOptionsIn)
+    webhook: WebhookIn | None = None
+
+
+class CrawlCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    id: str
+    url: str
+    """A pollable `GET {this}` URL for the created job -- matches Firecrawl's
+    `POST /v2/crawl` response shape."""
+    webhook_secret: str | None = None
+    """Plaintext, returned exactly once when `webhook` was set on the
+    request -- never retrievable again, same "shown once" discipline as an
+    API key's plaintext (`ApiKeyCreateOut.api_key`)."""
+
+
+class CrawlStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    status: Literal["queued", "scraping", "completed", "failed", "cancelled"]
+    total: int
+    completed: int
+    failed: int
+    data: list[DocumentOut]
+    next: str | None
+    """Opaque keyset-pagination cursor -- pass back as `?after=` to fetch the
+    next page; `None` means either no more pages, or the caller already
+    reached the end of what's completed so far (poll again later for a
+    still-running crawl)."""
+
+
 # --- action results ---
 
 

@@ -5,17 +5,26 @@
 - `monolith` (default): everything -- `/v1/sessions` (real logic, tenant-
   auth-gated), `/internal/sessions` (the same routes, also reachable,
   trusted-network, no auth gate), live view on both, `/v1/scrape` +
-  `/internal/scrape` (`routes/scrape.py`, same dual-mount idiom), and
-  `/v1/api-keys` (admin-gated). Unchanged P0/P1 behavior plus P2's auth
-  additions and the one-shot scrape endpoint.
+  `/internal/scrape` (`routes/scrape.py`, same dual-mount idiom), `/v1/map`
+  (`routes/map.py`, driver-free discovery, no `/internal/...` counterpart
+  needed), `/v1/crawl` (`routes/crawl.py`, job CRUD against `agentpilot.jobs
+  .store`, also no `/internal/...` counterpart -- the actual crawl
+  *processing* is `wiring.crawl_worker_loop`, a background task, not an
+  HTTP route at all), and `/v1/api-keys` (admin-gated). Unchanged P0/P1
+  behavior plus P2's auth additions and the P4 scrape/map/crawl endpoints.
 - `worker`: only `/internal/sessions` and `/internal/scrape` (real logic,
   including live view as of this pass) -- never `/v1/...`, per `plan.md`'s
-  "internal-only, never tenant-exposed" topology.
+  "internal-only, never tenant-exposed" topology. `/v1/map`/`/v1/crawl` are
+  never mounted here either -- worker's contribution to crawling is
+  `wiring.crawl_worker_loop` (`_init_worker()`), not an HTTP surface.
 - `gateway`: `/v1/sessions` as a proxy to a worker (`routes/gateway_proxy.py`,
   auth-gated per-route since this router only ever serves this one mount),
   `/v1/sessions/{id}/live-view` as a WS relay (`routes/live_view_proxy.py`),
   `/v1/scrape` as a proxy (`routes/scrape_proxy.py`, same per-route auth
-  idiom), and `/v1/api-keys` (admin-gated). Never imports/constructs a driver.
+  idiom), `/v1/map` and `/v1/crawl` (the *same* `routes/map.py`/`routes/
+  crawl.py` routers as monolith -- no proxy needed, since neither touches
+  `agentpilot.driver`), and `/v1/api-keys` (admin-gated). Never
+  imports/constructs a driver.
 
 The frontend (`frontend/`) is never served from here -- no `/ui` mount, no
 Node/npm anywhere in this repo's Docker images. It's deployed completely
@@ -38,6 +47,7 @@ from agentpilot.gateway.routes import (
     api_keys,
     cdp,
     cdp_proxy,
+    crawl,
     gateway_proxy,
     health,
     live_view,
@@ -47,6 +57,7 @@ from agentpilot.gateway.routes import (
     scrape_proxy,
     sessions,
 )
+from agentpilot.gateway.routes import map as map_routes
 from agentpilot.gateway.wiring import get_wiring, reset_wiring
 
 
@@ -86,6 +97,14 @@ if _role == "monolith":
     app.include_router(
         scrape.router, prefix="/v1/scrape", dependencies=[Depends(require_tenant_auth)]
     )
+    # No router-level dependency: map_routes.router's one route already
+    # declares `Depends(require_tenant_auth)` itself (the only way to
+    # actually receive the resolved `AuthedTenant` in the handler).
+    app.include_router(map_routes.router, prefix="/v1/map")
+    # Same reasoning as map_routes.router: every crawl.router route already
+    # declares Depends(require_tenant_auth) itself. Job CRUD never touches
+    # agentpilot.driver, so this needs no /internal/... counterpart either.
+    app.include_router(crawl.router, prefix="/v1/crawl")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
@@ -104,6 +123,13 @@ if _role == "gateway":
     # own `?api_key=` check instead -- see `routes/cdp_proxy.py`. A
     # router-level dependency would apply to both and break the WS route.
     app.include_router(cdp_proxy.router, prefix="/v1/sessions")
+    # Same router, same route, as the monolith mount above -- agentpilot.crawl
+    # needs no worker hop, so gateway serves /v1/map out of its own process
+    # directly rather than through a _proxy module.
+    app.include_router(map_routes.router, prefix="/v1/map")
+    # Same router as the monolith mount above, for the same reason -- job
+    # CRUD (agentpilot.jobs.store) needs no worker hop either.
+    app.include_router(crawl.router, prefix="/v1/crawl")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )

@@ -83,6 +83,33 @@ async def test_create_job_discovery_done_true_is_for_batch_scrape(
     assert fetched.discovery_done is True
 
 
+async def test_get_job_for_worker_has_no_tenant_filter(store: PostgresJobStore) -> None:
+    tenant = _tenant()
+    job = await store.create_job(
+        tenant, "crawl", "https://example.com", {"url": "https://example.com", "limit": 5}, None
+    )
+    fetched = await store.get_job_for_worker(job.job_id)
+    assert fetched is not None
+    assert fetched.tenant == tenant
+    assert fetched.options == {"url": "https://example.com", "limit": 5}
+
+
+async def test_get_job_for_worker_includes_webhook_secret(store: PostgresJobStore) -> None:
+    from agentpilot.spi.webhook import WebhookConfig
+
+    webhook = WebhookConfig(url="https://example.com/hook", secret="shh", events=("completed",))
+    job = await store.create_job(_tenant(), "batch_scrape", None, {}, webhook)
+    fetched = await store.get_job_for_worker(job.job_id)
+    assert fetched is not None
+    assert fetched.webhook_url == "https://example.com/hook"
+    assert fetched.webhook_secret == "shh"
+    assert fetched.webhook_events == ("completed",)
+
+
+async def test_get_job_for_worker_unknown_id_returns_none(store: PostgresJobStore) -> None:
+    assert await store.get_job_for_worker("no-such-job") is None
+
+
 async def test_create_job_persists_webhook_secret_but_get_job_omits_it(
     store: PostgresJobStore,
 ) -> None:
