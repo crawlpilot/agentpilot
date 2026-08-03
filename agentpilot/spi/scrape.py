@@ -12,8 +12,24 @@ instead of caller-driven round trips (see `gateway/routes/scrape.py`).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from agentpilot.spi.actions import Action, ExtractFormat
+
+
+@dataclass
+class ExtractConfig:
+    """LLM-schema-driven structured extraction (`agentpilot.llm.schema_extract`)
+    -- a single model call over the scrape's markdown, distinct from the
+    deterministic `structured_data` format (`agentpilot.extraction
+    .structured_data`, no LLM). `json_schema` is plain JSON Schema, not a
+    custom DSL -- it's handed directly to an OpenAI-compatible
+    `response_format.json_schema.schema` parameter, no translation layer
+    needed. Named `json_schema`, not `schema`, to avoid shadowing Pydantic's
+    own `BaseModel.schema()` on the gateway-side mirror of this type."""
+
+    json_schema: dict[str, Any] | None = None
+    prompt: str | None = None
 
 
 @dataclass
@@ -27,6 +43,7 @@ class ScrapeOptions:
     actions: tuple[Action, ...] = ()
     screenshot: bool = False
     full_page_screenshot: bool = False
+    extract: ExtractConfig | None = None
 
 
 @dataclass
@@ -55,6 +72,11 @@ class Document:
     markdown: str | None = None
     text: str | None = None
     html: str | None = None
+    structured_data: dict[str, Any] | None = None
+    """JSON-LD/meta-OG-Twitter-DC/Next.js-Nuxt hydration-state bundle, set
+    when `formats` includes `"structured_data"` -- see `agentpilot.extraction
+    .structured_data`. Deterministic, no LLM; see `extract` for the separate
+    LLM-schema-driven counterpart."""
     raw_html: str | None = None
     """Always `None` today -- `spi.actions.ExtractAction`'s `html` format
     already returns `page.content()` unmodified (see that class's
@@ -66,3 +88,12 @@ class Document:
     screenshot_artifact_id: str | None = None
     metadata: DocumentMetadata | None = None
     error: str | None = None
+    extract: dict[str, Any] | None = None
+    """The LLM's schema-shaped output, set only when `ScrapeOptions.extract`
+    was set. Separate from `structured_data` (deterministic, no LLM) and
+    from the top-level `error` (a failed LLM call shouldn't null out an
+    otherwise-successful markdown/html scrape) -- see `extract_error`."""
+    extract_error: str | None = None
+    """Set instead of `extract` when the LLM call fails (including
+    `AGENTPILOT_LLM_API_KEY` unset) -- never raised through to fail the
+    whole scrape."""

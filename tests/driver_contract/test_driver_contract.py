@@ -118,6 +118,40 @@ async def test_extract_markdown_returns_clean_main_content(
     assert "Copyright" not in text
 
 
+STRUCTURED_DATA_HTML = """<html><head>
+<title>Widget Product Page</title>
+<meta property="og:title" content="Widget">
+<meta property="og:description" content="A fine widget.">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Product", "name": "Widget"}
+</script>
+<script id="__NEXT_DATA__" type="application/json">
+{"props": {"pageProps": {"sku": "WID-1"}}}
+</script>
+</head><body><article>Widget details here.</article></body></html>"""
+
+
+async def test_extract_structured_data_returns_json_ld_meta_and_hydration(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(
+        STRUCTURED_DATA_HTML, content_type="text/html"
+    )
+
+    result = await driver.execute(
+        open_ctx,
+        [NavigateAction(url=httpserver.url_for("/")), ExtractAction(format="structured_data")],
+    )
+
+    data = json.loads(result.extracts[0])
+    assert data["json_ld"] == [
+        {"@context": "https://schema.org", "@type": "Product", "name": "Widget"}
+    ]
+    assert data["metadata"]["og:title"] == "Widget"
+    assert data["hydration"]["__NEXT_DATA__"]["props"]["pageProps"]["sku"] == "WID-1"
+    assert result.page_title == "Widget Product Page"
+
+
 async def test_click_dispatches_via_ref_cache(
     driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
 ) -> None:

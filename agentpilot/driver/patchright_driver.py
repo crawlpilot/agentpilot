@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import socket
 import uuid
 from collections.abc import Mapping
@@ -507,7 +508,23 @@ class PatchrightDriver:
             root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
             result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
         elif isinstance(action, ExtractAction):
+            # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
+            # full page.content() fetch -- doesn't add a round trip to
+            # non-extract batches (interactive click/fill/etc. sequences),
+            # and isn't refetched if a batch requests multiple formats.
+            if result.page_title is None:
+                result.page_title = await live.page.title()
             html = await live.page.content()
+            base_url = action.base_url or live.page.url
+            live_hydration: dict[str, Any] | None = None
+            if action.format == "structured_data":
+                # Static parse first (cheap, in-memory HTML reparse); only
+                # fall back to a live JS-eval round trip if it found nothing
+                # -- covers client-only SPA state never present in the
+                # static markup, without paying for it on every scrape.
+                preview = json.loads(extract(html, format=action.format, base_url=base_url))
+                if not preview["hydration"]:
+                    live_hydration = await self._probe_hydration_globals(live)
             result.extracts.append(
                 extract(
                     html,
@@ -515,7 +532,8 @@ class PatchrightDriver:
                     main_content=action.main_content,
                     include_tags=action.include_tags,
                     exclude_tags=action.exclude_tags,
-                    base_url=action.base_url or live.page.url,
+                    base_url=base_url,
+                    live_hydration=live_hydration,
                 )
             )
         elif isinstance(action, ScreenshotAction):
@@ -618,6 +636,32 @@ class PatchrightDriver:
             )
             for (pid, p), title in zip(cctx.pages.items(), titles, strict=True)
         ]
+
+    _HYDRATION_PROBE_JS = """() => {
+        const keys = ["__NEXT_DATA__", "__NUXT__", "__INITIAL_STATE__",
+                      "__APOLLO_STATE__", "__REDUX_STATE__"];
+        const found = {};
+        for (const key of keys) {
+            if (window[key] !== undefined) {
+                found[key] = window[key];
+            }
+        }
+        return found;
+    }"""
+
+    async def _probe_hydration_globals(self, live: _Page) -> dict[str, Any]:
+        """Live JS-eval fallback for `structured_data` extraction, used only
+        when the static HTML parse found no hydration script tag -- covers
+        client-only SPA state that never lands in the served markup. Best
+        effort: a window global holding something CDP can't JSON-serialize
+        (a function, a circular ref) fails closed to `{}` rather than
+        breaking the whole extract."""
+
+        try:
+            result = await live.page.evaluate(self._HYDRATION_PROBE_JS)
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
 
     async def _resolve_ref(self, live: _Page, ref: str) -> Locator:
         """Resolves via `RefCache`, then enforces visibility: a ref that

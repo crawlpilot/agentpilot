@@ -9,13 +9,25 @@ main-content extraction/selector-based sanitization) -> `markdown_converter.py`
 cleanup) -> an empty-content fallback (stage 4, this module) that retries
 without main-content filtering if the first pass produced nothing. `html`
 format is unchanged: raw `page.content()` passthrough.
+
+`structured_data` format (JSON-LD/meta/hydration state, see `structured_data
+.py`) is a separate deterministic path that runs on a *fresh* parse of the raw
+HTML, not `sanitizer.sanitize()`'s tree -- `sanitizer._drop_always()` strips
+`head`/`meta`/`script` before this module would otherwise see them. It is
+exempt from the empty-content main-content fallback below (that logic is
+markdown/text-specific) and returns a JSON string, same as every other
+format, to fit `spi.actions.ActionResult.extracts: list[str]`'s per-format
+correlation.
 """
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from lxml.html import HtmlElement
 
-from agentpilot.extraction import markdown_converter, postprocess, sanitizer
+from agentpilot.extraction import markdown_converter, postprocess, sanitizer, structured_data
 from agentpilot.spi.actions import ExtractFormat
 
 
@@ -26,9 +38,16 @@ def extract(
     include_tags: tuple[str, ...] | None = None,
     exclude_tags: tuple[str, ...] | None = None,
     base_url: str | None = None,
+    live_hydration: dict[str, Any] | None = None,
 ) -> str:
     if format == "html":
         return html
+
+    if format == "structured_data":
+        data = structured_data.extract_structured_data(html, base_url=base_url)
+        if live_hydration:
+            data["hydration"] = {**data["hydration"], **live_hydration}
+        return json.dumps(data)
 
     result = _render(
         html,

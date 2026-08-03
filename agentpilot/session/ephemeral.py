@@ -18,6 +18,7 @@ this module in the layering (`gateway -> session -> identity -> ... -> spi`)
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -26,8 +27,11 @@ import structlog
 
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
+from agentpilot.llm import schema_extract
+from agentpilot.llm.client import LLMConfig
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.actions import ExtractFormat
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.identity import IdentityKey
@@ -35,6 +39,19 @@ from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 
 log = structlog.get_logger(__name__)
+
+
+def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
+    """`options.formats` plus an internal `"markdown"` request when
+    `options.extract` needs input the caller didn't otherwise ask for --
+    mirrors Firecrawl's "json format requires markdown" derivation
+    (`deriveMarkdownFromHTML`). The internal markdown never leaks into
+    `Document.markdown` unless the caller actually requested it -- see
+    `run_ephemeral_scrape`."""
+
+    if options.extract is not None and "markdown" not in options.formats:
+        return (*options.formats, "markdown")
+    return options.formats
 
 
 def _build_batch(url: str, options: ScrapeOptions) -> list[spi_actions.Action]:
@@ -51,7 +68,7 @@ def _build_batch(url: str, options: ScrapeOptions) -> list[spi_actions.Action]:
             include_tags=options.include_tags,
             exclude_tags=options.exclude_tags,
         )
-        for fmt in options.formats
+        for fmt in _effective_formats(options)
     )
     if options.screenshot:
         batch.append(spi_actions.ScreenshotAction(full_page=options.full_page_screenshot))
@@ -123,22 +140,47 @@ async def run_ephemeral_scrape(
     # the rest of the batch (`result.sequence_aborted`), which can leave
     # `result.extracts` shorter than `options.formats` -- surfaced as a
     # descriptive `error` below rather than a raised exception.
-    extracted = dict(zip(options.formats, result.extracts, strict=False))
+    extracted = dict(zip(_effective_formats(options), result.extracts, strict=False))
     screenshot_bytes = result.screenshots[0] if result.screenshots else None
     error = None
     if result.sequence_aborted:
         error = "page navigated away during a pre-extract action; some formats may be missing"
 
+    structured_data_raw = extracted.get("structured_data")
+    internal_markdown = extracted.get("markdown")
+    # `internal_markdown` may exist only to feed `options.extract` below --
+    # don't leak it into the response unless the caller actually asked for
+    # the `"markdown"` format themselves.
+    document_markdown = internal_markdown if "markdown" in options.formats else None
+
+    extract_result = None
+    extract_error = None
+    if options.extract is not None:
+        if not internal_markdown:
+            extract_error = "no markdown content available for structured extraction"
+        else:
+            try:
+                config = LLMConfig.from_env()
+                extract_result = await schema_extract.extract_structured(
+                    internal_markdown,
+                    json_schema=options.extract.json_schema,
+                    prompt=options.extract.prompt,
+                    config=config,
+                )
+            except Exception as exc:
+                extract_error = str(exc)
+
     document = Document(
         document_id=str(uuid.uuid4()),
         url=url,
-        markdown=extracted.get("markdown"),
+        markdown=document_markdown,
         text=extracted.get("text"),
         html=extracted.get("html"),
+        structured_data=json.loads(structured_data_raw) if structured_data_raw else None,
         links=(),
         screenshot_artifact_id=None,
         metadata=DocumentMetadata(
-            title=None,
+            title=result.page_title,
             status_code=None,
             tier_used=tier,
             node_id=ctx.node_id,
@@ -146,5 +188,7 @@ async def run_ephemeral_scrape(
             source_url=url,
         ),
         error=error,
+        extract=extract_result,
+        extract_error=extract_error,
     )
     return document, screenshot_bytes

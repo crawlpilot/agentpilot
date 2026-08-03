@@ -68,7 +68,7 @@ class SnapshotActionIn(BaseModel):
 class ExtractActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["extract"]
-    format: Literal["markdown", "text", "html"] = "markdown"
+    format: Literal["markdown", "text", "html", "structured_data"] = "markdown"
     main_content: bool = True
     include_tags: list[str] = Field(default_factory=list)
     exclude_tags: list[str] = Field(default_factory=list)
@@ -194,6 +194,17 @@ class ExecuteRequest(BaseModel):
 # composed server-side around an ephemeral identity -- see routes/scrape.py) ---
 
 
+class ExtractConfigIn(BaseModel):
+    """LLM-schema-driven structured extraction request -- see
+    `spi.scrape.ExtractConfig`'s docstring for how this differs from the
+    deterministic `"structured_data"` format, and for why this is
+    `json_schema`, not `schema`."""
+
+    model_config = ConfigDict(extra="forbid")
+    json_schema: dict[str, Any] | None = None
+    prompt: str | None = None
+
+
 class ScrapeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -203,7 +214,9 @@ class ScrapeRequest(BaseModel):
     """Same not-yet-routed field as `SessionOpenRequest.tier` -- every scrape
     takes the same full-Patchright path today regardless of this value; see
     that model's field for the reasoning."""
-    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
+        default=["markdown"]
+    )
     only_main_content: bool = True
     include_tags: list[str] = Field(default_factory=list)
     exclude_tags: list[str] = Field(default_factory=list)
@@ -217,6 +230,7 @@ class ScrapeRequest(BaseModel):
     not rejected -- there's no reason to special-case that combination."""
     screenshot: bool = False
     full_page_screenshot: bool = False
+    extract: ExtractConfigIn | None = None
 
 
 class ScrapeMetadataOut(BaseModel):
@@ -236,6 +250,7 @@ class DocumentOut(BaseModel):
     markdown: str | None = None
     text: str | None = None
     html: str | None = None
+    structured_data: dict[str, Any] | None = None
     links: list[str] = Field(default_factory=list)
     screenshot: str | None = None
     """Base64-encoded PNG, same encoding `ActionResultOut.screenshots` uses.
@@ -245,6 +260,8 @@ class DocumentOut(BaseModel):
     `screenshot_artifact_id` once an artifact store exists to upload to."""
     metadata: ScrapeMetadataOut | None = None
     error: str | None = None
+    extract: dict[str, Any] | None = None
+    extract_error: str | None = None
 
 
 class ScrapeResponse(BaseModel):
@@ -293,7 +310,9 @@ class ScrapeOptionsIn(BaseModel):
     docstring for where that boundary is drawn and why."""
 
     model_config = ConfigDict(extra="forbid")
-    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
+        default=["markdown"]
+    )
     only_main_content: bool = True
     include_tags: list[str] = Field(default_factory=list)
     exclude_tags: list[str] = Field(default_factory=list)
@@ -301,6 +320,7 @@ class ScrapeOptionsIn(BaseModel):
     wait_for_ms: int | None = None
     screenshot: bool = False
     full_page_screenshot: bool = False
+    extract: ExtractConfigIn | None = None
 
 
 class WebhookIn(BaseModel):

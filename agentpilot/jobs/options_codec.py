@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from agentpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
-from agentpilot.spi.scrape import ScrapeOptions
+from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 
 def dump_scrape_options(options: ScrapeOptions) -> dict[str, Any]:
@@ -34,6 +34,12 @@ def dump_scrape_options(options: ScrapeOptions) -> dict[str, Any]:
         "wait_for_ms": options.wait_for_ms,
         "screenshot": options.screenshot,
         "full_page_screenshot": options.full_page_screenshot,
+        "extract": {
+            "json_schema": options.extract.json_schema,
+            "prompt": options.extract.prompt,
+        }
+        if options.extract
+        else None,
     }
 
 
@@ -41,6 +47,7 @@ def load_scrape_options(data: dict[str, Any] | None) -> ScrapeOptions:
     data = data or {}
     include_tags = data.get("include_tags")
     exclude_tags = data.get("exclude_tags")
+    extract_data = data.get("extract")
     return ScrapeOptions(
         formats=tuple(data.get("formats") or ("markdown",)),
         only_main_content=data.get("only_main_content", True),
@@ -51,6 +58,11 @@ def load_scrape_options(data: dict[str, Any] | None) -> ScrapeOptions:
         actions=(),  # see module docstring
         screenshot=data.get("screenshot", False),
         full_page_screenshot=data.get("full_page_screenshot", False),
+        extract=ExtractConfig(
+            json_schema=extract_data.get("json_schema"), prompt=extract_data.get("prompt")
+        )
+        if extract_data
+        else None,
     )
 
 

@@ -1,9 +1,42 @@
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { DocumentOut } from '@/lib/api/types'
+
+// Scoped rather than a Tailwind Typography plugin -- one component's worth
+// of heading/link/code/table styling doesn't need a whole new dependency.
+// `react-markdown` renders to real React elements (no `dangerouslySetInnerHTML`),
+// which matters here specifically: this content comes from scraping
+// arbitrary third-party pages, so raw-HTML injection is a real XSS surface,
+// not just a hypothetical one.
+const MARKDOWN_PREVIEW_CLASSES =
+  'prose-preview max-h-96 overflow-auto p-3 text-sm leading-relaxed ' +
+  '[&_h1]:mt-0 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold ' +
+  '[&_h2]:mt-4 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold ' +
+  '[&_h3]:mt-3 [&_h3]:mb-1.5 [&_h3]:text-sm [&_h3]:font-semibold ' +
+  '[&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 ' +
+  '[&_li]:my-0.5 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border ' +
+  '[&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground ' +
+  '[&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2 ' +
+  '[&_img]:my-2 [&_img]:max-w-full [&_img]:rounded-md [&_img]:border [&_img]:border-border ' +
+  '[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs ' +
+  '[&_pre]:my-2 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0 ' +
+  '[&_table]:my-2 [&_table]:border-collapse [&_table]:text-xs ' +
+  '[&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1 [&_th]:text-left ' +
+  '[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 ' +
+  '[&_hr]:my-3 [&_hr]:border-border'
+
+function MarkdownPreview({ content }: { content: string }) {
+  return (
+    <div className={MARKDOWN_PREVIEW_CLASSES}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  )
+}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -32,6 +65,11 @@ export function DocumentPreview({ document }: { document: DocumentOut }) {
     document.html != null && ('html' as const),
     document.text != null && ('text' as const),
   ].filter((f): f is 'markdown' | 'html' | 'text' => f !== false)
+
+  // Markdown defaults to a rendered view -- raw markdown syntax (`#`, `[x](y)`,
+  // `|---|`) is what prompted this change in the first place. HTML/text have
+  // no analogous "rendered" mode here, so this only ever applies to markdown.
+  const [markdownView, setMarkdownView] = useState<'rendered' | 'raw'>('rendered')
 
   return (
     <div className="flex flex-col gap-3">
@@ -72,10 +110,34 @@ export function DocumentPreview({ document }: { document: DocumentOut }) {
             return (
               <TabsContent key={f} value={f}>
                 <div className="rounded-md border border-border">
-                  <div className="flex items-center justify-end border-b border-border px-2 py-1">
+                  <div className="flex items-center justify-between border-b border-border px-2 py-1">
+                    {f === 'markdown' ? (
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant={markdownView === 'rendered' ? 'secondary' : 'ghost'}
+                          onClick={() => setMarkdownView('rendered')}
+                        >
+                          Rendered
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={markdownView === 'raw' ? 'secondary' : 'ghost'}
+                          onClick={() => setMarkdownView('raw')}
+                        >
+                          Raw
+                        </Button>
+                      </div>
+                    ) : (
+                      <span />
+                    )}
                     <CopyButton text={content ?? ''} />
                   </div>
-                  <pre className="max-h-96 overflow-auto whitespace-pre-wrap p-3 text-xs">{content}</pre>
+                  {f === 'markdown' && markdownView === 'rendered' ? (
+                    <MarkdownPreview content={content ?? ''} />
+                  ) : (
+                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap p-3 text-xs">{content}</pre>
+                  )}
                 </div>
               </TabsContent>
             )

@@ -3,6 +3,8 @@ zero browser."""
 
 from __future__ import annotations
 
+import json
+
 from agentpilot.extraction.extractor import extract
 from agentpilot.extraction.postprocess import escape_link_label_newlines
 
@@ -117,6 +119,18 @@ def test_empty_main_content_falls_back_to_full_page() -> None:
     html = "<body><div class='sidebar'>only content on this page is here</div></body>"
     md = extract(html, format="markdown", main_content=True)
     assert "only content on this page is here" in md
+
+
+def test_structured_data_format_returns_json_ld_and_meta() -> None:
+    html = (
+        "<html><head><title>Widget</title>"
+        '<script type="application/ld+json">{"@type": "Product", "name": "Widget"}</script>'
+        "</head><body></body></html>"
+    )
+    result = json.loads(extract(html, format="structured_data"))
+    assert result["json_ld"] == [{"@type": "Product", "name": "Widget"}]
+    assert result["metadata"]["title"] == "Widget"
+    assert result["hydration"] == {}
 
 
 def test_relative_links_and_images_are_absolutified() -> None:

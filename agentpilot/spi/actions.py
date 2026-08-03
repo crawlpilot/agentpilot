@@ -21,7 +21,7 @@ from typing import Literal
 from agentpilot.spi.artifact import ArtifactRef
 from agentpilot.spi.snapshot import AXSnapshot
 
-ExtractFormat = Literal["markdown", "text", "html"]
+ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
 
 @dataclass
@@ -202,6 +202,12 @@ class ActionResult:
     """One entry per `ListTabsAction` in the batch (matching every other
     per-type list here being index-correlated to that action's occurrences,
     not a single running snapshot)."""
+    page_title: str | None = None
+    """The active page's `<title>` at the end of the batch (`page.title()`),
+    populated unconditionally by the driver regardless of which `ExtractAction`
+    formats were requested -- cheap, dedicated CDP getter, not tied to a full
+    `page.content()` fetch. `run_ephemeral_scrape` uses this to populate
+    `DocumentMetadata.title`, which was previously always `None`."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""

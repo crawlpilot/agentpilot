@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import cast
 from urllib.parse import urljoin
 
 from lxml import html as lxml_html
@@ -58,7 +59,7 @@ def sanitize(
 
 def _select(root: HtmlElement, selector: str) -> list[HtmlElement]:
     try:
-        return root.cssselect(selector)
+        return cast("list[HtmlElement]", root.cssselect(selector))
     except Exception:
         log.warning("extraction.sanitizer.invalid_selector", extra={"selector": selector})
         return []
@@ -107,12 +108,12 @@ def _contains_force_include(el: HtmlElement) -> bool:
 
 
 def _resolve_base_href(root: HtmlElement, base_url: str | None) -> str | None:
-    base_els = root.cssselect("base[href]")
+    base_els = _select(root, "base[href]")
     if base_els:
         href = base_els[0].get("href")
         if href and base_url:
             try:
-                return urljoin(base_url, href)
+                return str(urljoin(base_url, href))
             except ValueError:
                 return base_url
     return base_url

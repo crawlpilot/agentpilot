@@ -63,6 +63,7 @@ dev = [
     "pytest-httpserver>=1.1",
     "fakeredis>=2.26",
     "lupa>=2.1",
+    "lxml-stubs>=0.5",
 ]
 
 [build-system]
@@ -122,6 +123,15 @@ layers = ["agentpilot.gateway", "(agentpilot.control)", "agentpilot.spi"]
 name = "driver -> {extraction, egress} -> spi"
 type = "layers"
 layers = ["agentpilot.driver", "agentpilot.extraction | agentpilot.egress", "agentpilot.spi"]
+
+# agentpilot.llm (schema-driven LLM extraction, `ScrapeOptions.extract`) is a
+# new leaf, same shape as extraction/egress above -- session/ephemeral.py
+# calls it as a post-processing step once markdown is available, never the
+# other way around, and it never touches agentpilot.driver.
+[[tool.importlinter.contracts]]
+name = "session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
 
 # agentpilot.jobs (the async job queue behind /v1/crawl and /v1/batch/scrape)
 # is a second top-level consumer of agentpilot.placement, alongside

@@ -36,7 +36,7 @@ from agentpilot.observability.metrics import requests_total
 from agentpilot.spi.crawl import CrawlOptions
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import JobNotFound
-from agentpilot.spi.scrape import Document, ScrapeOptions
+from agentpilot.spi.scrape import Document, ExtractConfig, ScrapeOptions
 from agentpilot.spi.webhook import WebhookConfig
 
 log = structlog.get_logger(__name__)
@@ -77,6 +77,12 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
             wait_for_ms=req.scrape_options.wait_for_ms,
             screenshot=req.scrape_options.screenshot,
             full_page_screenshot=req.scrape_options.full_page_screenshot,
+            extract=ExtractConfig(
+                json_schema=req.scrape_options.extract.json_schema,
+                prompt=req.scrape_options.extract.prompt,
+            )
+            if req.scrape_options.extract
+            else None,
         ),
     )
 
@@ -89,6 +95,7 @@ def _document_out(document: Document) -> DocumentOut:
         markdown=document.markdown,
         text=document.text,
         html=document.html,
+        structured_data=document.structured_data,
         links=list(document.links),
         # Not persisted inline for job-backed results -- see
         # spi.scrape.Document.screenshot_artifact_id's docstring.
@@ -104,6 +111,8 @@ def _document_out(document: Document) -> DocumentOut:
         if meta is not None
         else None,
         error=document.error,
+        extract=document.extract,
+        extract_error=document.extract_error,
     )
 
 

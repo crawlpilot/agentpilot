@@ -28,7 +28,7 @@ from agentpilot.gateway.schemas import (
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
 from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.spi.scrape import ScrapeOptions
+from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
@@ -63,6 +63,9 @@ async def scrape(
         actions=tuple(to_spi_action(a) for a in req.actions),
         screenshot=req.screenshot,
         full_page_screenshot=req.full_page_screenshot,
+        extract=ExtractConfig(json_schema=req.extract.json_schema, prompt=req.extract.prompt)
+        if req.extract
+        else None,
     )
 
     with scrape_duration_seconds.time():
@@ -88,6 +91,7 @@ async def scrape(
             markdown=document.markdown,
             text=document.text,
             html=document.html,
+            structured_data=document.structured_data,
             links=list(document.links),
             screenshot=base64.b64encode(screenshot_bytes).decode("ascii")
             if screenshot_bytes
@@ -101,5 +105,7 @@ async def scrape(
                 source_url=document.url,
             ),
             error=document.error,
+            extract=document.extract,
+            extract_error=document.extract_error,
         ),
     )

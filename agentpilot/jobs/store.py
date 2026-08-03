@@ -118,11 +118,14 @@ def _document_from_row(row: dict[str, Any]) -> Document:
         markdown=row["markdown"],
         text=row["text"],
         html=row["html"],
+        structured_data=row["structured_data"],
         raw_html=row["raw_html"],
         links=tuple(row["links"] or ()),
         screenshot_artifact_id=row["screenshot_artifact_id"],
         metadata=metadata,
         error=row["error"],
+        extract=row["extract"],
+        extract_error=row["extract_error"],
     )
 
 
@@ -133,7 +136,8 @@ _JOB_COLUMNS = (
 
 _DOCUMENT_COLUMNS = (
     "document_id, url, status_code, title, markdown, text, html, raw_html, links, "
-    "screenshot_artifact_id, tier_used, node_id, duration_ms, error"
+    "screenshot_artifact_id, tier_used, node_id, duration_ms, error, structured_data, "
+    "extract, extract_error"
 )
 
 
@@ -457,7 +461,7 @@ class PostgresJobStore:
                 meta = document.metadata
                 await cur.execute(
                     f"INSERT INTO documents (job_id, task_id, {_DOCUMENT_COLUMNS}) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         job_id,
                         task_id,
@@ -475,6 +479,9 @@ class PostgresJobStore:
                         meta.node_id if meta else None,
                         meta.duration_ms if meta else None,
                         document.error,
+                        Jsonb(document.structured_data) if document.structured_data else None,
+                        Jsonb(document.extract) if document.extract else None,
+                        document.extract_error,
                     ),
                 )
                 await cur.execute(
