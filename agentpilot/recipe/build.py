@@ -168,11 +168,24 @@ class ExplorationState:
             else:
                 scalar[name] = locator
 
+        # If an array field is satisfied THIS call, the batch's trailing
+        # click is the representative-option click -- superseded by that
+        # group's own RepeatSpec below, so it must be stripped from whatever
+        # container (global_setup on the very first freeze, or this call's
+        # shared reveal_steps otherwise) it would otherwise land in. Stripped
+        # ONCE, upfront, shared by every group frozen this call -- a scalar
+        # field satisfied in the exact same batch as an array field's
+        # representative click (rare) would then miss that click in its own
+        # reveal path; an accepted v1 limitation, not silently mishandled.
+        steps = list(self._pending_reveal_steps)
+        if by_array and steps and steps[-1].action == "click":
+            steps = steps[:-1]
+
         if not self._global_setup_captured:
-            self.global_setup = list(self._pending_reveal_steps)
+            self.global_setup = steps
             reveal_steps: list[RevealStep] = []
         else:
-            reveal_steps = list(self._pending_reveal_steps)
+            reveal_steps = steps
 
         if scalar:
             self.field_groups.append(
@@ -185,10 +198,6 @@ class ExplorationState:
             )
 
         for array_name, locators in by_array.items():
-            group_reveal_steps = list(reveal_steps)
-            if group_reveal_steps and group_reveal_steps[-1].action == "click":
-                group_reveal_steps = group_reveal_steps[:-1]  # superseded by RepeatSpec below
-
             repeat = None
             if last_click_ref is not None:
                 repeat = generalize_option_locator(
@@ -204,7 +213,7 @@ class ExplorationState:
                 FieldGroup(
                     group_id=f"group-{len(self.field_groups)}-{uuid.uuid4().hex[:6]}",
                     field_names=list(locators.keys()),
-                    reveal_steps=group_reveal_steps,
+                    reveal_steps=list(reveal_steps),
                     field_locators=locators,
                     repeat=repeat,
                 )
