@@ -30,7 +30,16 @@ class BrowserDriver(Protocol):
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
-    ) -> ContextRef: ...
+        locale: str | None = None,
+        timezone_id: str | None = None,
+    ) -> ContextRef:
+        """`locale`/`timezone_id` (when set) override the browser context's
+        reported `navigator.language`/`Accept-Language` and JS timezone --
+        an anti-detection consistency lever (a US retail site expects a
+        plausible US locale/timezone, not whatever the host container
+        happens to run as). `None` leaves Chrome's own defaults untouched,
+        so existing interactive/test callers are unaffected."""
+        ...
 
     async def close(self, ctx: ContextRef) -> None: ...
 

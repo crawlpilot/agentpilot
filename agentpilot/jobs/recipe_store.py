@@ -190,6 +190,36 @@ class PostgresRecipeStore:
                 row = await cur.fetchone()
         return _recipe_from_row(row) if row else None
 
+    async def list_recipes(
+        self, tenant: str, after: str | None, limit: int = 50
+    ) -> tuple[list[RecipeOut], str | None]:
+        """Keyset-paginated by `created_at DESC`, using the existing
+        `idx_recipes_tenant (tenant, created_at DESC)` index -- same shape
+        as `list_versions`/`agent_store.list_steps`. `after` is the
+        previous page's last row's `created_at.isoformat()`."""
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                params: tuple[Any, ...] = (tenant,)
+                cursor_clause = ""
+                if after is not None:
+                    cursor_clause = "AND created_at < %s"
+                    params += (after,)
+                await cur.execute(
+                    f"""
+                    SELECT {_RECIPE_COLUMNS} FROM recipes
+                    WHERE tenant = %s {cursor_clause}
+                    ORDER BY created_at DESC LIMIT %s
+                    """,
+                    (*params, limit),
+                )
+                rows = await cur.fetchall()
+        recipes = [_recipe_from_row(r) for r in rows]
+        next_cursor = recipes[-1].created_at.isoformat() if len(recipes) == limit else None
+        return recipes, next_cursor
+
     async def list_versions(
         self, recipe_id: str, tenant: str, limit: int = 50
     ) -> list[dict[str, Any]]:

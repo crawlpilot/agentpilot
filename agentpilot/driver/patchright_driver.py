@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import socket
 import uuid
 from collections.abc import Mapping
@@ -114,6 +115,37 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
     "right": (600, 0),
     "left": (-600, 0),
 }
+
+# --- Behavioral-realism knobs (anti-detection). Real users don't fill an
+# input in a single instantaneous DOM write, teleport the pointer to an
+# element's exact center, or scroll by a pixel-perfect fixed delta every
+# time -- WAFs that score pointer/keystroke telemetry flag exactly that
+# regularity. These add human-plausible variance without changing what an
+# action ultimately does. All keyed off `random`, seeded per-process, so
+# tests that need determinism can `random.seed()`.
+
+_TYPE_DELAY_MS_RANGE = (90, 240)
+"""Per-character keystroke delay for `FillAction`, matching the range a
+sibling project documented for realistic typing (see CLAUDE.md's
+`randomDelayMillis("type")` note)."""
+
+_MOUSE_MOVE_STEPS_RANGE = (8, 18)
+"""Intermediate `mouse.move` steps before a click -- Playwright interpolates
+a straight line across them, still far more human than a single teleport to
+the target center; step count varies so the cadence isn't fixed."""
+
+_SCROLL_JITTER_FRAC = 0.15
+"""Fraction of the base scroll delta to randomize by (±), so repeated
+scrolls aren't a pixel-identical fixed wheel event."""
+
+
+def _jitter(value: float) -> float:
+    return value * (1 + random.uniform(-_SCROLL_JITTER_FRAC, _SCROLL_JITTER_FRAC))
+
+
+def _jittered_scroll_delta(direction: str) -> tuple[float, float]:
+    dx, dy = _SCROLL_DELTAS[direction]
+    return _jitter(dx), _jitter(dy)
 
 DEFAULT_MAX_TABS_PER_SESSION = 10
 """Per-session tab cap (`_Context.max_tabs`). A prior internal system's
@@ -298,6 +330,8 @@ class PatchrightDriver:
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
+        locale: str | None = None,
+        timezone_id: str | None = None,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -333,6 +367,16 @@ class PatchrightDriver:
             # upgrades carrying a *mismatched* `Origin`) never triggers.
             launch_args.append(f"--remote-debugging-port={cdp_port}")
 
+        # Only pass locale/timezone through when the caller actually set
+        # them -- Playwright treats an explicit `None` and an omitted kwarg
+        # differently, and omitting keeps Chrome's own defaults for the
+        # interactive/test callers that don't care (see `BrowserDriver.open`).
+        context_kwargs: dict[str, Any] = {}
+        if locale is not None:
+            context_kwargs["locale"] = locale
+        if timezone_id is not None:
+            context_kwargs["timezone_id"] = timezone_id
+
         playwright = await self._launcher.get_playwright()
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
@@ -341,6 +385,7 @@ class PatchrightDriver:
             no_viewport=True,
             proxy=_proxy_settings(proxy),
             args=launch_args,
+            **context_kwargs,
         )
         if enable_cdp:
             assert cdp_port is not None
@@ -564,12 +609,12 @@ class PatchrightDriver:
             locator = await self._resolve_ref(live, action.ref)
             if action.all:
                 for i in range(await locator.count()):
-                    await locator.nth(i).click()
+                    await self._human_click(live, locator.nth(i))
             else:
-                await locator.click()
+                await self._human_click(live, locator)
         elif isinstance(action, FillAction):
             locator = await self._resolve_ref(live, action.ref)
-            await locator.fill(action.text)
+            await self._human_fill(live, locator, action.text)
         elif isinstance(action, SelectOptionAction):
             locator = await self._resolve_ref(live, action.ref)
             await locator.select_option(action.values)
@@ -583,7 +628,7 @@ class PatchrightDriver:
                 locator = await self._resolve_ref(live, action.ref)
                 await locator.scroll_into_view_if_needed()
             else:
-                dx, dy = _SCROLL_DELTAS[action.direction]
+                dx, dy = _jittered_scroll_delta(action.direction)
                 await live.page.mouse.wheel(dx, dy)
         elif isinstance(action, NewTabAction):
             new_page_id = await self._create_tab(cctx, action.url)
@@ -699,6 +744,40 @@ class PatchrightDriver:
         if box is None or box["width"] <= 0 or box["height"] <= 0:
             raise StaleRefError(ref, epoch_superseded=False)
         return locator
+
+    async def _human_click(self, live: _Page, locator: Locator) -> None:
+        """Approach the target over several interpolated `mouse.move` steps
+        to a jittered point *inside* the element, then click -- versus
+        Playwright's default single teleport to the exact center. Best
+        effort: if the box can't be resolved quickly, fall straight through
+        to a plain `.click()` (which does its own actionability wait) rather
+        than failing the action for the sake of the flourish."""
+
+        try:
+            box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            box = None
+        if box is not None and box["width"] > 0 and box["height"] > 0:
+            tx = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+            ty = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+            with contextlib.suppress(Exception):
+                await live.page.mouse.move(tx, ty, steps=random.randint(*_MOUSE_MOVE_STEPS_RANGE))
+        await locator.click()
+
+    async def _human_fill(self, live: _Page, locator: Locator, text: str) -> None:
+        """Clear, then type character-by-character with a randomized delay
+        *between* keystrokes -- versus `locator.fill()`'s single instantaneous
+        DOM write, which is a strong automation tell to keystroke-timing
+        telemetry. `fill("")` clears any existing value first; the final
+        field value is identical to what `fill(text)` would have produced."""
+
+        await locator.fill("")
+        if not text:
+            return
+        await locator.focus()
+        for ch in text:
+            await live.page.keyboard.type(ch)
+            await asyncio.sleep(random.uniform(*_TYPE_DELAY_MS_RANGE) / 1000)
 
     async def _apply_viewport_filter(self, live: _Page, root: SnapshotNode) -> SnapshotNode:
         """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`

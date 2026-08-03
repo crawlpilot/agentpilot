@@ -23,18 +23,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
 from agentpilot.identity.profile_store import resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.identity.vault import Vault
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef, LeaseId
+
+if TYPE_CHECKING:
+    # Deferred: `Vault` pulls in `cryptography` (the `driver` extra), which
+    # the gateway image deliberately never installs (see
+    # `docker/gateway.Dockerfile`) -- `agentpilot.gateway.wiring` imports
+    # `InteractiveSession` from this module at module level, so an
+    # unconditional `Vault` import here broke gateway's own boot
+    # (`ModuleNotFoundError: No module named 'cryptography'`) even though
+    # this module only ever uses `vault` as a passed-in instance (`.load()`/
+    # `.save()`), never the class itself, at runtime.
+    from agentpilot.identity.vault import Vault
 
 log = structlog.get_logger(__name__)
 

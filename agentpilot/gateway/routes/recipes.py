@@ -22,6 +22,7 @@ from agentpilot.gateway.schemas import (
     RecipeCreateRequest,
     RecipeCreateResponse,
     RecipeGetResponse,
+    RecipeListResponse,
     RecipeOut,
     RecipeRunOut,
     RecipeRunQueuedResponse,
@@ -104,6 +105,20 @@ async def create_recipe(
         recipe_id=recipe.recipe_id, tenant=req.tenant, kind="build"
     )
     return RecipeCreateResponse(success=True, recipe_id=recipe.recipe_id, build_run_id=build_run_id)
+
+
+@router.get("", response_model=RecipeListResponse)
+async def list_recipes(
+    after: str | None = None,
+    limit: int = 50,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeListResponse:
+    store = _require_recipe_store(wiring)
+    recipes, next_cursor = await store.list_recipes(authed.tenant, after, limit)
+    return RecipeListResponse(
+        success=True, recipes=[_recipe_out(r) for r in recipes], next=next_cursor
+    )
 
 
 @router.get("/{recipe_id}", response_model=RecipeGetResponse)

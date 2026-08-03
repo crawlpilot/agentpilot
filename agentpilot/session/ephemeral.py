@@ -34,7 +34,7 @@ from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.actions import ExtractFormat
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 
@@ -87,6 +87,9 @@ async def run_ephemeral_scrape(
     proxy_pinner: ProxyPinner | None,
     lease_ttl_seconds: float,
     tier: str = "auto",
+    session_name: str | None = None,
+    locale: str | None = None,
+    timezone_id: str | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -94,18 +97,40 @@ async def run_ephemeral_scrape(
     artifact store, not inline bytes; see that field's docstring) so each
     caller decides for itself: `/v1/scrape` base64-encodes them straight
     into its response, while the crawl-worker loop currently has nowhere to
-    put them (no artifact store exists yet) and just discards them."""
+    put them (no artifact store exists yet) and just discards them.
 
-    identity = IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
+    `session_name` is the anti-detection lever: absent (the default), each
+    call mints a throwaway `scrape-{uuid}` identity whose profile dir is
+    deleted on teardown -- a cookie-less, first-visit browser every time,
+    which is itself a bot signal to WAFs like Akamai. When a caller passes a
+    stable `session_name`, the scrape instead reuses a *warm, persistent*
+    identity `(tenant, domain, session_name)` whose profile dir (cookies,
+    Chrome's own state) survives across calls -- so repeat scrapes of the
+    same site look like a returning visitor. `locale`/`timezone_id` flow
+    straight through to `driver.open()` for locale/timezone consistency."""
+
+    warm = session_name is not None
+    if warm:
+        assert session_name is not None  # narrows for the type checker
+        identity = IdentityKey(
+            tenant=tenant, domain=domain, name=session_name, kind=ProfileKind.DEFAULT
+        )
+    else:
+        identity = IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
     owner = f"{tenant}:scrape"
 
     async def _opener() -> ContextRef:
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
-        # pick_ephemeral(), not get_or_assign(): this identity is opened
-        # exactly once, so there is nothing to keep "sticky" for -- see
-        # that method's docstring.
-        proxy = proxy_pinner.pick_ephemeral(identity) if proxy_pinner else None
+        if warm:
+            # Sticky proxy for a reused identity, same as an interactive
+            # session -- the same profile should keep the same egress IP so
+            # cookies/fingerprint/IP stay coherent across visits.
+            proxy = await proxy_pinner.get_or_assign(identity) if proxy_pinner else None
+        else:
+            # pick_ephemeral(), not get_or_assign(): a throwaway identity is
+            # opened exactly once, so there is nothing to keep "sticky" for.
+            proxy = proxy_pinner.pick_ephemeral(identity) if proxy_pinner else None
         return await driver.open(
             identity,
             profile_dir,
@@ -114,10 +139,12 @@ async def run_ephemeral_scrape(
             egress=EgressPolicy(),
             block_popups=True,
             enable_cdp=False,
+            locale=locale,
+            timezone_id=timezone_id,
         )
-        # No vault load/restore: identity.is_temporary is always true for a
-        # freshly minted scrape identity, and a one-shot identity never had
-        # a vault entry to restore in the first place.
+        # No vault load/restore: cookie persistence for the warm case comes
+        # from the on-disk profile dir surviving teardown (below), not from
+        # the vault -- ephemeral.py has no vault handle by design.
 
     batch = _build_batch(url, options)
 
@@ -132,7 +159,11 @@ async def run_ephemeral_scrape(
         except Exception:
             log.warning("ephemeral_scrape.teardown_failed", url=url)
         finally:
-            delete_profile_dir(profiles_root, identity)
+            # The warm case's whole point is that the profile dir (cookies,
+            # Chrome state) survives for the next scrape of this identity --
+            # only the throwaway case deletes it.
+            if not warm:
+                delete_profile_dir(profiles_root, identity)
 
     duration_ms = (time.monotonic() - started) * 1000
 

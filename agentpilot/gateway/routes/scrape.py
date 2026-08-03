@@ -51,6 +51,22 @@ async def scrape(
             status_code=400, detail=f"cannot determine a domain from url {req.url!r}"
         )
 
+    # Fail closed rather than silently scrape from the raw container IP when
+    # the caller explicitly asked for a stealth-grade run: a datacenter
+    # egress IP is the dominant Akamai-block signal on hardened targets, and
+    # `tier=stealth|enhanced` with no proxy pool configured would otherwise
+    # look like it's doing something it isn't. `basic`/`auto` stay lenient.
+    if req.tier in ("stealth", "enhanced") and wiring.proxy_pinner is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"tier={req.tier!r} requires a proxy pool, but none is configured "
+                "(set AGENTPILOT_PROXY_POOL to a residential/mobile pool). "
+                "Scraping bot-protected sites from the raw host IP will be blocked; "
+                "use tier='basic' to proceed without a proxy anyway."
+            ),
+        )
+
     requests_total.labels(tenant=req.tenant, route="scrape").inc()
 
     options = ScrapeOptions(
@@ -80,6 +96,9 @@ async def scrape(
             proxy_pinner=wiring.proxy_pinner,
             lease_ttl_seconds=wiring.lease_ttl_seconds,
             tier=req.tier,
+            session_name=req.session_name,
+            locale=req.locale,
+            timezone_id=req.timezone_id,
         )
 
     meta = document.metadata

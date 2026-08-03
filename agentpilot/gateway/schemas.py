@@ -232,6 +232,20 @@ class ScrapeRequest(BaseModel):
     screenshot: bool = False
     full_page_screenshot: bool = False
     extract: ExtractConfigIn | None = None
+    session_name: str | None = None
+    """Anti-detection: opt into a warm, persistent browser profile for this
+    `(tenant, domain, session_name)` instead of the default throwaway
+    cookie-less profile. Repeat scrapes of the same site under the same name
+    reuse accumulated cookies/state -- a returning-visitor signal that a
+    fresh profile every call (a bot tell to WAFs like Akamai) lacks. Unset
+    (the default) keeps the isolated one-shot behavior."""
+    locale: str | None = None
+    """Overrides the browser context's `navigator.language`/`Accept-Language`
+    (e.g. `"en-US"`). Unset leaves Chrome's own default -- set it to a region
+    plausible for the target site to avoid a locale-vs-target mismatch."""
+    timezone_id: str | None = None
+    """Overrides the browser's reported timezone (e.g. `"America/New_York"`).
+    Should be coherent with `locale`. Unset leaves Chrome's own default."""
 
 
 class ScrapeMetadataOut(BaseModel):
@@ -487,6 +501,13 @@ class RecipeGetResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
     data: RecipeOut
+
+
+class RecipeListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipes: list[RecipeOut]
+    next: str | None
 
 
 class RecipeRunOut(BaseModel):
