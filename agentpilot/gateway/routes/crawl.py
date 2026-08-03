@@ -71,6 +71,8 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
         scrape_options=ScrapeOptions(
             formats=tuple(req.scrape_options.formats),
             only_main_content=req.scrape_options.only_main_content,
+            include_tags=tuple(req.scrape_options.include_tags) or None,
+            exclude_tags=tuple(req.scrape_options.exclude_tags) or None,
             timeout_ms=req.scrape_options.timeout_ms,
             wait_for_ms=req.scrape_options.wait_for_ms,
             screenshot=req.scrape_options.screenshot,

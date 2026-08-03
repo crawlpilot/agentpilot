@@ -18,8 +18,8 @@ ARTICLE_HTML = """<html><body>
 <article>
 <h1>Ephemeral Scrape Article</h1>
 <p>This is the first paragraph of real body content, long enough and
-distinct enough that trafilatura should treat it as the main article rather
-than boilerplate noise.</p>
+distinct enough that the extraction pipeline should treat it as the main
+article rather than boilerplate noise.</p>
 <p>A second paragraph continues with different wording so extraction has
 real multi-paragraph content to check against.</p>
 </article>

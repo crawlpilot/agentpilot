@@ -40,7 +40,8 @@ Issues = "https://github.com/crawlpilot/agentpilot/issues"
 driver = [
     "patchright>=1.61.2",
     "re-cdp-patches>=0.9.1",
-    "trafilatura>=2.1.0",
+    "lxml>=6.1.1",
+    "cssselect>=1.2.0",
     "cryptography>=43.0",
 ]
 # Postgres driver (runtime pool) + Alembic (migrations) for agentpilot.auth

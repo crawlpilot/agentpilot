@@ -56,6 +56,8 @@ async def scrape(
     options = ScrapeOptions(
         formats=tuple(req.formats),
         only_main_content=req.only_main_content,
+        include_tags=tuple(req.include_tags) or None,
+        exclude_tags=tuple(req.exclude_tags) or None,
         timeout_ms=req.timeout_ms,
         wait_for_ms=req.wait_for_ms,
         actions=tuple(to_spi_action(a) for a in req.actions),

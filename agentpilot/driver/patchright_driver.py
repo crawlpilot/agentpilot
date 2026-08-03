@@ -509,7 +509,14 @@ class PatchrightDriver:
         elif isinstance(action, ExtractAction):
             html = await live.page.content()
             result.extracts.append(
-                extract(html, format=action.format, main_content=action.main_content)
+                extract(
+                    html,
+                    format=action.format,
+                    main_content=action.main_content,
+                    include_tags=action.include_tags,
+                    exclude_tags=action.exclude_tags,
+                    base_url=action.base_url or live.page.url,
+                )
             )
         elif isinstance(action, ScreenshotAction):
             result.screenshots.append(await live.page.screenshot(full_page=action.full_page))

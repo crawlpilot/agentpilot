@@ -46,11 +46,17 @@ class SnapshotAction:
 
 @dataclass
 class ExtractAction:
-    """The scrape output. `markdown`/`text` route through `agentpilot.extraction`
-    (trafilatura); `html` returns `page.content()` raw."""
+    """The scrape output. `markdown`/`text` route through
+    `agentpilot.extraction`'s sanitize -> convert -> post-process pipeline;
+    `html` returns `page.content()` raw. `base_url` is used to absolutify
+    relative links/images during sanitization -- typically left unset here
+    and filled in by the driver from the live page's post-navigation URL."""
 
     format: ExtractFormat = "markdown"
     main_content: bool = True
+    include_tags: tuple[str, ...] | None = None
+    exclude_tags: tuple[str, ...] | None = None
+    base_url: str | None = None
     terminates_sequence: bool = False
 
 

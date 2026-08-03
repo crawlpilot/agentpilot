@@ -45,7 +45,12 @@ def _build_batch(url: str, options: ScrapeOptions) -> list[spi_actions.Action]:
         batch.append(spi_actions.WaitAction(ms=options.wait_for_ms))
     batch.extend(options.actions)
     batch.extend(
-        spi_actions.ExtractAction(format=fmt, main_content=options.only_main_content)
+        spi_actions.ExtractAction(
+            format=fmt,
+            main_content=options.only_main_content,
+            include_tags=options.include_tags,
+            exclude_tags=options.exclude_tags,
+        )
         for fmt in options.formats
     )
     if options.screenshot:

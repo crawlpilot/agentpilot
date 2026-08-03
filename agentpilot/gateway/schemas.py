@@ -70,6 +70,8 @@ class ExtractActionIn(BaseModel):
     type: Literal["extract"]
     format: Literal["markdown", "text", "html"] = "markdown"
     main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
 
 
 class ScreenshotActionIn(BaseModel):
@@ -203,6 +205,8 @@ class ScrapeRequest(BaseModel):
     that model's field for the reasoning."""
     formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
     only_main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     actions: list[ActionIn] = Field(default_factory=list)
@@ -291,6 +295,8 @@ class ScrapeOptionsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
     only_main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     screenshot: bool = False
