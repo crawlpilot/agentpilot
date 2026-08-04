@@ -1,5 +1,5 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { FileScan, Layers, MousePointerClick, Route as RouteIcon } from 'lucide-react'
+import { Bot, FileScan, Layers, MousePointerClick, Route as RouteIcon } from 'lucide-react'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 const TABS = [
@@ -7,15 +7,15 @@ const TABS = [
   { value: 'map', label: 'Map', icon: RouteIcon },
   { value: 'crawl', label: 'Crawl', icon: Layers },
   { value: 'interact', label: 'Interact', icon: MousePointerClick },
+  { value: 'agent', label: 'Agent', icon: Bot },
 ] as const
 
 // The shell: header + a tab strip whose value is derived from the current
 // route (not local state) + `<Outlet/>` for the active tool's own page --
 // see router.tsx's nested `playground` children. A flat tab bar rather than
 // the reference screenshot's DISCOVER/EXTRACT/CRAWL category groups: with
-// only these four tools (Search/Parse/Monitor/Agent have no backend yet,
-// scoped out of this pass), single-item category headers would add noise,
-// not clarity.
+// these tools (Search/Parse/Monitor have no backend yet, scoped out of this
+// pass), single-item category headers would add noise, not clarity.
 export function PlaygroundPage() {
   const location = useLocation()
   const navigate = useNavigate()

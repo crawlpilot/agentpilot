@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { FileScan, Globe, KeyRound, Layers, LayoutDashboard, MousePointerClick, Route as RouteIcon, Server } from 'lucide-react'
+import { BookOpen, FileScan, Globe, KeyRound, Layers, LayoutDashboard, MousePointerClick, Route as RouteIcon, Server } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
@@ -20,6 +20,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
       { to: '/sessions', label: 'Sessions', icon: Globe },
+      { to: '/recipes', label: 'Recipes', icon: BookOpen },
     ],
   },
   {

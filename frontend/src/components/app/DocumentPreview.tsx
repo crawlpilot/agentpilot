@@ -59,12 +59,15 @@ function CopyButton({ text }: { text: string }) {
 // Shared by the Scrape tab (one document, top-level result) and the Crawl
 // tab (one row's expanded preview) -- `DocumentOut` is the exact same shape
 // in both `ScrapeResponse.data` and `CrawlStatusResponse.data[]`.
+type PreviewFormat = 'markdown' | 'html' | 'text' | 'structured_data'
+
 export function DocumentPreview({ document }: { document: DocumentOut }) {
   const formats = [
     document.markdown != null && ('markdown' as const),
     document.html != null && ('html' as const),
     document.text != null && ('text' as const),
-  ].filter((f): f is 'markdown' | 'html' | 'text' => f !== false)
+    document.structured_data != null && ('structured_data' as const),
+  ].filter((f): f is PreviewFormat => f !== false)
 
   // Markdown defaults to a rendered view -- raw markdown syntax (`#`, `[x](y)`,
   // `|---|`) is what prompted this change in the first place. HTML/text have
@@ -90,6 +93,30 @@ export function DocumentPreview({ document }: { document: DocumentOut }) {
         </div>
       )}
 
+      {(document.extract != null || document.extract_error != null) && (
+        <div className="rounded-md border border-border">
+          <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">LLM extract</span>
+            {document.extract != null ? (
+              <Badge variant="success">ok</Badge>
+            ) : (
+              // `warning`, not `destructive`: an extract failure is an isolated,
+              // expected sub-failure (e.g. no API key configured) that never
+              // fails the whole scrape -- distinct from `document.error` above.
+              <Badge variant="warning">unavailable</Badge>
+            )}
+            {document.extract != null && <CopyButton text={JSON.stringify(document.extract, null, 2)} />}
+          </div>
+          {document.extract != null ? (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap p-3 text-xs">
+              {JSON.stringify(document.extract, null, 2)}
+            </pre>
+          ) : (
+            <p className="px-3 py-2 text-sm text-muted-foreground">{document.extract_error}</p>
+          )}
+        </div>
+      )}
+
       {document.screenshot && (
         <div className="overflow-hidden rounded-md border border-border">
           <img src={`data:image/png;base64,${document.screenshot}`} alt="screenshot" className="w-full" />
@@ -101,12 +128,19 @@ export function DocumentPreview({ document }: { document: DocumentOut }) {
           <TabsList>
             {formats.map((f) => (
               <TabsTrigger key={f} value={f} className="capitalize">
-                {f}
+                {f === 'structured_data' ? 'Structured data' : f}
               </TabsTrigger>
             ))}
           </TabsList>
           {formats.map((f) => {
-            const content = f === 'markdown' ? document.markdown : f === 'html' ? document.html : document.text
+            const content =
+              f === 'markdown'
+                ? document.markdown
+                : f === 'html'
+                  ? document.html
+                  : f === 'text'
+                    ? document.text
+                    : JSON.stringify(document.structured_data, null, 2)
             return (
               <TabsContent key={f} value={f}>
                 <div className="rounded-md border border-border">
