@@ -64,7 +64,7 @@ async def chat_json(
 
 
 async def chat_json_conversation(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     config: LLMConfig,
     json_schema: dict[str, Any] | None = None,
@@ -75,7 +75,11 @@ async def chat_json_conversation(
     a raw growing transcript -- see `agent/prompts.py`). Returns the parsed
     JSON object the model produced. A malformed/non-JSON model response
     raises `json.JSONDecodeError`/`KeyError` -- callers catch broadly and
-    surface it as an error field rather than crashing the whole run."""
+    surface it as an error field rather than crashing the whole run.
+
+    A message's `content` may be a plain string or, for a vision-capable
+    model, the OpenAI multimodal parts list (`[{"type": "text", ...},
+    {"type": "image_url", ...}]`) -- passed through to the endpoint as-is."""
 
     if json_schema is not None:
         response_format: dict[str, Any] = {

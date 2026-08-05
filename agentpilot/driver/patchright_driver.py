@@ -62,7 +62,11 @@ from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.driver.ref_cache import RefCache
 from agentpilot.egress.policy import apply_baseline
 from agentpilot.extraction.extractor import extract
-from agentpilot.observability.metrics import context_task_outcomes_total, context_tasks_total
+from agentpilot.observability.metrics import (
+    context_leak_warnings_total,
+    context_task_outcomes_total,
+    context_tasks_total,
+)
 from agentpilot.spi.actions import (
     Action,
     ActionResult,
@@ -93,7 +97,7 @@ from agentpilot.spi.errors import (
     StaleRefError,
     TabNotFound,
 )
-from agentpilot.spi.health import HealthStatus
+from agentpilot.spi.health import ContextHealth, HealthStatus
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -146,6 +150,21 @@ the target center; step count varies so the cadence isn't fixed."""
 _SCROLL_JITTER_FRAC = 0.15
 """Fraction of the base scroll delta to randomize by (±), so repeated
 scrolls aren't a pixel-identical fixed wheel event."""
+
+
+def _navigation_leak_reason(status: int | None) -> str | None:
+    """Pure classifier for navigation-response leak signals -- a site telling
+    us it suspects a bot. Status-only for now (no extra round trip); a
+    content/title-based captcha check (Cloudflare "Just a moment", hCaptcha)
+    is a later refinement that would cost a `content()` fetch. Feeds
+    `_ContextHealth.leak_warnings`, which a later pass uses to rotate the
+    profile (mirrors Browser4's privacy-leak-driven context drop)."""
+
+    if status == 403:
+        return "http_403"
+    if status == 429:
+        return "http_429"
+    return None
 
 
 def _jitter(value: float) -> float:
@@ -593,7 +612,7 @@ class PatchrightDriver:
     ) -> None:
         if isinstance(action, NavigateAction):
             try:
-                await live.page.goto(action.url, timeout=action.timeout_ms)
+                response = await live.page.goto(action.url, timeout=action.timeout_ms)
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
             # Any ref taken before this navigation must not resolve against
@@ -605,6 +624,14 @@ class PatchrightDriver:
             # page instead of correctly raising StaleRefError.
             live.epoch += 1
             live.ref_cache.reset(live.epoch)
+            result.verifications.append(f"navigated to {live.page.url}")
+            reason = _navigation_leak_reason(response.status if response is not None else None)
+            if reason is not None:
+                cctx.health.leak_warnings += 1
+                context_leak_warnings_total.labels(reason=reason).inc()
+                result.verifications.append(
+                    f"warning: navigation returned {reason} -- possible block or bot challenge"
+                )
         elif isinstance(action, GoBackAction):
             await live.page.go_back()
             live.epoch += 1
@@ -664,15 +691,28 @@ class PatchrightDriver:
         elif isinstance(action, ExecuteJsAction):
             result.js_returns.append(await live.page.evaluate(action.script))
         elif isinstance(action, ClickAction):
+            pre_click_url = live.page.url
             locator = await self._resolve_ref(live, action.ref)
             if action.all:
                 for i in range(await locator.count()):
                     await self._human_click(live, locator.nth(i))
             else:
                 await self._human_click(live, locator)
+            if live.page.url != pre_click_url:
+                result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
+            else:
+                result.verifications.append(f"clicked {action.ref}")
         elif isinstance(action, FillAction):
             locator = await self._resolve_ref(live, action.ref)
             await self._human_fill(live, locator, action.text)
+            # Read-back grounding: confirm the value actually landed in the
+            # field rather than assuming success. Best-effort -- a field that
+            # can't report its value must not fail the fill.
+            with contextlib.suppress(Exception):
+                value = await locator.input_value()
+                result.verifications.append(
+                    f"filled {action.ref}: field now contains {value[:80]!r}"
+                )
         elif isinstance(action, SelectOptionAction):
             locator = await self._resolve_ref(live, action.ref)
             await locator.select_option(action.values)
@@ -971,6 +1011,19 @@ class PatchrightDriver:
             return HealthStatus(alive=True, reason=None)
         death_reason = next((p.death_reason for p in cctx.pages.values() if p.death_reason), None)
         return HealthStatus(alive=False, reason=death_reason)
+
+    async def context_health(self, ctx: ContextRef) -> ContextHealth | None:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None:
+            return None
+        h = cctx.health
+        return ContextHealth(
+            tasks=h.tasks,
+            successes=h.successes,
+            failures=h.failures,
+            small_pages=h.small_pages,
+            leak_warnings=h.leak_warnings,
+        )
 
     # --- LiveViewCapable (optional capability; see spi.streaming) ---
     # Page and Input domains only -- never Runtime, to preserve Patchright's

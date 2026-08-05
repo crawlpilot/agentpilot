@@ -216,6 +216,11 @@ class ActionResult:
     formats were requested -- cheap, dedicated CDP getter, not tied to a full
     `page.content()` fetch. `run_ephemeral_scrape` uses this to populate
     `DocumentMetadata.title`, which was previously always `None`."""
+    verifications: list[str] = field(default_factory=list)
+    """Human-readable per-action outcome checks (a fill's read-back value, a
+    navigation's landed URL, a click that changed the page). Lets the agent
+    loop tell the model *what actually happened* instead of assuming success
+    from the absence of an exception -- the driver's per-action grounding."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""

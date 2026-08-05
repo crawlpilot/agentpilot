@@ -82,6 +82,11 @@ agent_runs_total = Counter(
 agent_loop_nudges_total = Counter(
     "agentpilot_agent_loop_nudges_total", "Loop-detector nudges surfaced to the agent"
 )
+agent_judge_verdicts_total = Counter(
+    "agentpilot_agent_judge_verdicts_total",
+    "Independent completion-judge verdicts on self-reported successes",
+    ["verdict"],  # passed | rejected | error
+)
 
 # --- Per-context health (Wave 0 instrumentation; feeds later leak-driven
 # rotation) -------------------------------------------------------------------
@@ -96,4 +101,14 @@ context_task_outcomes_total = Counter(
     "agentpilot_context_task_outcomes_total",
     "Driver execute() batch outcomes",
     ["outcome"],  # success | failure
+)
+context_leak_warnings_total = Counter(
+    "agentpilot_context_leak_warnings_total",
+    "Bot-detection / block signals observed per context (feeds leak-driven rotation)",
+    ["reason"],  # http_403 | http_429
+)
+context_rotations_total = Counter(
+    "agentpilot_context_rotations_total",
+    "Contexts retired + rotated due to degraded health, by policy",
+    ["policy"],  # restart | fresh
 )

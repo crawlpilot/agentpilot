@@ -28,6 +28,7 @@ from agentpilot.jobs.agent_store import ClaimedAgentRun, PostgresAgentStore
 from agentpilot.llm.client import LLMConfig
 from agentpilot.session.interactive import open_interactive_session, release_interactive_session
 from agentpilot.session.registry import RegistryProtocol
+from agentpilot.session.rotation import RotationConfig
 from agentpilot.spi.driver import BrowserDriver
 
 log = structlog.get_logger(__name__)
@@ -49,6 +50,9 @@ class AgentWorkerLoop:
         stale_after_seconds: float = 120.0,
         max_failures: int = 5,
         step_timeout_s: float | None = None,
+        enable_vision: bool = False,
+        enable_judge: bool = False,
+        rotation: RotationConfig | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -62,6 +66,9 @@ class AgentWorkerLoop:
         self._stale_after_seconds = stale_after_seconds
         self._max_failures = max_failures
         self._step_timeout_s = step_timeout_s
+        self._enable_vision = enable_vision
+        self._enable_judge = enable_judge
+        self._rotation = rotation
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -135,12 +142,19 @@ class AgentWorkerLoop:
                 output_schema=run.output_schema,
                 max_failures=self._max_failures,
                 step_timeout_s=self._step_timeout_s,
+                enable_vision=self._enable_vision,
+                enable_judge=self._enable_judge,
                 on_step=_on_step,
             )
         finally:
             try:
                 await release_interactive_session(
-                    session, registry=self._registry, driver=self._driver, vault=None
+                    session,
+                    registry=self._registry,
+                    driver=self._driver,
+                    vault=None,
+                    rotation=self._rotation,
+                    profiles_root=self._profiles_root,
                 )
             except Exception:
                 log.warning("agent_worker_loop.release_failed", run_id=run.run_id)

@@ -339,8 +339,14 @@ class Wiring:
         if self.role not in ("worker", "monolith") or self.agent_store is None:
             return
         from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
+        from agentpilot.session.rotation import RotationConfig, RotationPolicy
 
         step_timeout_raw = os.environ.get("AGENTPILOT_AGENT_STEP_TIMEOUT_S")
+        rotation = RotationConfig(
+            enabled=os.environ.get("AGENTPILOT_ENABLE_CONTEXT_ROTATION", "").lower()
+            in ("1", "true", "yes"),
+            policy=RotationPolicy.parse(os.environ.get("AGENTPILOT_ROTATION_POLICY")),
+        )
         self.agent_worker_loop = AgentWorkerLoop(
             self.agent_store,
             self.registry,
@@ -350,6 +356,11 @@ class Wiring:
             lease_ttl_seconds=self.lease_ttl_seconds,
             max_failures=int(os.environ.get("AGENTPILOT_AGENT_MAX_FAILURES", "5")),
             step_timeout_s=float(step_timeout_raw) if step_timeout_raw else None,
+            enable_vision=os.environ.get("AGENTPILOT_AGENT_ENABLE_VISION", "").lower()
+            in ("1", "true", "yes"),
+            enable_judge=os.environ.get("AGENTPILOT_AGENT_ENABLE_JUDGE", "").lower()
+            in ("1", "true", "yes"),
+            rotation=rotation,
         )
         self.agent_worker_loop.start()
 

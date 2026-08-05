@@ -8,6 +8,8 @@ browser-use's `Agent.step()` three-phase cycle, adapted to crawlpilot's
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from agentpilot.agent.actions import (
     parse_agent_output,
 )
 from agentpilot.agent.dom_view import render_snapshot_for_llm
+from agentpilot.agent.judge import judge_completion
 from agentpilot.agent.prompts import build_system_prompt, build_user_message
 from agentpilot.agent.reliability import (
     CircuitBreaker,
@@ -29,9 +32,11 @@ from agentpilot.agent.reliability import (
     RetryStrategy,
     classify_error,
 )
+from agentpilot.agent.security import is_url_allowed, redact_secrets, substitute_secrets
 from agentpilot.agent.state import AgentHistory, AgentStepRecord, LoopDetector
 from agentpilot.llm.client import LLMConfig, chat_json_conversation
 from agentpilot.observability.metrics import (
+    agent_judge_verdicts_total,
     agent_loop_nudges_total,
     agent_runs_total,
     agent_step_llm_latency_seconds,
@@ -75,6 +80,10 @@ async def run_agent_loop(
     output_schema: dict[str, Any] | None = None,
     max_failures: int = 5,
     step_timeout_s: float | None = None,
+    allowed_domains: tuple[str, ...] = (),
+    sensitive_data: dict[str, str] | None = None,
+    enable_vision: bool = False,
+    enable_judge: bool = False,
     on_step: Callable[[AgentStepRecord], Awaitable[None]] | None = None,
 ) -> AgentRunResult:
     system_prompt = build_system_prompt(allowed_actions=allowed_actions, max_steps=max_steps)
@@ -92,20 +101,21 @@ async def run_agent_loop(
     )
     retry = RetryStrategy()
 
+    # A viewport screenshot is added to the observation only under vision, so
+    # the model can cross-reference pixels with the `@(x,y)`-tagged tree.
+    observe_actions: list[spi_actions.Action] = [
+        spi_actions.SnapshotAction(with_bbox=True, settle=True),
+        spi_actions.ListTabsAction(),
+    ]
+    if enable_vision:
+        observe_actions.append(spi_actions.ScreenshotAction())
+
     for step_number in range(1, max_steps + 1):
         # Observing the page is idempotent, so a transient snapshot failure is
         # retried with backoff rather than burning the whole step.
         async def _observe() -> spi_actions.ActionResult:
             return await _with_timeout(
-                execute_on_session(
-                    session,
-                    [
-                        spi_actions.SnapshotAction(with_bbox=True, settle=True),
-                        spi_actions.ListTabsAction(),
-                    ],
-                    registry=registry,
-                    driver=driver,
-                ),
+                execute_on_session(session, observe_actions, registry=registry, driver=driver),
                 step_timeout_s,
             )
 
@@ -150,9 +160,10 @@ async def run_agent_loop(
         schema = build_action_schema(
             allowed_actions, output_schema=output_schema, force_done=force_done
         )
-        messages = [
+        screenshot = observe_result.screenshots[0] if observe_result.screenshots else None
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": _user_content(user_message, screenshot)},
         ]
 
         # The LLM call is idempotent, so transient/network failures are retried
@@ -193,29 +204,53 @@ async def run_agent_loop(
         if driver_actions:
             for action in driver_actions:
                 loop_detector.record(type(action).__name__, _action_key(action))
-            # Action dispatch is *not* retried -- a half-applied batch of
-            # clicks/fills is not safely repeatable.
-            try:
-                dispatch_result = await _with_timeout(
-                    execute_on_session(session, driver_actions, registry=registry, driver=driver),
-                    step_timeout_s,
+
+            blocked = [
+                a
+                for a in driver_actions
+                if isinstance(a, spi_actions.NavigateAction)
+                and not is_url_allowed(a.url, allowed_domains)
+            ]
+            if blocked:
+                # Refuse the whole step rather than dispatch a partial batch --
+                # the model re-plans next step seeing the refusal.
+                step_outcome = "blocked"
+                action_results.extend(
+                    f"navigation to {a.url} was blocked: outside the allowed domains for this run"
+                    for a in blocked
                 )
-                if dispatch_result.sequence_aborted:
-                    step_outcome = "sequence_aborted"
-                    action_results.append(
-                        "one or more actions in this step were skipped: an earlier action "
-                        "unexpectedly changed the page -- re-observe before continuing"
-                    )
-                else:
-                    action_results.append("actions dispatched successfully")
-                breaker.reset()  # progress -> clear consecutive-failure history
-            except Exception as exc:
-                step_outcome = "action_failed"
-                action_results.append(f"action failed: {exc}")
+            else:
+                # Substitute secrets into the *dispatched copy* only; the
+                # recorded `driver_actions` keep their placeholder form, so
+                # secrets never enter the persisted step. Action dispatch is
+                # not retried -- a half-applied batch is not safely repeatable.
+                dispatch_actions = [_apply_secrets(a, sensitive_data) for a in driver_actions]
                 try:
-                    breaker.record_failure(FailureKind.EXECUTION)
-                except CircuitBreakerTripped:
-                    tripped = True
+                    dispatch_result = await _with_timeout(
+                        execute_on_session(
+                            session, dispatch_actions, registry=registry, driver=driver
+                        ),
+                        step_timeout_s,
+                    )
+                    action_results.extend(
+                        redact_secrets(v, sensitive_data) for v in dispatch_result.verifications
+                    )
+                    if dispatch_result.sequence_aborted:
+                        step_outcome = "sequence_aborted"
+                        action_results.append(
+                            "one or more actions in this step were skipped: an earlier action "
+                            "unexpectedly changed the page -- re-observe before continuing"
+                        )
+                    if not action_results:
+                        action_results.append("actions dispatched successfully")
+                    breaker.reset()  # progress -> clear consecutive-failure history
+                except Exception as exc:
+                    step_outcome = "action_failed"
+                    action_results.append(redact_secrets(f"action failed: {exc}", sensitive_data))
+                    try:
+                        breaker.record_failure(FailureKind.EXECUTION)
+                    except CircuitBreakerTripped:
+                        tripped = True
         agent_steps_total.labels(outcome=step_outcome).inc()
 
         step_record = AgentStepRecord(
@@ -232,10 +267,31 @@ async def run_agent_loop(
             await on_step(step_record)
 
         if done is not None:
-            agent_runs_total.labels(outcome="success" if done.success else "failed").inc()
+            success = done.success
+            result_text = done.result
+            # An independent, skeptical judge can veto a self-reported success
+            # (never a self-reported failure). Fail-open on judge error.
+            if enable_judge and done.success:
+                verdict = await judge_completion(
+                    task=task,
+                    claimed_result=done.result,
+                    extracted_data=done.extracted_data,
+                    page_state=snapshot_text,
+                    history_summary=history.render_summary(),
+                    config=llm_config,
+                )
+                label = "error" if verdict.errored else "passed" if verdict.passed else "rejected"
+                agent_judge_verdicts_total.labels(verdict=label).inc()
+                if not verdict.passed:
+                    success = False
+                    result_text = (
+                        f"{done.result}\n\n[independent judge rejected this completion: "
+                        f"{verdict.reason}]"
+                    )
+            agent_runs_total.labels(outcome="success" if success else "failed").inc()
             return AgentRunResult(
-                success=done.success,
-                result=done.result,
+                success=success,
+                result=result_text,
                 extracted_data=done.extracted_data,
                 steps=history,
             )
@@ -269,6 +325,34 @@ def _render_tabs(tabs: list[spi_actions.TabInfo]) -> str:
     return "\n".join(
         f"- {t.page_id}: {t.url} ({'active' if t.active else 'background'})" for t in tabs
     )
+
+
+def _user_content(text: str, screenshot: bytes | None) -> str | list[dict[str, Any]]:
+    """Plain text when vision is off; otherwise the OpenAI multimodal parts
+    list with the viewport screenshot attached as a base64 data URL."""
+
+    if screenshot is None:
+        return text
+    b64 = base64.b64encode(screenshot).decode("ascii")
+    hint = (
+        f"{text}\n\nA screenshot of the current viewport is attached; use it "
+        "together with the accessibility tree above to locate elements."
+    )
+    return [
+        {"type": "text", "text": hint},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+    ]
+
+
+def _apply_secrets(
+    action: spi_actions.Action, sensitive_data: dict[str, str] | None
+) -> spi_actions.Action:
+    """Return a dispatch-ready copy with secrets substituted into fill text;
+    every other action is passed through unchanged."""
+
+    if sensitive_data and isinstance(action, spi_actions.FillAction):
+        return dataclasses.replace(action, text=substitute_secrets(action.text, sensitive_data))
+    return action
 
 
 def _action_key(action: spi_actions.Action) -> str:

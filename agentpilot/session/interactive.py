@@ -21,15 +21,18 @@ calls, renewing its lease each time, until the caller explicitly releases it.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 
-from agentpilot.identity.profile_store import resolve_profile_dir
+from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
+from agentpilot.observability.metrics import context_rotations_total
 from agentpilot.session.registry import RegistryProtocol
+from agentpilot.session.rotation import RotationConfig, RotationPolicy, should_retire
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
@@ -145,11 +148,16 @@ async def release_interactive_session(
     registry: RegistryProtocol,
     driver: BrowserDriver,
     vault: Vault | None,
+    rotation: RotationConfig | None = None,
+    profiles_root: Path | None = None,
 ) -> None:
     """Checkpoints to the vault (best-effort -- a vault write failure must
-    not block the release itself) before releasing the lease back to the
-    warm IDLE pool. The `session.Reaper` is what actually destroys IDLE
-    contexts later, on its own schedule, not this function."""
+    not block the release itself), then either releases the lease back to the
+    warm IDLE pool (the normal path; `session.Reaper` destroys IDLE contexts
+    later) or, when `rotation` is enabled and the context has degraded past
+    `rotation.thresholds`, retires it instead so the next `acquire()` opens a
+    fresh one. `profiles_root` is required for the FRESH policy (to wipe the
+    profile dir)."""
 
     if vault is not None:
         try:
@@ -160,4 +168,53 @@ async def release_interactive_session(
                 "interactive_session.vault_checkpoint_failed", session_id=session.session_id
             )
 
+    if rotation is not None and rotation.enabled and await _retire_if_degraded(
+        session, registry=registry, driver=driver, rotation=rotation, profiles_root=profiles_root
+    ):
+        return
+
     await registry.release(session.lease_id)
+
+
+async def _retire_if_degraded(
+    session: InteractiveSession,
+    *,
+    registry: RegistryProtocol,
+    driver: BrowserDriver,
+    rotation: RotationConfig,
+    profiles_root: Path | None,
+) -> bool:
+    """Retire + rotate the context if its health warrants it. Returns True
+    when the context was retired (so the caller skips the ordinary
+    release-to-IDLE). Best-effort throughout: a failure to read health or to
+    tear down must fall back to a normal release, never leak an exception up."""
+
+    try:
+        health = await driver.context_health(session.ctx)
+    except Exception:
+        return False
+    if health is None or not should_retire(health, rotation.thresholds):
+        return False
+
+    # Evict the registry entry (the next acquire opens fresh) and destroy the
+    # underlying browser context.
+    evicted = await registry.evict(session.identity)
+    if evicted is not None:
+        with contextlib.suppress(Exception):
+            await driver.close(evicted)
+
+    # FRESH additionally wipes the profile dir so the reopened context is a
+    # clean browser identity to the site (RESTART keeps cookies/logins).
+    if rotation.policy is RotationPolicy.FRESH and profiles_root is not None:
+        with contextlib.suppress(Exception):
+            delete_profile_dir(profiles_root, session.identity)
+
+    context_rotations_total.labels(policy=rotation.policy.value).inc()
+    log.info(
+        "interactive_session.retired",
+        session_id=session.session_id,
+        policy=rotation.policy.value,
+        leak_warnings=health.leak_warnings,
+        failure_rate=round(health.failure_rate, 2),
+    )
+    return True
