@@ -61,3 +61,39 @@ node_reaper_sessions_reclaimed_total = Counter(
     "agentpilot_node_reaper_sessions_reclaimed_total",
     "Sessions force-evicted because their worker node died",
 )
+
+# --- Agent loop (Wave 0 instrumentation) -------------------------------------
+# Emitted directly from `agentpilot.agent.loop.run_agent_loop`. `observability`
+# is not a layer in any import-linter contract and only depends on
+# `prometheus_client`, so importing it from the agent loop adds no cycle.
+agent_steps_total = Counter(
+    "agentpilot_agent_steps_total",
+    "Agent-loop steps executed, by outcome",
+    ["outcome"],  # ok | action_failed | sequence_aborted | observe_error | llm_error
+)
+agent_step_llm_latency_seconds = Histogram(
+    "agentpilot_agent_step_llm_latency_seconds", "Per-step agent LLM call latency"
+)
+agent_runs_total = Counter(
+    "agentpilot_agent_runs_total",
+    "Agent runs finished, by outcome",
+    ["outcome"],  # success | failed | exhausted
+)
+agent_loop_nudges_total = Counter(
+    "agentpilot_agent_loop_nudges_total", "Loop-detector nudges surfaced to the agent"
+)
+
+# --- Per-context health (Wave 0 instrumentation; feeds later leak-driven
+# rotation) -------------------------------------------------------------------
+# In-memory counts live on the driver's `_Context.health`; these process-global
+# counters give fleet-wide visibility. `small_pages`/`leak_warnings` are tracked
+# on `_ContextHealth` but deliberately have no metric yet -- no detector feeds
+# them, and an always-zero counter would be metrics theatre (see module note).
+context_tasks_total = Counter(
+    "agentpilot_context_tasks_total", "Driver execute() batches dispatched (one per context task)"
+)
+context_task_outcomes_total = Counter(
+    "agentpilot_context_task_outcomes_total",
+    "Driver execute() batch outcomes",
+    ["outcome"],  # success | failure
+)

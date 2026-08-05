@@ -37,6 +37,9 @@ class AgentStepRecord:
     next_goal: str
     actions: list[dict[str, Any]]
     action_results: list[str]
+    thinking: str | None = None
+    """The model's raw reasoning trace (`AgentOutput.thinking`) -- parsed but
+    previously dropped. Kept for audit/replay; persisted by `agent_store`."""
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -99,19 +102,50 @@ def _render_step(step: AgentStepRecord) -> str:
 
 
 class LoopDetector:
-    """Hashes recent `(action_type, key_params)` tuples; returns an
-    escalating nudge string once the same action repeats too often --
-    mirrors browser-use's `_inject_loop_detection_nudge`."""
+    """Two complementary stagnation signals, surfaced as an escalating nudge:
+
+    - *action repetition*: the same `(action_type, key_params)` too often
+      (mirrors browser-use's `_inject_loop_detection_nudge`).
+    - *page stagnation*: the page's content fingerprint unchanged across steps
+      despite actions being taken (mirrors Browser4's `PageStateTracker`
+      consecutive-same-state count). This catches the case where the agent
+      keeps acting but the page never actually changes.
+    """
 
     _THRESHOLDS = (5, 8, 12)
+    _PAGE_STALL_THRESHOLDS = (3, 6, 10)
 
     def __init__(self) -> None:
         self._recent: list[tuple[str, str]] = []
+        self._last_page_fp: str | None = None
+        self._page_stall = 0
 
     def record(self, action_type: str, key: str) -> None:
         self._recent.append((action_type, key))
 
+    def record_page_state(self, fingerprint: str) -> None:
+        """Feed the current page fingerprint (see `AXSnapshot.fingerprint`).
+        Consecutive identical fingerprints accumulate a stall count."""
+
+        if self._last_page_fp is not None and fingerprint == self._last_page_fp:
+            self._page_stall += 1
+        else:
+            self._page_stall = 0
+        self._last_page_fp = fingerprint
+
     def nudge(self) -> str | None:
+        action_nudge = self._action_nudge()
+        if action_nudge is not None:
+            return action_nudge
+        if self._page_stall in self._PAGE_STALL_THRESHOLDS:
+            return (
+                f"Heads up: the page has not changed for {self._page_stall} step(s) "
+                "despite your actions. Re-check the current page state and try a "
+                "different approach rather than repeating what you've done."
+            )
+        return None
+
+    def _action_nudge(self) -> str | None:
         if not self._recent:
             return None
         last = self._recent[-1]

@@ -60,6 +60,26 @@ def test_new_node_marked_with_star_prefix_relative_to_previous() -> None:
     assert new_line.strip().startswith("*[e5]")
 
 
+def test_inserted_element_shifts_refs_but_only_new_one_is_marked() -> None:
+    # Regression for the ephemeral-ref diff: inserting an element at the front
+    # shifts Playwright's traversal-order refs (Old moves e1 -> e2). A ref-set
+    # diff would mark the shifted "Old" as new; the identity diff must mark
+    # only the genuinely-new "Inserted".
+    previous = AXSnapshot(epoch=1, root=_node("root", children=[_node("button", "Old", ref="e1")]))
+    current = AXSnapshot(
+        epoch=2,
+        root=_node(
+            "root",
+            children=[_node("button", "Inserted", ref="e1"), _node("button", "Old", ref="e2")],
+        ),
+    )
+    lines = render_snapshot_for_llm(current, previous).splitlines()
+    old_line = next(line for line in lines if "Old" in line)
+    inserted_line = next(line for line in lines if "Inserted" in line)
+    assert not old_line.strip().startswith("*")  # unchanged element, not new
+    assert inserted_line.strip().startswith("*[e1]")  # the truly-new one
+
+
 def test_first_step_with_no_previous_marks_nothing_as_new() -> None:
     root = _node("root", children=[_node("button", "First", ref="e1")])
     text = render_snapshot_for_llm(AXSnapshot(epoch=1, root=root), previous=None)

@@ -245,9 +245,9 @@ class PostgresAgentStore:
                 """
                 INSERT INTO agent_steps (
                     run_id, step_number, evaluation_previous_goal, memory, next_goal,
-                    actions, action_results
+                    actions, action_results, thinking
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     run_id,
@@ -257,6 +257,7 @@ class PostgresAgentStore:
                     step.next_goal,
                     Jsonb(step.actions),
                     Jsonb(step.action_results),
+                    step.thinking,
                 ),
             )
             await conn.execute(

@@ -24,6 +24,20 @@ def _step(n: int) -> AgentStepRecord:
     )
 
 
+def test_step_record_thinking_defaults_none_and_is_settable() -> None:
+    assert _step(1).thinking is None
+    record = AgentStepRecord(
+        step_number=1,
+        evaluation_previous_goal="ok",
+        memory="",
+        next_goal="g",
+        actions=[],
+        action_results=[],
+        thinking="I should click the login button first.",
+    )
+    assert record.thinking == "I should click the login button first."
+
+
 def test_render_summary_empty_history() -> None:
     assert AgentHistory().render_summary() == "(no steps yet)"
 
@@ -127,3 +141,28 @@ def test_loop_detector_no_nudge_for_varied_actions() -> None:
     for i in range(12):
         detector.record("click", f"e{i}")
         assert detector.nudge() is None
+
+
+def test_loop_detector_page_stall_nudges() -> None:
+    detector = LoopDetector()
+    # First fingerprint establishes the baseline (stall stays 0).
+    detector.record_page_state("fp-A")
+    assert detector.nudge() is None
+    # Same page repeated -> stall accumulates and nudges at 3, 6, 10.
+    nudges = []
+    for _ in range(10):
+        detector.record_page_state("fp-A")
+        nudge = detector.nudge()
+        if nudge:
+            nudges.append(nudge)
+    assert len(nudges) == 3
+    assert "page has not changed" in nudges[0]
+
+
+def test_loop_detector_page_change_resets_stall() -> None:
+    detector = LoopDetector()
+    detector.record_page_state("fp-A")
+    detector.record_page_state("fp-A")
+    detector.record_page_state("fp-A")  # stall == 2 now, below threshold 3
+    detector.record_page_state("fp-B")  # page changed -> reset
+    assert detector.nudge() is None

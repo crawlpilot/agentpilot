@@ -7,6 +7,7 @@ within an epoch and hard-fails across epochs -- see `spi.errors.StaleRefError`.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 
@@ -36,3 +37,27 @@ class SnapshotNode:
 class AXSnapshot:
     epoch: int
     root: SnapshotNode
+
+    def fingerprint(self) -> str:
+        """A stable content hash of the tree's `(role, name)` structure plus
+        node count -- deliberately *excludes* the ephemeral `ref` (re-minted
+        every snapshot) and `bbox` (scroll jitter). Two snapshots of an
+        unchanged page hash identically; any meaningful DOM change flips it.
+        Used by the loop's stagnation detector (mirrors Browser4's
+        `PageStateTracker.calculatePageStateHash` over the aria snapshot)."""
+
+        h = hashlib.sha256()
+        count = 0
+        stack = [self.root]
+        while stack:
+            node = stack.pop()
+            h.update(node.role.encode("utf-8", "replace"))
+            h.update(b"\x1f")
+            h.update(node.name.encode("utf-8", "replace"))
+            h.update(b"\x1e")
+            count += 1
+            # Push children reversed so the walk is a stable left-to-right
+            # pre-order (structure-sensitive, not just a bag of nodes).
+            stack.extend(reversed(node.children))
+        h.update(f"#{count}".encode())
+        return h.hexdigest()[:16]

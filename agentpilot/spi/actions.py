@@ -45,6 +45,10 @@ class SnapshotAction:
     """Populate `SnapshotNode.bbox` for leaf refs in the resulting tree --
     extra CDP round trips per call, so opt-in (used by `agentpilot.agent`'s
     step loop; not requested by ordinary interactive-session/crawl callers)."""
+    settle: bool = False
+    """Wait (best-effort, bounded) for the page to reach network-idle before
+    capturing the snapshot -- opt-in so only the agent's step loop pays for it
+    (stable perception across steps); ordinary snapshot callers don't."""
     terminates_sequence: bool = False
 
 

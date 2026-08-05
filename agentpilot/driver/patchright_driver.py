@@ -62,6 +62,7 @@ from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.driver.ref_cache import RefCache
 from agentpilot.egress.policy import apply_baseline
 from agentpilot.extraction.extractor import extract
+from agentpilot.observability.metrics import context_task_outcomes_total, context_tasks_total
 from agentpilot.spi.actions import (
     Action,
     ActionResult,
@@ -108,6 +109,14 @@ _BOUNDING_BOX_TIMEOUT_MS = 3_000
 """Bounded well below Playwright's 30s default -- see `_resolve_ref`'s and
 `_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
 real observed hang, not a hypothetical one."""
+
+_SETTLE_TIMEOUT_MS = 1_500
+"""Upper bound on the best-effort network-idle wait before an opt-in
+(`SnapshotAction.settle`) snapshot. Bounded because `networkidle` never fires
+on pages with persistent connections (long-poll, websockets, analytics
+beacons); on those the wait simply caps out and the snapshot proceeds. A
+MutationObserver-based probe that returns early on DOM quiescence (Browser4's
+`waitForDOMSettle`) is a later refinement -- this is the cheap first cut."""
 
 _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
     "down": (0, 600),
@@ -175,6 +184,34 @@ class _Page:
 
 
 @dataclass
+class _ContextHealth:
+    """Per-context health tallies -- Wave 0 instrumentation only. Counters are
+    recorded but nothing acts on them yet; a later pass adds leak detection
+    (`leak_warnings`) and quality signals (`small_pages`), then a
+    `should_retire` policy that rotates a flagged profile (mirrors Browser4's
+    `AbstractPrivacyContext`: `privacyLeakWarnings`, `failureRate`,
+    `smallPageRate`). A "task" here is one `execute()` batch."""
+
+    tasks: int = 0
+    successes: int = 0
+    failures: int = 0
+    small_pages: int = 0
+    """Reserved: batches that returned a suspiciously small/blocked page.
+    Populated by a later leak/quality-detection pass, not in Wave 0."""
+    leak_warnings: int = 0
+    """Reserved: bot-detection signals (captcha/challenge/block). Populated by
+    a later leak-detection pass, not in Wave 0."""
+
+    @property
+    def failure_rate(self) -> float:
+        return self.failures / self.tasks if self.tasks else 0.0
+
+    @property
+    def success_rate(self) -> float:
+        return self.successes / self.tasks if self.tasks else 0.0
+
+
+@dataclass
 class _Context:
     """One `ContextRef`'s live state -- the per-context wrapper `_Live` used
     to be (a context WAS a page, 1:1). Mirrors a prior internal system's
@@ -197,6 +234,9 @@ class _Context:
     "New-tab focus" decision: real-browser semantics, matching a prior
     internal system's unconditional new-window auto-follow). Read once per
     `execute()` call and reset, same lifecycle as before."""
+    health: _ContextHealth = field(default_factory=_ContextHealth)
+    """Per-context health tallies (Wave 0 instrumentation) -- see
+    `_ContextHealth`. Updated in `execute()`; not yet consumed by any policy."""
     expecting_explicit_tab: bool = False
     """Set around `_create_tab`'s own `context.new_page()` call.
     `new_page()` fires the exact same context-level `"page"` event an
@@ -505,32 +545,48 @@ class PatchrightDriver:
         live = self._require_page(cctx, page_id)
         result = ActionResult(page_changed=cctx.page_changed)
         cctx.page_changed = False
+        cctx.health.tasks += 1
+        context_tasks_total.inc()
 
-        stale = False
-        for action in actions:
-            consumes_ref = isinstance(action, _REF_CONSUMING) or (
-                isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
-            )
-            if stale and consumes_ref:
-                result.sequence_aborted = True
-                break
-            try:
-                pre_url = live.page.url
-                await self._dispatch(cctx, live, action, result)
-            except TargetClosedError as exc:
-                # Belt-and-suspenders alongside `_wire_page`'s "close"
-                # listener above: that listener and the actual close can
-                # still race (this action's own CDP call landing in the gap
-                # between the page closing and the event handler running),
-                # so this is the last line of defense against a raw
-                # Playwright error leaking out as an opaque 500 instead of
-                # the typed `ContextCrashed` every other dead-page path uses.
-                live.alive = False
-                live.death_reason = live.death_reason or "page_closed"
-                raise ContextCrashed(str(exc)) from exc
-            if live.page.url != pre_url:
-                stale = True
-        return result
+        succeeded = False
+        try:
+            stale = False
+            for action in actions:
+                consumes_ref = isinstance(action, _REF_CONSUMING) or (
+                    isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
+                )
+                if stale and consumes_ref:
+                    result.sequence_aborted = True
+                    break
+                try:
+                    pre_url = live.page.url
+                    await self._dispatch(cctx, live, action, result)
+                except TargetClosedError as exc:
+                    # Belt-and-suspenders alongside `_wire_page`'s "close"
+                    # listener above: that listener and the actual close can
+                    # still race (this action's own CDP call landing in the gap
+                    # between the page closing and the event handler running),
+                    # so this is the last line of defense against a raw
+                    # Playwright error leaking out as an opaque 500 instead of
+                    # the typed `ContextCrashed` every other dead-page path uses.
+                    live.alive = False
+                    live.death_reason = live.death_reason or "page_closed"
+                    raise ContextCrashed(str(exc)) from exc
+                if live.page.url != pre_url:
+                    stale = True
+            succeeded = True
+            return result
+        finally:
+            # Health is instrumentation only (Wave 0): a batch that raised
+            # (ContextCrashed, etc.) is a failure; a batch that completed --
+            # including one that set `sequence_aborted` -- is a driver-level
+            # success. Nothing acts on these tallies yet.
+            if succeeded:
+                cctx.health.successes += 1
+                context_task_outcomes_total.labels(outcome="success").inc()
+            else:
+                cctx.health.failures += 1
+                context_task_outcomes_total.labels(outcome="failure").inc()
 
     async def _dispatch(
         self, cctx: _Context, live: _Page, action: Action, result: ActionResult
@@ -554,6 +610,8 @@ class PatchrightDriver:
             live.epoch += 1
             live.ref_cache.reset(live.epoch)
         elif isinstance(action, SnapshotAction):
+            if action.settle:
+                await self._settle(live)
             live.epoch += 1
             text = await live.page.aria_snapshot(mode="ai")
             root = parse_aria_snapshot(text, epoch=live.epoch)
@@ -722,6 +780,16 @@ class PatchrightDriver:
         except Exception:
             return {}
         return result if isinstance(result, dict) else {}
+
+    async def _settle(self, live: _Page) -> None:
+        """Best-effort, bounded wait for the page to reach network-idle before
+        an opt-in (`SnapshotAction.settle`) snapshot, so the agent perceives a
+        stable page across steps. Swallows everything -- including the expected
+        timeout on pages that never go idle -- because a failed settle must
+        never fail the snapshot it precedes."""
+
+        with contextlib.suppress(Exception):
+            await live.page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
 
     async def _resolve_ref(self, live: _Page, ref: str) -> Locator:
         """Resolves via `RefCache`, then enforces visibility: a ref that
