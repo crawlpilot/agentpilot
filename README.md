@@ -151,7 +151,106 @@ uv run uvicorn agentpilot.gateway.app:app --reload
 ```
 
 `AGENTPILOT_ROLE` defaults to `monolith` when unset, which serves the full `/v1/sessions/...` API
-directly in one process — the path this repo's own tests exercise.
+directly in one process — the path this repo's own tests exercise. For end-to-end UI work the
+monolith is the simplest backend to point the frontend at (one origin, no worker/gateway hop):
+
+```bash
+AGENTPILOT_ADMIN_TOKEN=dev-admin-token uv run uvicorn agentpilot.gateway.app:app --reload --port 8000
+```
+
+## Frontend (dashboard & Playground)
+
+The web UI lives in [`frontend/`](frontend/) — a React 19 + Vite + TanStack Query SPA. It's a thin
+client over the same `/v1/...` HTTP/WebSocket API documented above (sign in with a tenant API key to
+reach the Playground: scrape, crawl, map, agent runs, interactive sessions, live view, recipes; or
+an admin token for the Nodes/fleet view). It is deployed **completely separately** from the
+backend — there is no `/ui` mount and no Node/npm in any backend image (see
+`agentpilot/gateway/app.py`), mirroring how Firecrawl keeps its dashboard out of its backend images.
+
+### Prerequisites
+
+- Node.js 20+ and npm
+- A running backend (Docker Compose stack, or a `monolith` on `:8000` — see above)
+
+### Local dev
+
+```bash
+cd frontend
+npm install
+npm run dev          # Vite dev server on http://localhost:5173
+```
+
+The dev server proxies `/v1`, `/healthz`, and `/readyz` (including the live-view WebSocket upgrade)
+to `VITE_API_BASE_URL`, which defaults to `http://localhost:8000` and is set in
+[`frontend/.env.development`](frontend/.env.development). Point it elsewhere if your gateway/monolith
+isn't on `:8000`. Because the browser talks to the API through this same-origin proxy, there's no
+CORS to configure in dev.
+
+Open http://localhost:5173 and **Sign in**:
+
+- **Tenant API key + tenant** (mint one via [step 5](#5-open-a-session) above) → lands on the
+  Playground.
+- **Admin token** alone → lands on the Nodes/fleet view.
+
+### Production build & deploy
+
+```bash
+cd frontend
+npm run build        # tsc -b && vite build -> frontend/dist/
+npm run preview      # optional: locally preview the built bundle
+```
+
+The gateway has **no CORS middleware** and does **not** serve the SPA, so the built `dist/` bundle
+must be served **same-origin** with the gateway: put a reverse proxy in front that serves the static
+files and forwards `/v1`, `/healthz`, `/readyz` (with WebSocket upgrade) to the gateway. Leave
+`VITE_API_BASE_URL` unset for that build so the app uses `window.location.origin`. Minimal example
+with [Caddy](https://caddyserver.com/):
+
+```caddyfile
+# Caddyfile — serve the SPA and the API under one origin (http://localhost:8080)
+:8080 {
+    handle /v1/*     { reverse_proxy localhost:8000 }   # reverse_proxy upgrades WS automatically
+    handle /healthz  { reverse_proxy localhost:8000 }
+    handle /readyz   { reverse_proxy localhost:8000 }
+    handle {
+        root * ./frontend/dist
+        try_files {path} /index.html                    # SPA fallback for client-side routes
+        file_server
+    }
+}
+```
+
+```bash
+caddy run           # then open http://localhost:8080
+```
+
+Any equivalent reverse proxy (nginx, Traefik, a CDN + API gateway) works the same way — the only
+requirements are one shared origin and WebSocket pass-through for `/v1/.../live-view`.
+
+## End-to-end: full stack locally
+
+A single runbook that stands up backend + frontend and exercises the whole product through the UI.
+
+1. **Backend** — start the two-tier stack and run migrations
+   ([Quickstart](#quickstart-docker-compose) steps 1–4), *or* run a `monolith` on `:8000` (above).
+2. **Mint a tenant API key** ([step 5](#5-open-a-session)) — you'll paste it into the UI.
+3. **Frontend** — `cd frontend && npm install && npm run dev` (dev), or the Caddy deploy above for a
+   production-style run.
+4. **Sign in** with the tenant key + tenant, then walk the Playground tabs:
+   - **Scrape** — enter a URL, pick formats; under *Advanced options* set `include_tags`/`exclude_tags`
+     and (scrape-only) a `locale`/`timezone`; run and inspect the returned document.
+   - **Crawl** — set `include_paths`/`exclude_paths`, add a **webhook** (URL + events + headers) and
+     confirm the one-time **signing secret** is shown; watch progress and "Load more".
+   - **Interact** — open a session, add a `snapshot` action (toggle *bounding boxes*, set *roles*) and
+     an `extract` action (`structured_data`, tags), then *Run sequence*; use the crosshair to pick
+     elements from a live snapshot.
+   - **Agent** — give a task, set max steps / output schema, watch steps stream, and *Cancel* mid-run.
+   - **Recipes** — create a recipe, then *Run*, *Heal*, and *Codegen* (choose a language); browse
+     versions.
+   - **Nodes** — sign in with the admin token to see live per-node memory/CPU across `worker`/`worker-2`.
+5. **Automated backend e2e** (no browser mocking) is the `driver_contract` suite — see
+   [Running the checks](#running-the-checks); it launches real Chrome against local fixtures and is
+   the contract any driver must pass.
 
 ## Running the checks
 

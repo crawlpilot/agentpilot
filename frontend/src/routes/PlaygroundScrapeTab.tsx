@@ -22,6 +22,8 @@ export function PlaygroundScrapeTab() {
   const { apiKey } = useAuth()
   const [url, setUrl] = useState('')
   const [tier, setTier] = useState<Tier>('auto')
+  const [locale, setLocale] = useState('')
+  const [timezoneId, setTimezoneId] = useState('')
   const [options, setOptions] = useState<ScrapeOptionsValue>(DEFAULT_SCRAPE_OPTIONS)
   const scrape = useScrape()
   const { toast } = useToast()
@@ -41,7 +43,13 @@ export function PlaygroundScrapeTab() {
     const trimmed = url.trim()
     if (!trimmed) return
     scrape.mutate(
-      { url: trimmed, tier, ...options },
+      {
+        url: trimmed,
+        tier,
+        ...options,
+        locale: locale.trim() || null,
+        timezone_id: timezoneId.trim() || null,
+      },
       {
         onSuccess: (resp) =>
           append({
@@ -92,6 +100,29 @@ export function PlaygroundScrapeTab() {
           </Button>
         </div>
         <ScrapeOptionsFields value={options} onChange={setOptions} />
+
+        <div className="flex flex-wrap gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="scrape-locale">Locale (optional)</Label>
+            <Input
+              id="scrape-locale"
+              className="w-40"
+              placeholder="en-US"
+              value={locale}
+              onChange={(e) => setLocale(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="scrape-timezone">Timezone (optional)</Label>
+            <Input
+              id="scrape-timezone"
+              className="w-52"
+              placeholder="America/New_York"
+              value={timezoneId}
+              onChange={(e) => setTimezoneId(e.target.value)}
+            />
+          </div>
+        </div>
       </form>
 
       <div className="flex flex-col gap-2">
