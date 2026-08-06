@@ -23,6 +23,7 @@ from agentpilot.agent.actions import (
 )
 from agentpilot.agent.dom_view import render_snapshot_for_llm
 from agentpilot.agent.judge import judge_completion
+from agentpilot.agent.observation import build_observation, identity_fingerprint
 from agentpilot.agent.prompts import build_system_prompt, build_user_message
 from agentpilot.agent.reliability import (
     CircuitBreaker,
@@ -45,6 +46,7 @@ from agentpilot.observability.metrics import (
 from agentpilot.session.interactive import InteractiveSession, execute_on_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.snapshot import AXSnapshot
 
@@ -84,12 +86,20 @@ async def run_agent_loop(
     sensitive_data: dict[str, str] | None = None,
     enable_vision: bool = False,
     enable_judge: bool = False,
+    snapshot_engine: spi_actions.SnapshotEngine = "fusion",
+    no_runtime: bool = False,
+    max_observation_chars: int | None = 40_000,
     on_step: Callable[[AgentStepRecord], Awaitable[None]] | None = None,
 ) -> AgentRunResult:
     system_prompt = build_system_prompt(allowed_actions=allowed_actions, max_steps=max_steps)
     history = AgentHistory()
     loop_detector = LoopDetector()
+    # Aria path keeps `AXSnapshot`; fusion path keeps the fused tree. Only one
+    # is populated per run (per `snapshot_engine`), both threaded as "previous"
+    # so the diff / new-element marking is relative to the prior step.
     previous_snapshot: AXSnapshot | None = None
+    previous_tree: EnhancedDOMTreeNode | None = None
+    use_fusion = snapshot_engine == "fusion"
     # Typed consecutive-failure counters replacing the old single counter --
     # LLM/validation/execution each get their own budget (Browser4's shape).
     # `max_failures` stays the LLM/execution budget; validation gets a little
@@ -102,9 +112,16 @@ async def run_agent_loop(
     retry = RetryStrategy()
 
     # A viewport screenshot is added to the observation only under vision, so
-    # the model can cross-reference pixels with the `@(x,y)`-tagged tree.
+    # the model can cross-reference pixels with the coordinate-tagged tree. The
+    # aria path needs `with_bbox` for coordinate grounding; the fusion tree
+    # already carries `absolute_position` per node, so it doesn't.
     observe_actions: list[spi_actions.Action] = [
-        spi_actions.SnapshotAction(with_bbox=True, settle=True),
+        spi_actions.SnapshotAction(
+            engine=snapshot_engine,
+            no_runtime=no_runtime,
+            with_bbox=not use_fusion,
+            settle=True,
+        ),
         spi_actions.ListTabsAction(),
     ]
     if enable_vision:
@@ -130,18 +147,36 @@ async def run_agent_loop(
                 break
             continue
 
-        snapshot = observe_result.snapshots[0] if observe_result.snapshots else None
-        snapshot_text = (
-            render_snapshot_for_llm(snapshot, previous_snapshot) if snapshot else "(no snapshot)"
-        )
         tabs = observe_result.tabs[0] if observe_result.tabs else []
-        previous_snapshot = snapshot
+        active_url = next((t.url for t in tabs if t.active), "")
 
-        # Feed a page fingerprint (active URL + tree content) to the loop
+        if use_fusion:
+            tree = observe_result.fused_trees[0] if observe_result.fused_trees else None
+            if tree is not None:
+                # Delta-first: change block + compressed tree, `*`-marking the
+                # elements new since `previous_tree`.
+                observation = build_observation(
+                    tree, previous_tree, max_length=max_observation_chars
+                )
+                snapshot_text = observation.text
+                page_fingerprint = identity_fingerprint(tree)
+            else:
+                snapshot_text, page_fingerprint = "(no snapshot)", None
+            previous_tree = tree
+        else:
+            snapshot = observe_result.snapshots[0] if observe_result.snapshots else None
+            snapshot_text = (
+                render_snapshot_for_llm(snapshot, previous_snapshot)
+                if snapshot
+                else "(no snapshot)"
+            )
+            previous_snapshot = snapshot
+            page_fingerprint = snapshot.fingerprint() if snapshot is not None else None
+
+        # Feed a page fingerprint (active URL + stable identity) to the loop
         # detector so "page not changing despite actions" becomes a nudge.
-        if snapshot is not None:
-            active_url = next((t.url for t in tabs if t.active), "")
-            loop_detector.record_page_state(f"{active_url}\x1f{snapshot.fingerprint()}")
+        if page_fingerprint is not None:
+            loop_detector.record_page_state(f"{active_url}\x1f{page_fingerprint}")
 
         await history.maybe_compact(llm_config)
         force_done = step_number == max_steps

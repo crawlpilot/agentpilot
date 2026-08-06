@@ -53,6 +53,7 @@ from agentpilot.driver.aria_parse import (
     parse_aria_snapshot,
     prune_to_refs,
 )
+from agentpilot.driver.dom_fusion_engine import capture_fused_tree
 from agentpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
     parse_screencast_frame,
@@ -174,6 +175,7 @@ def _jitter(value: float) -> float:
 def _jittered_scroll_delta(direction: str) -> tuple[float, float]:
     dx, dy = _SCROLL_DELTAS[direction]
     return _jitter(dx), _jitter(dy)
+
 
 DEFAULT_MAX_TABS_PER_SESSION = 10
 """Per-session tab cap (`_Context.max_tabs`). A prior internal system's
@@ -323,8 +325,7 @@ def _to_playwright_storage_state(state: StorageState) -> PlaywrightStorageState:
                 {
                     "origin": origin.origin,
                     "localStorage": [
-                        {"name": entry.name, "value": entry.value}
-                        for entry in origin.local_storage
+                        {"name": entry.name, "value": entry.value} for entry in origin.local_storage
                     ],
                 }
                 for origin in state.origins
@@ -640,18 +641,27 @@ class PatchrightDriver:
             if action.settle:
                 await self._settle(live)
             live.epoch += 1
-            text = await live.page.aria_snapshot(mode="ai")
-            root = parse_aria_snapshot(text, epoch=live.epoch)
-            live.ref_cache.reset(live.epoch)
-            _record_ref_metadata(live.ref_cache, root)
-            if action.viewport_only:
-                root = await self._apply_viewport_filter(live, root)
-            root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
-            if action.with_bbox:
-                # After filtering, not before: only pays for refs that
-                # actually survived viewport/role/max_nodes pruning.
-                await self._annotate_bounding_boxes(live, root)
-            result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
+            if action.engine == "fusion":
+                # CDP DOM/Snapshot/AX fusion -> EnhancedDOMTreeNode with stable
+                # backendNodeId identity and cross-step change detection. Refs
+                # are `e<backendNodeId>`, resolved by RefCache's backend-id tier.
+                tree = await self._capture_fused(live, no_runtime=action.no_runtime)
+                live.ref_cache.reset(live.epoch)
+                live.ref_cache.record_fused(tree)
+                result.fused_trees.append(tree)
+            else:
+                text = await live.page.aria_snapshot(mode="ai")
+                root = parse_aria_snapshot(text, epoch=live.epoch)
+                live.ref_cache.reset(live.epoch)
+                _record_ref_metadata(live.ref_cache, root)
+                if action.viewport_only:
+                    root = await self._apply_viewport_filter(live, root)
+                root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
+                if action.with_bbox:
+                    # After filtering, not before: only pays for refs that
+                    # actually survived viewport/role/max_nodes pruning.
+                    await self._annotate_bounding_boxes(live, root)
+                result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
         elif isinstance(action, ExtractAction):
             # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
             # full page.content() fetch -- doesn't add a round trip to
@@ -886,6 +896,24 @@ class PatchrightDriver:
         for ch in text:
             await live.page.keyboard.type(ch)
             await asyncio.sleep(random.uniform(*_TYPE_DELAY_MS_RANGE) / 1000)
+
+    async def _capture_fused(self, live: _Page, *, no_runtime: bool):
+        """Capture a fused `EnhancedDOMTreeNode` via the CDP fusion engine,
+        reusing the page's live CDP session when one exists (the live-view
+        screencast session) or creating a short-lived one otherwise -- same
+        acquisition pattern as `_apply_viewport_filter`. `no_runtime` (from the
+        UI stealth tier) forbids the engine's only Runtime call."""
+
+        cdp = live.cdp_session
+        owns_session = cdp is None
+        if cdp is None:
+            cdp = await live.page.context.new_cdp_session(live.page)
+        try:
+            return await capture_fused_tree(cdp, no_runtime=no_runtime)
+        finally:
+            if owns_session:
+                with contextlib.suppress(Exception):
+                    await cdp.detach()
 
     async def _apply_viewport_filter(self, live: _Page, root: SnapshotNode) -> SnapshotNode:
         """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`
