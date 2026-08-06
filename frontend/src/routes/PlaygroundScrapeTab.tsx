@@ -16,7 +16,7 @@ import { useScrape } from '@/hooks/useScrape'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth/AuthContext'
-import type { Tier } from '@/lib/api/types'
+import type { ScrapeRequest, Tier } from '@/lib/api/types'
 
 export function PlaygroundScrapeTab() {
   const { apiKey } = useAuth()
@@ -42,15 +42,15 @@ export function PlaygroundScrapeTab() {
     e.preventDefault()
     const trimmed = url.trim()
     if (!trimmed) return
-    scrape.mutate(
-      {
-        url: trimmed,
-        tier,
-        ...options,
-        locale: locale.trim() || null,
-        timezone_id: timezoneId.trim() || null,
-      },
-      {
+    // Only attach locale/timezone_id when actually set -- don't send `null`
+    // for untouched optional fields (keeps the request minimal, and avoids
+    // tripping an older backend that predates these fields).
+    const req: Omit<ScrapeRequest, 'tenant'> = { url: trimmed, tier, ...options }
+    const trimmedLocale = locale.trim()
+    if (trimmedLocale) req.locale = trimmedLocale
+    const trimmedTimezone = timezoneId.trim()
+    if (trimmedTimezone) req.timezone_id = trimmedTimezone
+    scrape.mutate(req, {
         onSuccess: (resp) =>
           append({
             endpoint: 'scrape',

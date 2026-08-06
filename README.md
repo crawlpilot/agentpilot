@@ -197,14 +197,31 @@ Open http://localhost:5173 and **Sign in**:
 ```bash
 cd frontend
 npm run build        # tsc -b && vite build -> frontend/dist/
-npm run preview      # optional: locally preview the built bundle
 ```
 
-The gateway has **no CORS middleware** and does **not** serve the SPA, so the built `dist/` bundle
-must be served **same-origin** with the gateway: put a reverse proxy in front that serves the static
-files and forwards `/v1`, `/healthz`, `/readyz` (with WebSocket upgrade) to the gateway. Leave
-`VITE_API_BASE_URL` unset for that build so the app uses `window.location.origin`. Minimal example
-with [Caddy](https://caddyserver.com/):
+The built SPA must be served **same-origin** with the API (the gateway has no CORS middleware).
+There are two ways to do that:
+
+**Option A — let the backend serve it (no proxy).** The `monolith`/`gateway` process serves the
+built bundle same-origin when a build is present, so the whole product runs from one port. Leave
+`VITE_API_BASE_URL` unset for the build (the app uses `window.location.origin`), then point
+`AGENTPILOT_UI_DIR` at the output — or just have the default `frontend/dist` exist:
+
+```bash
+AGENTPILOT_UI_DIR=$PWD/frontend/dist \
+  uv run uvicorn agentpilot.gateway.app:app --port 8000
+# open http://localhost:8000 — dashboard + API on one origin
+```
+
+It's opt-in and inert when no build is present (the Chrome-free `gateway` Docker image ships without
+Node/npm, so nothing serves there unless you mount a `dist/` in and set `AGENTPILOT_UI_DIR`); the
+`worker` role never serves it. Client-side deep links (`/nodes`, `/recipes/:id`) fall back to
+`index.html`, and real API routes always win over the SPA catch-all. See `agentpilot/gateway/spa.py`.
+
+**Option B — reverse proxy.** If you'd rather host the static bundle separately (CDN, nginx), put a
+proxy in front that serves `dist/` and forwards `/v1`, `/healthz`, `/readyz` (with WebSocket upgrade)
+to the gateway, so the browser still sees one origin. Minimal [Caddy](https://caddyserver.com/)
+example:
 
 ```caddyfile
 # Caddyfile — serve the SPA and the API under one origin (http://localhost:8080)
@@ -223,9 +240,6 @@ with [Caddy](https://caddyserver.com/):
 ```bash
 caddy run           # then open http://localhost:8080
 ```
-
-Any equivalent reverse proxy (nginx, Traefik, a CDN + API gateway) works the same way — the only
-requirements are one shared origin and WebSocket pass-through for `/v1/.../live-view`.
 
 ## End-to-end: full stack locally
 
