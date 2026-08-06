@@ -1,6 +1,8 @@
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
-import type { ScrapeFormat } from '@/lib/api/types'
+import { Textarea } from '@/components/ui/textarea'
+import { JsonTextareaField } from '@/components/app/JsonTextareaField'
+import type { ExtractConfigIn, ScrapeFormat } from '@/lib/api/types'
 
 export interface ScrapeOptionsValue {
   formats: ScrapeFormat[]
@@ -9,6 +11,7 @@ export interface ScrapeOptionsValue {
   full_page_screenshot: boolean
   timeout_ms: number
   wait_for_ms: number | null
+  extract: ExtractConfigIn | null
 }
 
 export const DEFAULT_SCRAPE_OPTIONS: ScrapeOptionsValue = {
@@ -18,12 +21,14 @@ export const DEFAULT_SCRAPE_OPTIONS: ScrapeOptionsValue = {
   full_page_screenshot: false,
   timeout_ms: 30_000,
   wait_for_ms: null,
+  extract: null,
 }
 
 const FORMAT_OPTIONS: { value: ScrapeFormat; label: string }[] = [
   { value: 'markdown', label: 'Markdown' },
   { value: 'html', label: 'HTML' },
   { value: 'text', label: 'Text' },
+  { value: 'structured_data', label: 'Structured data (JSON-LD/meta)' },
 ]
 
 function toggleFormat(formats: ScrapeFormat[], format: ScrapeFormat): ScrapeFormat[] {
@@ -118,6 +123,47 @@ export function ScrapeOptionsFields({
                 placeholder="none"
                 onChange={(e) => onChange({ ...value, wait_for_ms: e.target.value ? Number(e.target.value) : null })}
               />
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={value.extract !== null}
+                  onChange={(e) =>
+                    onChange({ ...value, extract: e.target.checked ? { json_schema: null, prompt: '' } : null })
+                  }
+                />
+                Enable LLM extraction
+              </label>
+              {value.extract !== null && (
+                <div className="flex flex-col gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Calls an LLM over the page's markdown (server-side, gated by AGENTPILOT_LLM_API_KEY).
+                    Provide a prompt, a JSON Schema to extract into, or both.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="extract-prompt">Prompt</Label>
+                    <Textarea
+                      id="extract-prompt"
+                      rows={2}
+                      placeholder="e.g. extract the product title and price"
+                      value={value.extract.prompt ?? ''}
+                      onChange={(e) =>
+                        onChange({ ...value, extract: { ...(value.extract ?? {}), prompt: e.target.value || null } })
+                      }
+                    />
+                  </div>
+                  <JsonTextareaField
+                    label="JSON Schema (optional)"
+                    value={value.extract.json_schema ?? null}
+                    onChange={(json_schema) =>
+                      onChange({ ...value, extract: { ...(value.extract ?? {}), json_schema } })
+                    }
+                    placeholder={'{\n  "type": "object",\n  "properties": { "price": { "type": "number" } }\n}'}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </details>

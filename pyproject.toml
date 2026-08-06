@@ -40,7 +40,8 @@ Issues = "https://github.com/crawlpilot/agentpilot/issues"
 driver = [
     "patchright>=1.61.2",
     "re-cdp-patches>=0.9.1",
-    "trafilatura>=2.1.0",
+    "lxml>=6.1.1",
+    "cssselect>=1.2.0",
     "cryptography>=43.0",
 ]
 # Postgres driver (runtime pool) + Alembic (migrations) for agentpilot.auth
@@ -62,6 +63,7 @@ dev = [
     "pytest-httpserver>=1.1",
     "fakeredis>=2.26",
     "lupa>=2.1",
+    "lxml-stubs>=0.5",
 ]
 
 [build-system]
@@ -121,6 +123,53 @@ layers = ["agentpilot.gateway", "(agentpilot.control)", "agentpilot.spi"]
 name = "driver -> {extraction, egress} -> spi"
 type = "layers"
 layers = ["agentpilot.driver", "agentpilot.extraction | agentpilot.egress", "agentpilot.spi"]
+
+# agentpilot.llm (schema-driven LLM extraction, `ScrapeOptions.extract`) is a
+# new leaf, same shape as extraction/egress above -- session/ephemeral.py
+# calls it as a post-processing step once markdown is available, never the
+# other way around, and it never touches agentpilot.driver.
+[[tool.importlinter.contracts]]
+name = "session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+# agentpilot.agent (the LLM-driven web-agent step loop) sits between gateway
+# and session, the same shape jobs/crawl already have -- it drives a browser
+# only via agentpilot.session.interactive (never agentpilot.driver directly)
+# and calls agentpilot.llm for its own multi-turn tool-calling loop, skipping
+# over session directly for that (layers contracts permit importing any
+# lower layer, not just the immediately adjacent one).
+[[tool.importlinter.contracts]]
+name = "gateway -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+# `agentpilot.jobs.agent_store`/`agentpilot.jobs.agent_worker_loop` (the
+# Postgres-backed agent-run queue + its processing loop) sit *above*
+# agentpilot.agent, the same shape jobs.worker_loop already has over
+# session/crawl (jobs claims a row, then reaches down into the layer that
+# does the actual work -- ephemeral scrapes there, `run_agent_loop` here).
+[[tool.importlinter.contracts]]
+name = "jobs -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+# agentpilot.recipe (Phase 2: selector-generation/self-healing recipes) sits
+# between gateway/jobs and agentpilot.agent -- it orchestrates run_agent_loop
+# calls (build.py/heal.py) and drives replay (replay.py/dispatch.py) via
+# agentpilot.session.interactive directly, but never touches agentpilot.driver
+# itself. Persistence + the worker/scheduler loops live in agentpilot.jobs
+# (recipe_store.py/recipe_worker_loop.py/recipe_scheduler_loop.py), the same
+# precedent agent_store.py/agent_worker_loop.py already set for agentpilot.agent.
+[[tool.importlinter.contracts]]
+name = "gateway -> recipe -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.recipe", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> recipe -> agent -> session -> llm -> spi"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.recipe", "agentpilot.agent", "agentpilot.session", "agentpilot.llm", "agentpilot.spi"]
 
 # agentpilot.jobs (the async job queue behind /v1/crawl and /v1/batch/scrape)
 # is a second top-level consumer of agentpilot.placement, alongside
@@ -188,6 +237,8 @@ source_modules = [
     "agentpilot.auth",
     "agentpilot.jobs",
     "agentpilot.crawl",
+    "agentpilot.agent",
+    "agentpilot.recipe",
 ]
 forbidden_modules = ["agentpilot.driver"]
 # routes/app reach the driver only *through* agentpilot.gateway.wiring (the

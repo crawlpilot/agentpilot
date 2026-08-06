@@ -28,12 +28,22 @@ function statusVariant(status: RecentRunEntry['status']): NonNullable<BadgeProps
     case 'failed':
       return 'destructive'
     case 'scraping':
+    case 'running':
       return 'accent'
     case 'cancelled':
       return 'outline'
     default:
       return 'default' // 'queued'
   }
+}
+
+// Which endpoints' cards deep-link back to a resumable view, and where. A
+// crawl/agent card reopens its tab with `?id=`; a recipe card reopens the
+// recipe's detail page focused on that specific run.
+const RESUMABLE_ROUTES: Partial<Record<RecentRunEntry['endpoint'], (e: RecentRunEntry) => string | null>> = {
+  crawl: (e) => (e.jobId ? `/playground/crawl?id=${e.jobId}` : null),
+  agent: (e) => (e.jobId ? `/playground/agent?id=${e.jobId}` : null),
+  recipe: (e) => (e.recipeId ? `/recipes/${e.recipeId}?runId=${e.jobId ?? ''}&kind=${e.kind ?? ''}` : null),
 }
 
 function Favicon({ url }: { url: string }) {
@@ -60,15 +70,15 @@ function Favicon({ url }: { url: string }) {
 
 function RunCard({ entry }: { entry: RecentRunEntry }) {
   const navigate = useNavigate()
-  const clickable = entry.endpoint === 'crawl' && Boolean(entry.jobId)
+  const href = RESUMABLE_ROUTES[entry.endpoint]?.(entry) ?? null
 
   return (
     <div
       className={cn(
         'flex items-center gap-3 rounded-md border border-border p-3 text-sm',
-        clickable && 'cursor-pointer hover:bg-muted/50',
+        href && 'cursor-pointer hover:bg-muted/50',
       )}
-      onClick={clickable ? () => navigate(`/playground/crawl?id=${entry.jobId}`) : undefined}
+      onClick={href ? () => navigate(href) : undefined}
     >
       <Favicon url={entry.url} />
       <span className="flex-1 truncate font-mono text-xs">{entry.url}</span>

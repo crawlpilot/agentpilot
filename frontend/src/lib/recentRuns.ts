@@ -5,10 +5,10 @@
 // (multiple tenants could share a browser), matching this app's existing
 // `agentpilot.*` localStorage-key namespacing (see `lib/auth/tokenStorage.ts`).
 
-import type { CrawlJobStatus, ScrapeFormat } from './api/types'
+import type { CrawlJobStatus, RecipeRunKind, RunStatus, ScrapeFormat } from './api/types'
 
-export type RecentRunEndpoint = 'scrape' | 'map' | 'crawl'
-export type RecentRunStatus = 'success' | 'error' | CrawlJobStatus
+export type RecentRunEndpoint = 'scrape' | 'map' | 'crawl' | 'agent' | 'recipe'
+export type RecentRunStatus = 'success' | 'error' | CrawlJobStatus | RunStatus
 
 export interface RecentRunEntry {
   id: string
@@ -17,7 +17,9 @@ export interface RecentRunEntry {
   formats?: ScrapeFormat[]
   status: RecentRunStatus
   startedAt: string // ISO
-  jobId?: string // crawl only -- lets a card deep-link back to resume polling
+  jobId?: string // crawl/agent/recipe -- lets a card deep-link back to resume polling
+  recipeId?: string // recipe only -- the recipe a run belongs to
+  kind?: RecipeRunKind // recipe only -- which action (build/replay/heal/codegen)
 }
 
 const MAX_ENTRIES = 25

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import random
 import socket
 import uuid
 from collections.abc import Mapping
@@ -60,6 +62,11 @@ from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.driver.ref_cache import RefCache
 from agentpilot.egress.policy import apply_baseline
 from agentpilot.extraction.extractor import extract
+from agentpilot.observability.metrics import (
+    context_leak_warnings_total,
+    context_task_outcomes_total,
+    context_tasks_total,
+)
 from agentpilot.spi.actions import (
     Action,
     ActionResult,
@@ -90,11 +97,11 @@ from agentpilot.spi.errors import (
     StaleRefError,
     TabNotFound,
 )
-from agentpilot.spi.health import HealthStatus
+from agentpilot.spi.health import ContextHealth, HealthStatus
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from agentpilot.spi.snapshot import AXSnapshot, BoundingBox, SnapshotNode
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 from agentpilot.spi.streaming import InputEvent, LiveViewFrame
 
@@ -107,12 +114,66 @@ _BOUNDING_BOX_TIMEOUT_MS = 3_000
 `_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
 real observed hang, not a hypothetical one."""
 
+_SETTLE_TIMEOUT_MS = 1_500
+"""Upper bound on the best-effort network-idle wait before an opt-in
+(`SnapshotAction.settle`) snapshot. Bounded because `networkidle` never fires
+on pages with persistent connections (long-poll, websockets, analytics
+beacons); on those the wait simply caps out and the snapshot proceeds. A
+MutationObserver-based probe that returns early on DOM quiescence (Browser4's
+`waitForDOMSettle`) is a later refinement -- this is the cheap first cut."""
+
 _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
     "down": (0, 600),
     "up": (0, -600),
     "right": (600, 0),
     "left": (-600, 0),
 }
+
+# --- Behavioral-realism knobs (anti-detection). Real users don't fill an
+# input in a single instantaneous DOM write, teleport the pointer to an
+# element's exact center, or scroll by a pixel-perfect fixed delta every
+# time -- WAFs that score pointer/keystroke telemetry flag exactly that
+# regularity. These add human-plausible variance without changing what an
+# action ultimately does. All keyed off `random`, seeded per-process, so
+# tests that need determinism can `random.seed()`.
+
+_TYPE_DELAY_MS_RANGE = (90, 240)
+"""Per-character keystroke delay for `FillAction`, matching the range a
+sibling project documented for realistic typing (see CLAUDE.md's
+`randomDelayMillis("type")` note)."""
+
+_MOUSE_MOVE_STEPS_RANGE = (8, 18)
+"""Intermediate `mouse.move` steps before a click -- Playwright interpolates
+a straight line across them, still far more human than a single teleport to
+the target center; step count varies so the cadence isn't fixed."""
+
+_SCROLL_JITTER_FRAC = 0.15
+"""Fraction of the base scroll delta to randomize by (±), so repeated
+scrolls aren't a pixel-identical fixed wheel event."""
+
+
+def _navigation_leak_reason(status: int | None) -> str | None:
+    """Pure classifier for navigation-response leak signals -- a site telling
+    us it suspects a bot. Status-only for now (no extra round trip); a
+    content/title-based captcha check (Cloudflare "Just a moment", hCaptcha)
+    is a later refinement that would cost a `content()` fetch. Feeds
+    `_ContextHealth.leak_warnings`, which a later pass uses to rotate the
+    profile (mirrors Browser4's privacy-leak-driven context drop)."""
+
+    if status == 403:
+        return "http_403"
+    if status == 429:
+        return "http_429"
+    return None
+
+
+def _jitter(value: float) -> float:
+    return value * (1 + random.uniform(-_SCROLL_JITTER_FRAC, _SCROLL_JITTER_FRAC))
+
+
+def _jittered_scroll_delta(direction: str) -> tuple[float, float]:
+    dx, dy = _SCROLL_DELTAS[direction]
+    return _jitter(dx), _jitter(dy)
 
 DEFAULT_MAX_TABS_PER_SESSION = 10
 """Per-session tab cap (`_Context.max_tabs`). A prior internal system's
@@ -142,6 +203,34 @@ class _Page:
 
 
 @dataclass
+class _ContextHealth:
+    """Per-context health tallies -- Wave 0 instrumentation only. Counters are
+    recorded but nothing acts on them yet; a later pass adds leak detection
+    (`leak_warnings`) and quality signals (`small_pages`), then a
+    `should_retire` policy that rotates a flagged profile (mirrors Browser4's
+    `AbstractPrivacyContext`: `privacyLeakWarnings`, `failureRate`,
+    `smallPageRate`). A "task" here is one `execute()` batch."""
+
+    tasks: int = 0
+    successes: int = 0
+    failures: int = 0
+    small_pages: int = 0
+    """Reserved: batches that returned a suspiciously small/blocked page.
+    Populated by a later leak/quality-detection pass, not in Wave 0."""
+    leak_warnings: int = 0
+    """Reserved: bot-detection signals (captcha/challenge/block). Populated by
+    a later leak-detection pass, not in Wave 0."""
+
+    @property
+    def failure_rate(self) -> float:
+        return self.failures / self.tasks if self.tasks else 0.0
+
+    @property
+    def success_rate(self) -> float:
+        return self.successes / self.tasks if self.tasks else 0.0
+
+
+@dataclass
 class _Context:
     """One `ContextRef`'s live state -- the per-context wrapper `_Live` used
     to be (a context WAS a page, 1:1). Mirrors a prior internal system's
@@ -164,6 +253,9 @@ class _Context:
     "New-tab focus" decision: real-browser semantics, matching a prior
     internal system's unconditional new-window auto-follow). Read once per
     `execute()` call and reset, same lifecycle as before."""
+    health: _ContextHealth = field(default_factory=_ContextHealth)
+    """Per-context health tallies (Wave 0 instrumentation) -- see
+    `_ContextHealth`. Updated in `execute()`; not yet consumed by any policy."""
     expecting_explicit_tab: bool = False
     """Set around `_create_tab`'s own `context.new_page()` call.
     `new_page()` fires the exact same context-level `"page"` event an
@@ -297,6 +389,8 @@ class PatchrightDriver:
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
+        locale: str | None = None,
+        timezone_id: str | None = None,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -332,6 +426,16 @@ class PatchrightDriver:
             # upgrades carrying a *mismatched* `Origin`) never triggers.
             launch_args.append(f"--remote-debugging-port={cdp_port}")
 
+        # Only pass locale/timezone through when the caller actually set
+        # them -- Playwright treats an explicit `None` and an omitted kwarg
+        # differently, and omitting keeps Chrome's own defaults for the
+        # interactive/test callers that don't care (see `BrowserDriver.open`).
+        context_kwargs: dict[str, Any] = {}
+        if locale is not None:
+            context_kwargs["locale"] = locale
+        if timezone_id is not None:
+            context_kwargs["timezone_id"] = timezone_id
+
         playwright = await self._launcher.get_playwright()
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
@@ -340,6 +444,7 @@ class PatchrightDriver:
             no_viewport=True,
             proxy=_proxy_settings(proxy),
             args=launch_args,
+            **context_kwargs,
         )
         if enable_cdp:
             assert cdp_port is not None
@@ -459,44 +564,81 @@ class PatchrightDriver:
         live = self._require_page(cctx, page_id)
         result = ActionResult(page_changed=cctx.page_changed)
         cctx.page_changed = False
+        cctx.health.tasks += 1
+        context_tasks_total.inc()
 
-        stale = False
-        for action in actions:
-            consumes_ref = isinstance(action, _REF_CONSUMING) or (
-                isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
-            )
-            if stale and consumes_ref:
-                result.sequence_aborted = True
-                break
-            try:
-                pre_url = live.page.url
-                await self._dispatch(cctx, live, action, result)
-            except TargetClosedError as exc:
-                # Belt-and-suspenders alongside `_wire_page`'s "close"
-                # listener above: that listener and the actual close can
-                # still race (this action's own CDP call landing in the gap
-                # between the page closing and the event handler running),
-                # so this is the last line of defense against a raw
-                # Playwright error leaking out as an opaque 500 instead of
-                # the typed `ContextCrashed` every other dead-page path uses.
-                live.alive = False
-                live.death_reason = live.death_reason or "page_closed"
-                raise ContextCrashed(str(exc)) from exc
-            if live.page.url != pre_url:
-                stale = True
-        return result
+        succeeded = False
+        try:
+            stale = False
+            for action in actions:
+                consumes_ref = isinstance(action, _REF_CONSUMING) or (
+                    isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
+                )
+                if stale and consumes_ref:
+                    result.sequence_aborted = True
+                    break
+                try:
+                    pre_url = live.page.url
+                    await self._dispatch(cctx, live, action, result)
+                except TargetClosedError as exc:
+                    # Belt-and-suspenders alongside `_wire_page`'s "close"
+                    # listener above: that listener and the actual close can
+                    # still race (this action's own CDP call landing in the gap
+                    # between the page closing and the event handler running),
+                    # so this is the last line of defense against a raw
+                    # Playwright error leaking out as an opaque 500 instead of
+                    # the typed `ContextCrashed` every other dead-page path uses.
+                    live.alive = False
+                    live.death_reason = live.death_reason or "page_closed"
+                    raise ContextCrashed(str(exc)) from exc
+                if live.page.url != pre_url:
+                    stale = True
+            succeeded = True
+            return result
+        finally:
+            # Health is instrumentation only (Wave 0): a batch that raised
+            # (ContextCrashed, etc.) is a failure; a batch that completed --
+            # including one that set `sequence_aborted` -- is a driver-level
+            # success. Nothing acts on these tallies yet.
+            if succeeded:
+                cctx.health.successes += 1
+                context_task_outcomes_total.labels(outcome="success").inc()
+            else:
+                cctx.health.failures += 1
+                context_task_outcomes_total.labels(outcome="failure").inc()
 
     async def _dispatch(
         self, cctx: _Context, live: _Page, action: Action, result: ActionResult
     ) -> None:
         if isinstance(action, NavigateAction):
             try:
-                await live.page.goto(action.url, timeout=action.timeout_ms)
+                response = await live.page.goto(action.url, timeout=action.timeout_ms)
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
+            # Any ref taken before this navigation must not resolve against
+            # the new page -- bump the epoch and reset the ref cache the
+            # same way SnapshotAction does, rather than relying on every
+            # caller to always re-snapshot before reusing a ref. Without
+            # this, RefCache's AX_NAME fallback tier could spuriously
+            # resolve a stale ref against an unrelated element on the new
+            # page instead of correctly raising StaleRefError.
+            live.epoch += 1
+            live.ref_cache.reset(live.epoch)
+            result.verifications.append(f"navigated to {live.page.url}")
+            reason = _navigation_leak_reason(response.status if response is not None else None)
+            if reason is not None:
+                cctx.health.leak_warnings += 1
+                context_leak_warnings_total.labels(reason=reason).inc()
+                result.verifications.append(
+                    f"warning: navigation returned {reason} -- possible block or bot challenge"
+                )
         elif isinstance(action, GoBackAction):
             await live.page.go_back()
+            live.epoch += 1
+            live.ref_cache.reset(live.epoch)
         elif isinstance(action, SnapshotAction):
+            if action.settle:
+                await self._settle(live)
             live.epoch += 1
             text = await live.page.aria_snapshot(mode="ai")
             root = parse_aria_snapshot(text, epoch=live.epoch)
@@ -505,11 +647,39 @@ class PatchrightDriver:
             if action.viewport_only:
                 root = await self._apply_viewport_filter(live, root)
             root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
+            if action.with_bbox:
+                # After filtering, not before: only pays for refs that
+                # actually survived viewport/role/max_nodes pruning.
+                await self._annotate_bounding_boxes(live, root)
             result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
         elif isinstance(action, ExtractAction):
+            # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
+            # full page.content() fetch -- doesn't add a round trip to
+            # non-extract batches (interactive click/fill/etc. sequences),
+            # and isn't refetched if a batch requests multiple formats.
+            if result.page_title is None:
+                result.page_title = await live.page.title()
             html = await live.page.content()
+            base_url = action.base_url or live.page.url
+            live_hydration: dict[str, Any] | None = None
+            if action.format == "structured_data":
+                # Static parse first (cheap, in-memory HTML reparse); only
+                # fall back to a live JS-eval round trip if it found nothing
+                # -- covers client-only SPA state never present in the
+                # static markup, without paying for it on every scrape.
+                preview = json.loads(extract(html, format=action.format, base_url=base_url))
+                if not preview["hydration"]:
+                    live_hydration = await self._probe_hydration_globals(live)
             result.extracts.append(
-                extract(html, format=action.format, main_content=action.main_content)
+                extract(
+                    html,
+                    format=action.format,
+                    main_content=action.main_content,
+                    include_tags=action.include_tags,
+                    exclude_tags=action.exclude_tags,
+                    base_url=base_url,
+                    live_hydration=live_hydration,
+                )
             )
         elif isinstance(action, ScreenshotAction):
             result.screenshots.append(await live.page.screenshot(full_page=action.full_page))
@@ -521,15 +691,28 @@ class PatchrightDriver:
         elif isinstance(action, ExecuteJsAction):
             result.js_returns.append(await live.page.evaluate(action.script))
         elif isinstance(action, ClickAction):
+            pre_click_url = live.page.url
             locator = await self._resolve_ref(live, action.ref)
             if action.all:
                 for i in range(await locator.count()):
-                    await locator.nth(i).click()
+                    await self._human_click(live, locator.nth(i))
             else:
-                await locator.click()
+                await self._human_click(live, locator)
+            if live.page.url != pre_click_url:
+                result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
+            else:
+                result.verifications.append(f"clicked {action.ref}")
         elif isinstance(action, FillAction):
             locator = await self._resolve_ref(live, action.ref)
-            await locator.fill(action.text)
+            await self._human_fill(live, locator, action.text)
+            # Read-back grounding: confirm the value actually landed in the
+            # field rather than assuming success. Best-effort -- a field that
+            # can't report its value must not fail the fill.
+            with contextlib.suppress(Exception):
+                value = await locator.input_value()
+                result.verifications.append(
+                    f"filled {action.ref}: field now contains {value[:80]!r}"
+                )
         elif isinstance(action, SelectOptionAction):
             locator = await self._resolve_ref(live, action.ref)
             await locator.select_option(action.values)
@@ -543,7 +726,7 @@ class PatchrightDriver:
                 locator = await self._resolve_ref(live, action.ref)
                 await locator.scroll_into_view_if_needed()
             else:
-                dx, dy = _SCROLL_DELTAS[action.direction]
+                dx, dy = _jittered_scroll_delta(action.direction)
                 await live.page.mouse.wheel(dx, dy)
         elif isinstance(action, NewTabAction):
             new_page_id = await self._create_tab(cctx, action.url)
@@ -612,6 +795,42 @@ class PatchrightDriver:
             for (pid, p), title in zip(cctx.pages.items(), titles, strict=True)
         ]
 
+    _HYDRATION_PROBE_JS = """() => {
+        const keys = ["__NEXT_DATA__", "__NUXT__", "__INITIAL_STATE__",
+                      "__APOLLO_STATE__", "__REDUX_STATE__"];
+        const found = {};
+        for (const key of keys) {
+            if (window[key] !== undefined) {
+                found[key] = window[key];
+            }
+        }
+        return found;
+    }"""
+
+    async def _probe_hydration_globals(self, live: _Page) -> dict[str, Any]:
+        """Live JS-eval fallback for `structured_data` extraction, used only
+        when the static HTML parse found no hydration script tag -- covers
+        client-only SPA state that never lands in the served markup. Best
+        effort: a window global holding something CDP can't JSON-serialize
+        (a function, a circular ref) fails closed to `{}` rather than
+        breaking the whole extract."""
+
+        try:
+            result = await live.page.evaluate(self._HYDRATION_PROBE_JS)
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    async def _settle(self, live: _Page) -> None:
+        """Best-effort, bounded wait for the page to reach network-idle before
+        an opt-in (`SnapshotAction.settle`) snapshot, so the agent perceives a
+        stable page across steps. Swallows everything -- including the expected
+        timeout on pages that never go idle -- because a failed settle must
+        never fail the snapshot it precedes."""
+
+        with contextlib.suppress(Exception):
+            await live.page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
+
     async def _resolve_ref(self, live: _Page, ref: str) -> Locator:
         """Resolves via `RefCache`, then enforces visibility: a ref that
         resolves to a zero-size box (`display:none`, collapsed, off-canvas)
@@ -633,6 +852,40 @@ class PatchrightDriver:
         if box is None or box["width"] <= 0 or box["height"] <= 0:
             raise StaleRefError(ref, epoch_superseded=False)
         return locator
+
+    async def _human_click(self, live: _Page, locator: Locator) -> None:
+        """Approach the target over several interpolated `mouse.move` steps
+        to a jittered point *inside* the element, then click -- versus
+        Playwright's default single teleport to the exact center. Best
+        effort: if the box can't be resolved quickly, fall straight through
+        to a plain `.click()` (which does its own actionability wait) rather
+        than failing the action for the sake of the flourish."""
+
+        try:
+            box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            box = None
+        if box is not None and box["width"] > 0 and box["height"] > 0:
+            tx = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+            ty = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+            with contextlib.suppress(Exception):
+                await live.page.mouse.move(tx, ty, steps=random.randint(*_MOUSE_MOVE_STEPS_RANGE))
+        await locator.click()
+
+    async def _human_fill(self, live: _Page, locator: Locator, text: str) -> None:
+        """Clear, then type character-by-character with a randomized delay
+        *between* keystrokes -- versus `locator.fill()`'s single instantaneous
+        DOM write, which is a strong automation tell to keystroke-timing
+        telemetry. `fill("")` clears any existing value first; the final
+        field value is identical to what `fill(text)` would have produced."""
+
+        await locator.fill("")
+        if not text:
+            return
+        await locator.focus()
+        for ch in text:
+            await live.page.keyboard.type(ch)
+            await asyncio.sleep(random.uniform(*_TYPE_DELAY_MS_RANGE) / 1000)
 
     async def _apply_viewport_filter(self, live: _Page, root: SnapshotNode) -> SnapshotNode:
         """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`
@@ -660,15 +913,7 @@ class PatchrightDriver:
             metrics = await cdp.send("Page.getLayoutMetrics")
             viewport = metrics["cssVisualViewport"]
             vw, vh = viewport["clientWidth"], viewport["clientHeight"]
-            boxes = await asyncio.gather(
-                *(
-                    live.page.locator(f"aria-ref={ref}").bounding_box(
-                        timeout=_BOUNDING_BOX_TIMEOUT_MS
-                    )
-                    for ref in leaf_refs
-                ),
-                return_exceptions=True,
-            )
+            boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
         finally:
             if owns_session:
                 with contextlib.suppress(Exception):
@@ -691,10 +936,53 @@ class PatchrightDriver:
         # silently discarding real content because one lookup was flaky.
         visible = {
             ref
-            for ref, box in zip(leaf_refs, boxes, strict=True)
+            for ref, box in boxes_by_ref.items()
             if (isinstance(box, dict) and _in_viewport(box)) or isinstance(box, Exception)
         }
         return prune_to_refs(root, visible)
+
+    async def _resolve_bounding_boxes(
+        self, live: _Page, refs: list[str]
+    ) -> dict[str, FloatRect | None | BaseException]:
+        """Concurrently resolves bounding boxes for `refs` via CDP-backed
+        Playwright locators, so callers pipeline the round trips instead of
+        paying N sequential ones -- shared by `_apply_viewport_filter` (which
+        interprets `None`/exception itself) and `_annotate_bounding_boxes`
+        (which only cares about the successful `dict` case)."""
+
+        if not refs:
+            return {}
+        boxes = await asyncio.gather(
+            *(
+                live.page.locator(f"aria-ref={ref}").bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+                for ref in refs
+            ),
+            return_exceptions=True,
+        )
+        return dict(zip(refs, boxes, strict=True))
+
+    async def _annotate_bounding_boxes(self, live: _Page, root: SnapshotNode) -> None:
+        """Populates `SnapshotNode.bbox` in place for every leaf ref in the
+        (already-filtered) tree -- `agentpilot.agent`'s step loop uses this to
+        give the LLM coordinate grounding alongside a screenshot. Best
+        effort: a ref whose box can't be resolved (detached, transient CDP
+        hiccup) is simply left with `bbox=None`, the same fail-open posture
+        `_apply_viewport_filter` uses for lookup failures."""
+
+        leaf_refs = collect_leaf_refs(root)
+        boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
+
+        def walk(node: SnapshotNode) -> None:
+            if not node.children and node.ref:
+                box = boxes_by_ref.get(node.ref)
+                if isinstance(box, dict):
+                    node.bbox = BoundingBox(
+                        x=box["x"], y=box["y"], width=box["width"], height=box["height"]
+                    )
+            for child in node.children:
+                walk(child)
+
+        walk(root)
 
     async def export_state(self, ctx: ContextRef) -> StorageState:
         cctx = self._require_context(ctx)
@@ -723,6 +1011,19 @@ class PatchrightDriver:
             return HealthStatus(alive=True, reason=None)
         death_reason = next((p.death_reason for p in cctx.pages.values() if p.death_reason), None)
         return HealthStatus(alive=False, reason=death_reason)
+
+    async def context_health(self, ctx: ContextRef) -> ContextHealth | None:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None:
+            return None
+        h = cctx.health
+        return ContextHealth(
+            tasks=h.tasks,
+            successes=h.successes,
+            failures=h.failures,
+            small_pages=h.small_pages,
+            leak_warnings=h.leak_warnings,
+        )
 
     # --- LiveViewCapable (optional capability; see spi.streaming) ---
     # Page and Input domains only -- never Runtime, to preserve Patchright's

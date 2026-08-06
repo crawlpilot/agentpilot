@@ -10,6 +10,9 @@ import { PlaygroundScrapeTab } from '@/routes/PlaygroundScrapeTab'
 import { PlaygroundMapTab } from '@/routes/PlaygroundMapTab'
 import { PlaygroundCrawlTab } from '@/routes/PlaygroundCrawlTab'
 import { PlaygroundInteractTab } from '@/routes/PlaygroundInteractTab'
+import { PlaygroundAgentTab } from '@/routes/PlaygroundAgentTab'
+import { RecipesListPage } from '@/routes/RecipesListPage'
+import { RecipeDetailPage } from '@/routes/RecipeDetailPage'
 import { ApiKeysPage } from '@/routes/ApiKeysPage'
 import { NodesPage } from '@/routes/NodesPage'
 
@@ -35,8 +38,13 @@ export const router = createBrowserRouter([
           { path: 'map', element: <PlaygroundMapTab /> },
           { path: 'crawl', element: <PlaygroundCrawlTab /> },
           { path: 'interact', element: <PlaygroundInteractTab /> },
+          { path: 'agent', element: <PlaygroundAgentTab /> },
         ],
       },
+      // Recipes are persistent, revisitable entities (like Sessions), not
+      // one-shot Playground tools -- top-level list+detail, not a tab.
+      { path: 'recipes', element: <RecipesListPage /> },
+      { path: 'recipes/:recipeId', element: <RecipeDetailPage /> },
       { path: 'api-keys', element: <ApiKeysPage /> },
       { path: 'nodes', element: <NodesPage /> },
     ],

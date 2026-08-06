@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 
 from agentpilot.spi.actions import Action, ActionResult
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.health import HealthStatus
+from agentpilot.spi.health import ContextHealth, HealthStatus
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -30,7 +30,16 @@ class BrowserDriver(Protocol):
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
-    ) -> ContextRef: ...
+        locale: str | None = None,
+        timezone_id: str | None = None,
+    ) -> ContextRef:
+        """`locale`/`timezone_id` (when set) override the browser context's
+        reported `navigator.language`/`Accept-Language` and JS timezone --
+        an anti-detection consistency lever (a US retail site expects a
+        plausible US locale/timezone, not whatever the host container
+        happens to run as). `None` leaves Chrome's own defaults untouched,
+        so existing interactive/test callers are unaffected."""
+        ...
 
     async def close(self, ctx: ContextRef) -> None: ...
 
@@ -50,3 +59,9 @@ class BrowserDriver(Protocol):
     async def restore_state(self, ctx: ContextRef, state: StorageState) -> None: ...
 
     async def health(self, ctx: ContextRef) -> HealthStatus: ...
+
+    async def context_health(self, ctx: ContextRef) -> ContextHealth | None:
+        """Per-context health tallies for the session layer's retire/rotate
+        decision, or `None` if the context is unknown. Distinct from `health`
+        (is the context *alive*) -- this is *how well* it's doing."""
+        ...

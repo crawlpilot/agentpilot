@@ -28,7 +28,7 @@ from agentpilot.gateway.schemas import (
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
 from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.spi.scrape import ScrapeOptions
+from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
@@ -51,16 +51,37 @@ async def scrape(
             status_code=400, detail=f"cannot determine a domain from url {req.url!r}"
         )
 
+    # Fail closed rather than silently scrape from the raw container IP when
+    # the caller explicitly asked for a stealth-grade run: a datacenter
+    # egress IP is the dominant Akamai-block signal on hardened targets, and
+    # `tier=stealth|enhanced` with no proxy pool configured would otherwise
+    # look like it's doing something it isn't. `basic`/`auto` stay lenient.
+    if req.tier in ("stealth", "enhanced") and wiring.proxy_pinner is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"tier={req.tier!r} requires a proxy pool, but none is configured "
+                "(set AGENTPILOT_PROXY_POOL to a residential/mobile pool). "
+                "Scraping bot-protected sites from the raw host IP will be blocked; "
+                "use tier='basic' to proceed without a proxy anyway."
+            ),
+        )
+
     requests_total.labels(tenant=req.tenant, route="scrape").inc()
 
     options = ScrapeOptions(
         formats=tuple(req.formats),
         only_main_content=req.only_main_content,
+        include_tags=tuple(req.include_tags) or None,
+        exclude_tags=tuple(req.exclude_tags) or None,
         timeout_ms=req.timeout_ms,
         wait_for_ms=req.wait_for_ms,
         actions=tuple(to_spi_action(a) for a in req.actions),
         screenshot=req.screenshot,
         full_page_screenshot=req.full_page_screenshot,
+        extract=ExtractConfig(json_schema=req.extract.json_schema, prompt=req.extract.prompt)
+        if req.extract
+        else None,
     )
 
     with scrape_duration_seconds.time():
@@ -75,6 +96,9 @@ async def scrape(
             proxy_pinner=wiring.proxy_pinner,
             lease_ttl_seconds=wiring.lease_ttl_seconds,
             tier=req.tier,
+            session_name=req.session_name,
+            locale=req.locale,
+            timezone_id=req.timezone_id,
         )
 
     meta = document.metadata
@@ -86,6 +110,7 @@ async def scrape(
             markdown=document.markdown,
             text=document.text,
             html=document.html,
+            structured_data=document.structured_data,
             links=list(document.links),
             screenshot=base64.b64encode(screenshot_bytes).decode("ascii")
             if screenshot_bytes
@@ -99,5 +124,7 @@ async def scrape(
                 source_url=document.url,
             ),
             error=document.error,
+            extract=document.extract,
+            extract_error=document.extract_error,
         ),
     )

@@ -40,9 +40,13 @@ _ACTION_CONVERTERS: dict[type, Callable[[Any], spi_actions.Action]] = {
         viewport_only=a.viewport_only,
         max_nodes=a.max_nodes,
         roles=tuple(a.roles) if a.roles is not None else None,
+        with_bbox=a.with_bbox,
     ),
     ExtractActionIn: lambda a: spi_actions.ExtractAction(
-        format=a.format, main_content=a.main_content
+        format=a.format,
+        main_content=a.main_content,
+        include_tags=tuple(a.include_tags) or None,
+        exclude_tags=tuple(a.exclude_tags) or None,
     ),
     ScreenshotActionIn: lambda a: spi_actions.ScreenshotAction(full_page=a.full_page),
     WaitActionIn: lambda a: spi_actions.WaitAction(ms=a.ms, ref=a.ref),

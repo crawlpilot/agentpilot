@@ -20,11 +20,16 @@ ARTICLE_HTML = """<html><body>
 <article>
 <h1>Scrape Route Article</h1>
 <p>This is the first paragraph of real body content, long enough and
-distinct enough that trafilatura should treat it as the main article rather
-than boilerplate noise.</p>
+distinct enough that the extraction pipeline should treat it as the main
+article rather than boilerplate noise.</p>
 <p>A second paragraph continues with different wording so extraction has
 real multi-paragraph content to check against.</p>
 </article>
+</body></html>"""
+
+PROMO_HTML = """<html><body>
+<article>Keep this article text.</article>
+<div class="promo">Drop this promo text.</div>
 </body></html>"""
 
 
@@ -65,6 +70,30 @@ async def test_scrape_returns_markdown_and_leaves_no_warm_entry(
     # Ephemeral: no entry left warm in the registry for the next scrape to
     # collide with or the reaper to find.
     assert await wiring.registry.snapshot() == []
+
+
+async def test_scrape_exclude_tags_reaches_the_extraction_pipeline(
+    driver: PatchrightDriver, tmp_path, httpserver: HTTPServer
+) -> None:
+    """`ScrapeRequest.exclude_tags` must actually reach `ScrapeOptions` (and
+    from there `ExtractAction`/`extract()`) -- previously a dead end, since
+    the field didn't exist on `ScrapeRequest` at all."""
+    httpserver.expect_request("/").respond_with_data(PROMO_HTML, content_type="text/html")
+    wiring = _FakeWiring(driver, tmp_path)
+
+    resp = await scrape(
+        ScrapeRequest(
+            tenant="acme",
+            url=httpserver.url_for("/"),
+            exclude_tags=[".promo"],
+        ),
+        _FakeRequest(),
+        wiring,
+    )
+
+    assert resp.success is True
+    assert "Keep this article text" in resp.data.markdown
+    assert "Drop this promo text" not in resp.data.markdown
 
 
 async def test_scrape_deletes_its_profile_dir_afterward(

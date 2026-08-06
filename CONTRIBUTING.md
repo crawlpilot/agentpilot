@@ -7,7 +7,7 @@ uv sync --group dev --extra driver          # --extra postgres too if you're tou
 uv run patchright install chrome            # needed to run tests/driver_contract/ or a local monolith/worker
 ```
 
-The `driver` extra (Patchright, `re-cdp-patches`, `trafilatura`, `cryptography`) is only ever
+The `driver` extra (Patchright, `re-cdp-patches`, `lxml`, `cssselect`, `cryptography`) is only ever
 imported by `agentpilot.driver`, `agentpilot.extraction`, and `agentpilot.identity.vault` — it's deliberately not a
 hard dependency of the package as a whole, so a `gateway`-role deployment can skip it entirely
 (see `docker/gateway.Dockerfile`).

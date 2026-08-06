@@ -10,8 +10,10 @@
   needed), `/v1/crawl` (`routes/crawl.py`, job CRUD against `agentpilot.jobs
   .store`, also no `/internal/...` counterpart -- the actual crawl
   *processing* is `wiring.crawl_worker_loop`, a background task, not an
-  HTTP route at all), and `/v1/api-keys` (admin-gated). Unchanged P0/P1
-  behavior plus P2's auth additions and the P4 scrape/map/crawl endpoints.
+  HTTP route at all), `/v1/agent/runs` (`routes/agent_runs.py`, same shape
+  again against `agentpilot.jobs.agent_store` -- processing is
+  `wiring.agent_worker_loop`), and `/v1/api-keys` (admin-gated). Unchanged
+  P0/P1 behavior plus P2's auth additions and the P4/agent-platform endpoints.
 - `worker`: only `/internal/sessions` and `/internal/scrape` (real logic,
   including live view as of this pass) -- never `/v1/...`, per `plan.md`'s
   "internal-only, never tenant-exposed" topology. `/v1/map`/`/v1/crawl` are
@@ -44,6 +46,7 @@ from agentpilot.gateway.auth_deps import require_admin, require_tenant_auth
 from agentpilot.gateway.errors import register_exception_handlers
 from agentpilot.gateway.role import get_role
 from agentpilot.gateway.routes import (
+    agent_runs,
     api_keys,
     cdp,
     cdp_proxy,
@@ -53,6 +56,7 @@ from agentpilot.gateway.routes import (
     live_view,
     live_view_proxy,
     nodes,
+    recipes,
     scrape,
     scrape_proxy,
     sessions,
@@ -105,6 +109,15 @@ if _role == "monolith":
     # declares Depends(require_tenant_auth) itself. Job CRUD never touches
     # agentpilot.driver, so this needs no /internal/... counterpart either.
     app.include_router(crawl.router, prefix="/v1/crawl")
+    # Same reasoning again -- agent_runs.router's routes each declare their
+    # own Depends(require_tenant_auth); run CRUD never touches
+    # agentpilot.driver either (agentpilot.jobs.agent_worker_loop does the
+    # actual browsing, as a background task, not through this route at all).
+    app.include_router(agent_runs.router, prefix="/v1/agent/runs")
+    # Same reasoning again -- recipes.router's routes each declare their own
+    # Depends(require_tenant_auth); run CRUD never touches agentpilot.driver
+    # either (agentpilot.jobs.recipe_worker_loop does the actual browsing).
+    app.include_router(recipes.router, prefix="/v1/recipes")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
@@ -130,6 +143,10 @@ if _role == "gateway":
     # Same router as the monolith mount above, for the same reason -- job
     # CRUD (agentpilot.jobs.store) needs no worker hop either.
     app.include_router(crawl.router, prefix="/v1/crawl")
+    # Same router as the monolith mount above, same reason.
+    app.include_router(agent_runs.router, prefix="/v1/agent/runs")
+    # Same router as the monolith mount above, same reason.
+    app.include_router(recipes.router, prefix="/v1/recipes")
     app.include_router(
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )

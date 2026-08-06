@@ -63,13 +63,16 @@ class SnapshotActionIn(BaseModel):
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: list[str] | None = None
+    with_bbox: bool = False
 
 
 class ExtractActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["extract"]
-    format: Literal["markdown", "text", "html"] = "markdown"
+    format: Literal["markdown", "text", "html", "structured_data"] = "markdown"
     main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
 
 
 class ScreenshotActionIn(BaseModel):
@@ -192,6 +195,17 @@ class ExecuteRequest(BaseModel):
 # composed server-side around an ephemeral identity -- see routes/scrape.py) ---
 
 
+class ExtractConfigIn(BaseModel):
+    """LLM-schema-driven structured extraction request -- see
+    `spi.scrape.ExtractConfig`'s docstring for how this differs from the
+    deterministic `"structured_data"` format, and for why this is
+    `json_schema`, not `schema`."""
+
+    model_config = ConfigDict(extra="forbid")
+    json_schema: dict[str, Any] | None = None
+    prompt: str | None = None
+
+
 class ScrapeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -201,8 +215,12 @@ class ScrapeRequest(BaseModel):
     """Same not-yet-routed field as `SessionOpenRequest.tier` -- every scrape
     takes the same full-Patchright path today regardless of this value; see
     that model's field for the reasoning."""
-    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
+        default=["markdown"]
+    )
     only_main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     actions: list[ActionIn] = Field(default_factory=list)
@@ -213,6 +231,21 @@ class ScrapeRequest(BaseModel):
     not rejected -- there's no reason to special-case that combination."""
     screenshot: bool = False
     full_page_screenshot: bool = False
+    extract: ExtractConfigIn | None = None
+    session_name: str | None = None
+    """Anti-detection: opt into a warm, persistent browser profile for this
+    `(tenant, domain, session_name)` instead of the default throwaway
+    cookie-less profile. Repeat scrapes of the same site under the same name
+    reuse accumulated cookies/state -- a returning-visitor signal that a
+    fresh profile every call (a bot tell to WAFs like Akamai) lacks. Unset
+    (the default) keeps the isolated one-shot behavior."""
+    locale: str | None = None
+    """Overrides the browser context's `navigator.language`/`Accept-Language`
+    (e.g. `"en-US"`). Unset leaves Chrome's own default -- set it to a region
+    plausible for the target site to avoid a locale-vs-target mismatch."""
+    timezone_id: str | None = None
+    """Overrides the browser's reported timezone (e.g. `"America/New_York"`).
+    Should be coherent with `locale`. Unset leaves Chrome's own default."""
 
 
 class ScrapeMetadataOut(BaseModel):
@@ -232,6 +265,7 @@ class DocumentOut(BaseModel):
     markdown: str | None = None
     text: str | None = None
     html: str | None = None
+    structured_data: dict[str, Any] | None = None
     links: list[str] = Field(default_factory=list)
     screenshot: str | None = None
     """Base64-encoded PNG, same encoding `ActionResultOut.screenshots` uses.
@@ -241,6 +275,8 @@ class DocumentOut(BaseModel):
     `screenshot_artifact_id` once an artifact store exists to upload to."""
     metadata: ScrapeMetadataOut | None = None
     error: str | None = None
+    extract: dict[str, Any] | None = None
+    extract_error: str | None = None
 
 
 class ScrapeResponse(BaseModel):
@@ -289,12 +325,17 @@ class ScrapeOptionsIn(BaseModel):
     docstring for where that boundary is drawn and why."""
 
     model_config = ConfigDict(extra="forbid")
-    formats: list[Literal["markdown", "text", "html"]] = Field(default=["markdown"])
+    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
+        default=["markdown"]
+    )
     only_main_content: bool = True
+    include_tags: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     screenshot: bool = False
     full_page_screenshot: bool = False
+    extract: ExtractConfigIn | None = None
 
 
 class WebhookIn(BaseModel):
@@ -355,7 +396,174 @@ class CrawlStatusResponse(BaseModel):
     still-running crawl)."""
 
 
+# --- agent runs (async, Postgres-queue-backed -- routes/agent_runs.py) ---
+
+
+class AgentRunCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    domain: str
+    """Same role `SessionOpenRequest.domain` plays -- identity/proxy-pinning
+    scope for the session this run opens, not necessarily the task's first
+    URL (the agent may navigate anywhere the task requires)."""
+    task: str
+    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    max_steps: int = 50
+    output_schema: dict[str, Any] | None = None
+    """Plain JSON Schema -- embedded into the `done` action's `extracted_data`
+    field, same convention as `ExtractConfigIn.json_schema`."""
+
+
+class AgentRunCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    run_id: str
+
+
+class AgentStepOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seq: int
+    step_number: int
+    evaluation_previous_goal: str | None
+    memory: str | None
+    next_goal: str | None
+    actions: list[dict[str, Any]]
+    action_results: list[str]
+    created_at: str
+
+
+class AgentRunOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    tenant: str
+    task: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    current_step: int
+    max_steps: int
+    result: dict[str, Any] | None
+    error: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+
+
+class AgentRunStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: AgentRunOut
+    steps: list[AgentStepOut]
+    next: str | None
+
+
+# --- recipes (Phase 2: selector-generation & self-healing data collection --
+# routes/recipes.py) ---
+
+
+class RecipeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tenant: str
+    name: str
+    url: str
+    field_schema: dict[str, Any]
+    """The caller's data contract -- `{field_name: {type: "scalar"|"array",
+    description, item_schema?}}`, see `agentpilot.recipe.schema.FieldSpec`."""
+    schedule_interval_seconds: float | None = None
+    """`None` (the default) means on-demand only -- set to enqueue a
+    `replay` run automatically every N seconds via `RecipeSchedulerLoop`."""
+
+
+class RecipeCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipe_id: str
+    build_run_id: str
+
+
+class RecipeOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipe_id: str
+    tenant: str
+    name: str
+    url_pattern: str
+    field_schema: dict[str, Any]
+    version: int
+    global_setup: list[dict[str, Any]]
+    field_groups: list[dict[str, Any]]
+    health_status: Literal["healthy", "degraded", "broken"]
+    last_verified_at: str | None
+    last_run_at: str | None
+    schedule_interval_seconds: float | None
+    created_at: str
+    updated_at: str
+
+
+class RecipeGetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: RecipeOut
+
+
+class RecipeListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipes: list[RecipeOut]
+    next: str | None
+
+
+class RecipeRunOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    recipe_id: str
+    tenant: str
+    kind: Literal["build", "replay", "heal", "codegen"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    data: dict[str, Any] | None
+    field_failures: dict[str, Any] | None
+    error: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+
+
+class RecipeRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    data: RecipeRunOut
+
+
+class RecipeRunQueuedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    run_id: str
+
+
+class RecipeVersionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int
+    diff_summary: str | None
+    created_at: str
+
+
+class RecipeVersionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    versions: list[RecipeVersionOut]
+
+
+class RecipeCodegenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: str = "python-playwright"
+
+
 # --- action results ---
+
+
+class BoundingBoxOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 class SnapshotNodeOut(BaseModel):
@@ -365,6 +573,7 @@ class SnapshotNodeOut(BaseModel):
     role: str
     name: str
     children: list[SnapshotNodeOut] = Field(default_factory=list)
+    bbox: BoundingBoxOut | None = None
 
 
 class AXSnapshotOut(BaseModel):

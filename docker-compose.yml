@@ -79,6 +79,12 @@ services:
       # unset here would mean the gateway can never place a session on this
       # node, so wiring.py fails fast at startup instead.
       AGENTPILOT_NODE_ADDR: http://worker:8000
+      # Needed for _connect_jobs_store()/_connect_agent_store()/
+      # _connect_recipe_store() to run CrawlWorkerLoop/AgentWorkerLoop/
+      # RecipeWorkerLoop on this process -- previously unset here (only
+      # `gateway` had it), so queued crawl/agent/recipe runs sat `queued`
+      # forever, never claimed.
+      AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
       # Left unset deliberately -- AGENTPILOT_NODE_ID defaults to hostname
       # + a fresh uuid suffix per container start, so a restarted node never
       # advertises a stale node_id whose addr might have changed. Don't pin
@@ -87,6 +93,7 @@ services:
     depends_on:
       - detection-page
       - redis
+      - postgres
     # No published port -- internal-only, VPC-bound, never tenant-exposed
     # per plan.md's topology; only the `gateway` service talks to it.
 
@@ -103,6 +110,7 @@ services:
       AGENTPILOT_VAULT_DIR: /var/lib/agentpilot/vault
       AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-}
       AGENTPILOT_NODE_ADDR: http://worker-2:8000
+      AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
 
   gateway:
     build:

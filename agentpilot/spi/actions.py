@@ -21,7 +21,7 @@ from typing import Literal
 from agentpilot.spi.artifact import ArtifactRef
 from agentpilot.spi.snapshot import AXSnapshot
 
-ExtractFormat = Literal["markdown", "text", "html"]
+ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
 
 @dataclass
@@ -41,16 +41,30 @@ class SnapshotAction:
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: tuple[str, ...] | None = None
+    with_bbox: bool = False
+    """Populate `SnapshotNode.bbox` for leaf refs in the resulting tree --
+    extra CDP round trips per call, so opt-in (used by `agentpilot.agent`'s
+    step loop; not requested by ordinary interactive-session/crawl callers)."""
+    settle: bool = False
+    """Wait (best-effort, bounded) for the page to reach network-idle before
+    capturing the snapshot -- opt-in so only the agent's step loop pays for it
+    (stable perception across steps); ordinary snapshot callers don't."""
     terminates_sequence: bool = False
 
 
 @dataclass
 class ExtractAction:
-    """The scrape output. `markdown`/`text` route through `agentpilot.extraction`
-    (trafilatura); `html` returns `page.content()` raw."""
+    """The scrape output. `markdown`/`text` route through
+    `agentpilot.extraction`'s sanitize -> convert -> post-process pipeline;
+    `html` returns `page.content()` raw. `base_url` is used to absolutify
+    relative links/images during sanitization -- typically left unset here
+    and filled in by the driver from the live page's post-navigation URL."""
 
     format: ExtractFormat = "markdown"
     main_content: bool = True
+    include_tags: tuple[str, ...] | None = None
+    exclude_tags: tuple[str, ...] | None = None
+    base_url: str | None = None
     terminates_sequence: bool = False
 
 
@@ -196,6 +210,17 @@ class ActionResult:
     """One entry per `ListTabsAction` in the batch (matching every other
     per-type list here being index-correlated to that action's occurrences,
     not a single running snapshot)."""
+    page_title: str | None = None
+    """The active page's `<title>` at the end of the batch (`page.title()`),
+    populated unconditionally by the driver regardless of which `ExtractAction`
+    formats were requested -- cheap, dedicated CDP getter, not tied to a full
+    `page.content()` fetch. `run_ephemeral_scrape` uses this to populate
+    `DocumentMetadata.title`, which was previously always `None`."""
+    verifications: list[str] = field(default_factory=list)
+    """Human-readable per-action outcome checks (a fill's read-back value, a
+    navigation's landed URL, a click that changed the page). Lets the agent
+    loop tell the model *what actually happened* instead of assuming success
+    from the absence of an exception -- the driver's per-action grounding."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""

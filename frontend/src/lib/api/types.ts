@@ -243,7 +243,12 @@ export interface ActionResult {
 
 // --- scrape (routes/scrape.py) ---
 
-export type ScrapeFormat = 'markdown' | 'text' | 'html'
+export type ScrapeFormat = 'markdown' | 'text' | 'html' | 'structured_data'
+
+export interface ExtractConfigIn {
+  json_schema?: Record<string, unknown> | null
+  prompt?: string | null
+}
 
 export interface ScrapeRequest {
   tenant: string
@@ -256,6 +261,10 @@ export interface ScrapeRequest {
   actions?: ActionIn[]
   screenshot?: boolean
   full_page_screenshot?: boolean
+  extract?: ExtractConfigIn | null
+  session_name?: string | null
+  locale?: string | null
+  timezone_id?: string | null
 }
 
 export interface ScrapeMetadataOut {
@@ -273,10 +282,13 @@ export interface DocumentOut {
   markdown?: string | null
   text?: string | null
   html?: string | null
+  structured_data?: Record<string, unknown> | null
   links: string[]
   screenshot?: string | null // base64 PNG
   metadata?: ScrapeMetadataOut | null
   error?: string | null
+  extract?: Record<string, unknown> | null
+  extract_error?: string | null
 }
 
 export interface ScrapeResponse {
@@ -319,6 +331,7 @@ export interface ScrapeOptionsIn {
   wait_for_ms?: number | null
   screenshot?: boolean
   full_page_screenshot?: boolean
+  extract?: ExtractConfigIn | null
 }
 
 export type WebhookEvent = 'started' | 'page' | 'completed' | 'failed'
@@ -416,4 +429,157 @@ export interface ApiErrorBody {
   code: ErrorCode
   error: string
   details?: unknown
+}
+
+// Shared by AgentRunOut and RecipeRunOut -- both use this exact literal
+// union (unlike CrawlJobStatus, which uses 'scraping' instead of 'running').
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+// --- agent runs (routes/agent_runs.py) ---
+
+export interface AgentRunCreateRequest {
+  tenant: string
+  domain: string
+  task: string
+  tier?: Tier
+  max_steps?: number
+  output_schema?: Record<string, unknown> | null
+}
+
+export interface AgentRunCreateResponse {
+  success: boolean
+  run_id: string
+}
+
+export interface AgentStepOut {
+  seq: number
+  step_number: number
+  evaluation_previous_goal: string | null
+  memory: string | null
+  next_goal: string | null
+  actions: Record<string, unknown>[]
+  action_results: string[]
+  created_at: string
+}
+
+export interface AgentRunOut {
+  run_id: string
+  tenant: string
+  task: string
+  status: RunStatus
+  current_step: number
+  max_steps: number
+  result: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface AgentRunStatusResponse {
+  success: boolean
+  data: AgentRunOut
+  steps: AgentStepOut[]
+  next: string | null
+}
+
+// --- recipes (routes/recipes.py) ---
+
+export type RecipeHealthStatus = 'healthy' | 'degraded' | 'broken'
+export type RecipeRunKind = 'build' | 'replay' | 'heal' | 'codegen'
+export type RecipeCodegenLanguage = 'python-playwright' | 'node-puppeteer' | 'python-requests-only'
+
+export interface RecipeCreateRequest {
+  tenant: string
+  name: string
+  url: string
+  field_schema: Record<string, unknown>
+  schedule_interval_seconds?: number | null
+}
+
+export interface RecipeCreateResponse {
+  success: boolean
+  recipe_id: string
+  build_run_id: string
+}
+
+export interface RecipeRepeatSpec {
+  option_locator: Record<string, unknown>
+  max_iterations: number
+  array_field: string
+}
+
+export interface RecipeFieldGroup {
+  group_id: string
+  field_names: string[]
+  reveal_steps: Record<string, unknown>[]
+  field_locators: Record<string, unknown>
+  repeat?: RecipeRepeatSpec | null
+}
+
+export interface RecipeOut {
+  recipe_id: string
+  tenant: string
+  name: string
+  url_pattern: string
+  field_schema: Record<string, unknown>
+  version: number
+  global_setup: Record<string, unknown>[]
+  field_groups: RecipeFieldGroup[]
+  health_status: RecipeHealthStatus
+  last_verified_at: string | null
+  last_run_at: string | null
+  schedule_interval_seconds: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RecipeGetResponse {
+  success: boolean
+  data: RecipeOut
+}
+
+export interface RecipeListResponse {
+  success: boolean
+  recipes: RecipeOut[]
+  next: string | null
+}
+
+export interface RecipeRunOut {
+  run_id: string
+  recipe_id: string
+  tenant: string
+  kind: RecipeRunKind
+  status: RunStatus
+  data: Record<string, unknown> | null
+  field_failures: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface RecipeRunResponse {
+  success: boolean
+  data: RecipeRunOut
+}
+
+export interface RecipeRunQueuedResponse {
+  success: boolean
+  run_id: string
+}
+
+export interface RecipeVersionOut {
+  version: number
+  diff_summary: string | null
+  created_at: string
+}
+
+export interface RecipeVersionsResponse {
+  success: boolean
+  versions: RecipeVersionOut[]
+}
+
+export interface RecipeCodegenRequest {
+  language: RecipeCodegenLanguage
 }
