@@ -99,6 +99,7 @@ async def scrape(
             session_name=req.session_name,
             locale=req.locale,
             timezone_id=req.timezone_id,
+            warm_pool=wiring.warm_pool,
         )
 
     meta = document.metadata

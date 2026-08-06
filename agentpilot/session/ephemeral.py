@@ -29,7 +29,9 @@ from agentpilot.identity.profile_store import delete_profile_dir, resolve_profil
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
+from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
+from agentpilot.session.warm_pool import WarmPool
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.actions import ExtractFormat
 from agentpilot.spi.driver import BrowserDriver
@@ -90,6 +92,7 @@ async def run_ephemeral_scrape(
     session_name: str | None = None,
     locale: str | None = None,
     timezone_id: str | None = None,
+    warm_pool: WarmPool | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -120,8 +123,6 @@ async def run_ephemeral_scrape(
     owner = f"{tenant}:scrape"
 
     async def _opener() -> ContextRef:
-        profile_dir = resolve_profile_dir(profiles_root, identity)
-        profile_dir.mkdir(parents=True, exist_ok=True)
         if warm:
             # Sticky proxy for a reused identity, same as an interactive
             # session -- the same profile should keep the same egress IP so
@@ -131,6 +132,17 @@ async def run_ephemeral_scrape(
             # pick_ephemeral(), not get_or_assign(): a throwaway identity is
             # opened exactly once, so there is nothing to keep "sticky" for.
             proxy = proxy_pinner.pick_ephemeral(identity) if proxy_pinner else None
+            # Anticipatory warm pool: a throwaway identity has no persistent
+            # profile, so it can adopt a context pre-launched for its proxy
+            # tier and skip the cold Chrome launch entirely. On a miss, fall
+            # through to a cold open below.
+            if warm_pool is not None:
+                pooled_ctx = await warm_pool.take(proxy)
+                if pooled_ctx is not None:
+                    pooled_ctx.identity = identity  # re-label the adopted ref
+                    return pooled_ctx
+        profile_dir = resolve_profile_dir(profiles_root, identity)
+        profile_dir.mkdir(parents=True, exist_ok=True)
         return await driver.open(
             identity,
             profile_dir,
@@ -149,7 +161,16 @@ async def run_ephemeral_scrape(
     batch = _build_batch(url, options)
 
     started = time.monotonic()
-    ctx, _lease = await registry.acquire(identity, owner, lease_ttl_seconds, _opener)
+    # Validate-on-acquire: a reused warm/IDLE context that died while idle is
+    # transparently reopened rather than failing this scrape.
+    ctx, _lease = await acquire_validated(
+        registry=registry,
+        driver=driver,
+        identity=identity,
+        owner=owner,
+        ttl_seconds=lease_ttl_seconds,
+        opener=_opener,
+    )
     try:
         result = await driver.execute(ctx, batch)
     finally:

@@ -43,6 +43,22 @@ class BrowserDriver(Protocol):
 
     async def close(self, ctx: ContextRef) -> None: ...
 
+    async def is_alive(self, ctx: ContextRef) -> bool:
+        """Fast, non-blocking liveness: the context's process still exists AND
+        it answers a cheap, bounded CDP ping (responsive, not just present).
+        The session layer calls this to validate a *reused* warm/IDLE context
+        before handing it out -- a `False` triggers evict + reopen rather than
+        letting a zombie Chrome surface as a failed action mid-request."""
+        ...
+
+    async def keepalive(self, ctx: ContextRef) -> bool:
+        """Nudge an idle context's CDP connection so an intermediate proxy
+        doesn't silently drop it during long idle periods (the analog of
+        agent-browser's WebSocket ping + TCP `SO_KEEPALIVE`). Returns whether
+        the context is still responsive; a `False` lets the keepalive loop
+        evict it so the next acquire auto-restarts a fresh one."""
+        ...
+
     async def execute(
         self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
     ) -> ActionResult:

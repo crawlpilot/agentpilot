@@ -57,6 +57,11 @@ class _FakeDriver:
     async def close(self, ctx: ContextRef) -> None:
         return None
 
+    async def is_alive(self, ctx: ContextRef) -> bool:
+        # Validate-on-acquire pings the acquired context; a freshly opened one
+        # in these tests is always live.
+        return True
+
 
 async def _scrape(driver: _FakeDriver, profiles_root: Path, **kwargs: object) -> None:
     await run_ephemeral_scrape(

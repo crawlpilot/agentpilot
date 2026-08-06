@@ -53,6 +53,14 @@ class ProxyPinner:
         self._redis = redis
         self._pool = pool
 
+    @property
+    def pool(self) -> list[ProxyEndpoint]:
+        """The configured proxy endpoints -- each is a warm-pool "tier"
+        (`session.warm_pool.WarmPool`). Copy, so callers can't mutate the pin
+        source."""
+
+        return list(self._pool)
+
     def _pick(self, identity: IdentityKey) -> ProxyEndpoint:
         """Deterministic hash-based pick, not round-robin: needs no shared
         counter, and concurrent first-assignments for *different* identities

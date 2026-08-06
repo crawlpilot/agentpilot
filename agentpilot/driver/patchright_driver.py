@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import random
 import socket
 import uuid
@@ -114,6 +115,12 @@ _BOUNDING_BOX_TIMEOUT_MS = 3_000
 """Bounded well below Playwright's 30s default -- see `_resolve_ref`'s and
 `_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
 real observed hang, not a hypothetical one."""
+
+_LIVENESS_TIMEOUT_S = 2.0
+"""Upper bound on the CDP liveness/keepalive ping. A responsive context answers
+`Page.getLayoutMetrics` in well under this; a wedged renderer hits the bound and
+is reported dead so the session layer can reopen it, rather than hanging the
+acquire path on an unresponsive Chrome."""
 
 _SETTLE_TIMEOUT_MS = 1_500
 """Upper bound on the best-effort network-idle wait before an opt-in
@@ -538,6 +545,66 @@ class PatchrightDriver:
             return
         if cctx.alive:
             await cctx.context.close()
+
+    @staticmethod
+    def _pid_alive(pid: int | None) -> bool:
+        """Non-blocking process-exit check (agent-browser's pre-CDP probe,
+        changelog #1023): `signal 0` tests existence without touching the
+        process. Unknown pid -> not a death signal on its own (defer to the
+        CDP ping); a permission error means it exists under another uid."""
+
+        if pid is None:
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    async def _cdp_ping(self, cctx: _Context) -> bool:
+        """A cheap CDP round trip (`Page.getLayoutMetrics` -- Page domain, never
+        Runtime, same stealth constraint as `_apply_viewport_filter`) proving
+        Chrome is *responsive*, not merely present. Bounded so a wedged renderer
+        reports 'not alive' in ~2s instead of hanging the caller. Reuses the
+        page's live CDP session when one exists, else a short-lived one."""
+
+        live = cctx.pages.get(cctx.active_page_id)
+        if live is None or live.page.is_closed():
+            return False
+        cdp = live.cdp_session
+        owns_session = cdp is None
+        if cdp is None:
+            try:
+                cdp = await live.page.context.new_cdp_session(live.page)
+            except Exception:
+                return False
+        try:
+            await asyncio.wait_for(
+                cdp.send("Page.getLayoutMetrics"), timeout=_LIVENESS_TIMEOUT_S
+            )
+            return True
+        except Exception:
+            return False
+        finally:
+            if owns_session:
+                with contextlib.suppress(Exception):
+                    await cdp.detach()
+
+    async def is_alive(self, ctx: ContextRef) -> bool:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None or not cctx.alive:
+            return False
+        if not self._pid_alive(ctx.pid):
+            return False
+        return await self._cdp_ping(cctx)
+
+    async def keepalive(self, ctx: ContextRef) -> bool:
+        cctx = self._contexts.get(ctx.context_id)
+        if cctx is None or not cctx.alive:
+            return False
+        return await self._cdp_ping(cctx)
 
     async def execute(
         self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
