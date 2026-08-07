@@ -410,6 +410,8 @@ class PatchrightDriver:
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        user_agent: str | None = None,
+        init_script: str | None = None,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -454,6 +456,8 @@ class PatchrightDriver:
             context_kwargs["locale"] = locale
         if timezone_id is not None:
             context_kwargs["timezone_id"] = timezone_id
+        if user_agent is not None:
+            context_kwargs["user_agent"] = user_agent
 
         playwright = await self._launcher.get_playwright()
         context = await playwright.chromium.launch_persistent_context(
@@ -465,6 +469,11 @@ class PatchrightDriver:
             args=launch_args,
             **context_kwargs,
         )
+        if init_script is not None:
+            # Context-level: applies to every page (current + future) before any
+            # page script runs -- the pinned per-identity fingerprint's
+            # navigator/WebGL/language patches (see identity/fingerprint.py).
+            await context.add_init_script(init_script)
         if enable_cdp:
             assert cdp_port is not None
             await _wait_for_cdp_ready(cdp_port)

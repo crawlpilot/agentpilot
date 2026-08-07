@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ class Fingerprint:
     geo: GeoTimeParameters
     canvas_seed: str
 
-    def context_kwargs(self) -> dict:
+    def context_kwargs(self) -> dict[str, str]:
         """Patchright `launch_persistent_context` kwargs that Playwright applies
         natively (UA + locale + timezone + viewport). Screen/DPR go through CDP
         `Emulation.setDeviceMetricsOverride` at the driver, not here."""

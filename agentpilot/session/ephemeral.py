@@ -25,6 +25,7 @@ from pathlib import Path
 
 import structlog
 
+from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
@@ -152,6 +153,21 @@ async def run_ephemeral_scrape(
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
         protected = tier in _PROTECTED_TIERS
+        eff_locale, eff_timezone = locale, timezone_id
+        user_agent: str | None = None
+        init_script: str | None = None
+        if protected:
+            # Pin one coherent fingerprint to this identity for life. `region`
+            # is None until Stage 1 (residential proxy) can supply the exit-IP
+            # country; today the family is a stable function of the identity
+            # slug. The fingerprint's own geo fills any locale/timezone the
+            # caller didn't pin, so UA/language/timezone stay mutually
+            # consistent -- but an explicit request value still wins.
+            fp = generate_fingerprint(identity.slug())
+            user_agent = fp.user_agent
+            init_script = fp.init_script()
+            eff_locale = locale or fp.geo.locale
+            eff_timezone = timezone_id or fp.geo.timezone_id
         return await driver.open(
             identity,
             profile_dir,
@@ -160,10 +176,12 @@ async def run_ephemeral_scrape(
             egress=EgressPolicy(),
             block_popups=True,
             enable_cdp=False,
-            locale=locale,
-            timezone_id=timezone_id,
+            locale=eff_locale,
+            timezone_id=eff_timezone,
             warmup=protected,
             detect_blocks=protected,
+            user_agent=user_agent,
+            init_script=init_script,
         )
         # No vault load/restore: cookie persistence for the warm case comes
         # from the on-disk profile dir surviving teardown (below), not from

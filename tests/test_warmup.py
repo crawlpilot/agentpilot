@@ -31,7 +31,9 @@ class _FakeContext:
 
 
 class _FakePage:
-    def __init__(self, cookie_states: list[list[dict]] | None = None, url: str = "https://x") -> None:
+    def __init__(
+        self, cookie_states: list[list[dict]] | None = None, url: str = "https://x"
+    ) -> None:
         self.mouse = _FakeMouse()
         self.context = _FakeContext(cookie_states or [[]])
         self.url = url

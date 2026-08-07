@@ -23,6 +23,9 @@ Two faithful choices from the Kotlin source:
 from __future__ import annotations
 
 import random
+import time
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import structlog
 from patchright.async_api import Page
@@ -66,20 +69,20 @@ async def human_scroll(page: Page, policy: DelayPolicy) -> None:
         await policy.pause("mouseWheel")
 
 
-def _abck_value(cookies: list[dict]) -> str | None:
+def _abck_value(cookies: Sequence[Mapping[str, Any]]) -> str | None:
     for c in cookies:
         if c.get("name") == "_abck":
             return c.get("value")
     return None
 
 
-async def wait_for_abck(page: Page, policy: DelayPolicy, *, timeout_s: float = _ABCK_POLL_MAX_S) -> bool:
+async def wait_for_abck(
+    page: Page, policy: DelayPolicy, *, timeout_s: float = _ABCK_POLL_MAX_S
+) -> bool:
     """Poll the context cookies until `_abck` looks validated, nudging the page
     with a small scroll between polls to keep sensor POSTs flowing. Returns
     whether a valid cookie was seen; a `False` is advisory (the caller decides
     whether to proceed and let block-detection handle a wall), not fatal."""
-
-    import time
 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:

@@ -38,6 +38,8 @@ class _FakeDriver:
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        user_agent: str | None = None,
+        init_script: str | None = None,
     ) -> ContextRef:
         self.opens.append(
             {
@@ -47,6 +49,8 @@ class _FakeDriver:
                 "timezone_id": timezone_id,
                 "warmup": warmup,
                 "detect_blocks": detect_blocks,
+                "user_agent": user_agent,
+                "init_script": init_script,
             }
         )
         return ContextRef(
@@ -125,3 +129,38 @@ async def test_warm_identity_uses_default_profile_kind(tmp_path: Path) -> None:
     assert isinstance(identity, IdentityKey)
     assert identity.name == "s"
     assert identity.is_permanent  # ProfileKind.DEFAULT -> warm/persistent
+
+
+async def test_default_tier_applies_no_stealth_path(tmp_path: Path) -> None:
+    driver = _FakeDriver()
+    await _scrape(driver, tmp_path, session_name="s")  # tier defaults to "auto"
+    o = driver.opens[0]
+    assert o["warmup"] is False
+    assert o["detect_blocks"] is False
+    assert o["user_agent"] is None
+    assert o["init_script"] is None
+
+
+async def test_protected_tier_pins_fingerprint_and_enables_stealth(tmp_path: Path) -> None:
+    driver = _FakeDriver()
+    await _scrape(driver, tmp_path, session_name="s", tier="stealth")
+    o = driver.opens[0]
+    assert o["warmup"] is True
+    assert o["detect_blocks"] is True
+    assert isinstance(o["user_agent"], str) and o["user_agent"].startswith("Mozilla/5.0")
+    assert isinstance(o["init_script"], str) and "[native code]" in o["init_script"]
+    # Fingerprint geo fills locale/timezone the caller didn't pin.
+    assert o["locale"] is not None
+    assert o["timezone_id"] is not None
+
+
+async def test_protected_tier_respects_explicit_locale(tmp_path: Path) -> None:
+    driver = _FakeDriver()
+    await _scrape(
+        driver, tmp_path, session_name="s", tier="enhanced", locale="fr-FR",
+        timezone_id="Europe/Paris",
+    )
+    o = driver.opens[0]
+    # Explicit request locale/timezone win over the fingerprint's own geo.
+    assert o["locale"] == "fr-FR"
+    assert o["timezone_id"] == "Europe/Paris"

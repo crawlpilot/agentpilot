@@ -34,6 +34,8 @@ class BrowserDriver(Protocol):
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        user_agent: str | None = None,
+        init_script: str | None = None,
     ) -> ContextRef:
         """`locale`/`timezone_id` (when set) override the browser context's
         reported `navigator.language`/`Accept-Language` and JS timezone --
@@ -48,7 +50,14 @@ class BrowserDriver(Protocol):
         read. `detect_blocks` inspects the navigated page's body (not just its
         status) and raises `ChallengeDetected` on a bot wall -- including the
         HTTP-200 "Access Denied" pages Akamai serves. Both default off, so
-        interactive/test callers pay nothing and behave exactly as before."""
+        interactive/test callers pay nothing and behave exactly as before.
+
+        `user_agent` overrides the context UA; `init_script` is JS added to
+        every page in the context (`add_init_script`) before any page script
+        runs -- together they apply a pinned per-identity fingerprint (UA +
+        WebGL/hardware/language patches). Passed as primitives, not a
+        fingerprint object, to keep this contract free of an `identity`-layer
+        import. Both `None` leaves Chrome/Patchright's own values."""
         ...
 
     async def close(self, ctx: ContextRef) -> None: ...
