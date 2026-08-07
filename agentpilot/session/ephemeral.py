@@ -42,6 +42,14 @@ from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
+_PROTECTED_TIERS = frozenset({"stealth", "enhanced"})
+"""Tiers that opt into the ported stealth path: human warm-up after each
+navigation plus body-level block detection (raises `ChallengeDetected` on a bot
+wall). `basic`/`auto` keep the cheap path -- warm-up adds seconds per scrape and
+the body fetch adds a round trip, neither worth it until a caller asks for the
+stealth tier. Wiring `auto` to *escalate* into this path on a block signal is
+the Stage 4 follow-up."""
+
 
 def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
     """`options.formats` plus an internal `"markdown"` request when
@@ -143,6 +151,7 @@ async def run_ephemeral_scrape(
                     return pooled_ctx
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
+        protected = tier in _PROTECTED_TIERS
         return await driver.open(
             identity,
             profile_dir,
@@ -153,6 +162,8 @@ async def run_ephemeral_scrape(
             enable_cdp=False,
             locale=locale,
             timezone_id=timezone_id,
+            warmup=protected,
+            detect_blocks=protected,
         )
         # No vault load/restore: cookie persistence for the warm case comes
         # from the on-disk profile dir surviving teardown (below), not from

@@ -75,15 +75,33 @@ migrations, without exposing them to the network.
 
 ### 3. Run database migrations
 
-`AGENTPILOT_DATABASE_URL` persists tenant API keys in Postgres and has no automatic migration step
-— run Alembic yourself, from the host, against the compose Postgres before issuing any API keys:
+Postgres persists tenant API keys (`agentpilot.auth.store`), crawl/agent/recipe jobs, and run
+history. There is **no automatic migration step** — run Alembic yourself, from the host, against the
+compose Postgres **before issuing any API keys or starting jobs**. Alembic ships in the `postgres`
+extra (not the dev group), so install it once:
 
 ```bash
-AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot uv run alembic upgrade head
+uv sync --extra postgres                 # puts `alembic` + psycopg on the path (host-side only)
+
+# Point every alembic command at the compose Postgres (host reaches it on localhost:5432).
+export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
+
+uv run alembic upgrade head              # apply all migrations (idempotent — safe to re-run)
+uv run alembic current                   # show the revision the DB is on
+uv run alembic history --verbose         # list every revision (0001_create_api_keys … 0007_…)
 ```
 
-(Requires `uv sync --group dev` locally so `alembic` is on the path — this doesn't need to run
-inside a container.)
+**Authoring a new migration** (schema changes are **hand-written SQL** — this repo has no ORM
+models, so `alembic revision --autogenerate` produces nothing useful):
+
+```bash
+uv run alembic revision -m "add my_column"   # creates alembic/versions/00NN_add_my_column.py
+# then edit that file's upgrade()/downgrade() with op.execute("ALTER TABLE …") / etc.
+uv run alembic upgrade head                  # apply it
+uv run alembic downgrade -1                   # roll the last one back if needed
+```
+
+(None of this runs inside a container — Alembic connects to Postgres over `localhost:5432`.)
 
 ### 4. Verify it's up
 
@@ -241,30 +259,87 @@ example:
 caddy run           # then open http://localhost:8080
 ```
 
-## End-to-end: full stack locally
+## Run both locally, end to end
 
-A single runbook that stands up backend + frontend and exercises the whole product through the UI.
+Two complete paths. **Path A** is the fastest inner loop for UI/app work (no Docker Chrome
+emulation); **Path B** is the production-like two-tier fleet. Both end with the frontend talking to
+the backend on one machine.
 
-1. **Backend** — start the two-tier stack and run migrations
-   ([Quickstart](#quickstart-docker-compose) steps 1–4), *or* run a `monolith` on `:8000` (above).
-2. **Mint a tenant API key** ([step 5](#5-open-a-session)) — you'll paste it into the UI.
-3. **Frontend** — `cd frontend && npm install && npm run dev` (dev), or the Caddy deploy above for a
-   production-style run.
-4. **Sign in** with the tenant key + tenant, then walk the Playground tabs:
-   - **Scrape** — enter a URL, pick formats; under *Advanced options* set `include_tags`/`exclude_tags`
-     and (scrape-only) a `locale`/`timezone`; run and inspect the returned document.
-   - **Crawl** — set `include_paths`/`exclude_paths`, add a **webhook** (URL + events + headers) and
-     confirm the one-time **signing secret** is shown; watch progress and "Load more".
-   - **Interact** — open a session, add a `snapshot` action (toggle *bounding boxes*, set *roles*) and
-     an `extract` action (`structured_data`, tags), then *Run sequence*; use the crosshair to pick
-     elements from a live snapshot.
-   - **Agent** — give a task, set max steps / output schema, watch steps stream, and *Cancel* mid-run.
-   - **Recipes** — create a recipe, then *Run*, *Heal*, and *Codegen* (choose a language); browse
-     versions.
-   - **Nodes** — sign in with the admin token to see live per-node memory/CPU across `worker`/`worker-2`.
-5. **Automated backend e2e** (no browser mocking) is the `driver_contract` suite — see
-   [Running the checks](#running-the-checks); it launches real Chrome against local fixtures and is
-   the contract any driver must pass.
+### Path A — fast local dev (host monolith + compose Postgres/Redis + frontend)
+
+The `monolith` role serves the whole API in one native process — no amd64 Chrome emulation, instant
+reloads. Reuse compose only for the datastores.
+
+```bash
+# 0. one-time: Python + browser + Node deps
+uv sync --extra driver --extra postgres --group dev   # app + psycopg/alembic + test tooling
+uv run patchright install chrome                       # native Chrome for the monolith's driver
+cp .env.example .env                                   # set AGENTPILOT_ADMIN_TOKEN=dev-admin-token
+
+# 1. datastores only (loopback-published; no worker/gateway containers)
+docker compose up -d postgres redis
+
+# 2. migrate the DB (see "Run database migrations" for details)
+export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
+uv run alembic upgrade head
+
+# 3. Terminal 1 — backend (monolith on :8000; Redis optional, omit for in-memory registry)
+AGENTPILOT_ADMIN_TOKEN=dev-admin-token \
+AGENTPILOT_DATABASE_URL=$AGENTPILOT_DATABASE_URL \
+  uv run uvicorn agentpilot.gateway.app:app --reload --port 8000
+
+# 4. Terminal 2 — frontend (Vite dev server on :5173, proxies to :8000)
+cd frontend && npm install && npm run dev
+```
+
+Open http://localhost:5173, mint a key (below), sign in, and you're running the full stack.
+
+### Path B — full two-tier fleet (Docker Compose + frontend)
+
+The real gateway + 2 workers topology. Slower on arm64 (emulated Chrome), but exercises placement,
+the worker job loops, and live-view relay.
+
+```bash
+cp .env.example .env                       # AGENTPILOT_ADMIN_TOKEN at minimum
+docker compose up --build -d               # redis, postgres, worker, worker-2, gateway
+export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
+uv sync --extra postgres && uv run alembic upgrade head
+cd frontend && npm install && npm run dev  # or the Caddy same-origin deploy above
+```
+
+> **Note (worker DB dependency):** the compose workers are given `AGENTPILOT_DATABASE_URL` so they
+> run the crawl/agent/recipe job loops, which means the worker image must include the `postgres`
+> extra (`psycopg[pool]`). `docker/worker.Dockerfile` installs it; if you see a worker crash-loop
+> with `ModuleNotFoundError: No module named 'psycopg_pool'`, rebuild the worker image
+> (`docker compose up --build -d worker worker-2`).
+
+### Mint a tenant API key (both paths)
+
+```bash
+curl -s -X POST http://localhost:8000/v1/api-keys \
+  -H "Authorization: Bearer dev-admin-token" -H "Content-Type: application/json" \
+  -d '{"tenant":"dev","name":"local"}'      # -> {"api_key":"bk_live_…"}
+```
+
+Sign in at http://localhost:5173 with `tenant=dev` + that `bk_live_…` key (or the admin token alone
+for the Nodes view).
+
+### Walk the Playground
+
+With the UI open and signed in, exercise each tab:
+- **Scrape** — enter a URL, pick formats; under *Advanced options* set `include_tags`/`exclude_tags`
+  and (scrape-only) a `locale`/`timezone`; run and inspect the returned document.
+- **Crawl** — set `include_paths`/`exclude_paths`, add a **webhook** (URL + events + headers) and
+  confirm the one-time **signing secret** is shown; watch progress and "Load more".
+- **Interact** — open a session, add a `snapshot` action (toggle *bounding boxes*, set *roles*) and
+  an `extract` action (`structured_data`, tags), then *Run sequence*; use the crosshair to pick
+  elements from a live snapshot.
+- **Agent** — give a task, set max steps / output schema, watch steps stream, and *Cancel* mid-run.
+- **Recipes** — create a recipe, then *Run*, *Heal*, and *Codegen* (choose a language); browse versions.
+- **Nodes** — sign in with the admin token to see live per-node memory/CPU across `worker`/`worker-2`.
+
+For an **automated** backend end-to-end check (no browser mocking), the `driver_contract` suite
+launches real Chrome against local fixtures — see [Running the checks](#running-the-checks).
 
 ## Running the checks
 

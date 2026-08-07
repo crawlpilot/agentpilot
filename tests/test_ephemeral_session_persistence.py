@@ -36,6 +36,8 @@ class _FakeDriver:
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        warmup: bool = False,
+        detect_blocks: bool = False,
     ) -> ContextRef:
         self.opens.append(
             {
@@ -43,6 +45,8 @@ class _FakeDriver:
                 "profile_dir": profile_dir,
                 "locale": locale,
                 "timezone_id": timezone_id,
+                "warmup": warmup,
+                "detect_blocks": detect_blocks,
             }
         )
         return ContextRef(

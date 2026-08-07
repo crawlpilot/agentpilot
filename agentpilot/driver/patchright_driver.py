@@ -48,6 +48,7 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from agentpilot.driver import block_detect, humanize, warmup
 from agentpilot.driver.aria_parse import (
     collect_leaf_refs,
     filter_snapshot,
@@ -94,6 +95,7 @@ from agentpilot.spi.actions import (
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import (
     CapacityExhausted,
+    ChallengeDetected,
     ContextCrashed,
     NavigationTimeout,
     StaleRefError,
@@ -257,6 +259,13 @@ class _Context:
     """Local (loopback-only) CDP HTTP base, e.g. `'http://127.0.0.1:9222'`,
     set only when this context was opened with `enable_cdp=True` -- see
     `CdpEndpointCapable` at the bottom of this class."""
+    warmup: bool = False
+    """Opt-in per-open flag (Akamai/protected scrapes): run the human warm-up
+    routine after each navigation. Off for interactive/test callers."""
+    detect_blocks: bool = False
+    """Opt-in per-open flag: inspect the navigated page body and raise
+    `ChallengeDetected` on a bot wall (incl. HTTP-200 Access Denied). Off by
+    default so the general driver never pays the extra `content()` fetch."""
     page_changed: bool = False
     """Set when `_on_new_page` auto-focuses a new tab (see multi-tab plan's
     "New-tab focus" decision: real-browser semantics, matching a prior
@@ -399,6 +408,8 @@ class PatchrightDriver:
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        warmup: bool = False,
+        detect_blocks: bool = False,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -468,6 +479,8 @@ class PatchrightDriver:
             max_tabs=self._max_tabs_per_session,
             block_popups=block_popups,
             cdp_http_base=f"http://127.0.0.1:{cdp_port}" if enable_cdp else None,
+            warmup=warmup,
+            detect_blocks=detect_blocks,
         )
 
         def _wire_page(pid: str, pg: Page) -> None:
@@ -693,13 +706,7 @@ class PatchrightDriver:
             live.epoch += 1
             live.ref_cache.reset(live.epoch)
             result.verifications.append(f"navigated to {live.page.url}")
-            reason = _navigation_leak_reason(response.status if response is not None else None)
-            if reason is not None:
-                cctx.health.leak_warnings += 1
-                context_leak_warnings_total.labels(reason=reason).inc()
-                result.verifications.append(
-                    f"warning: navigation returned {reason} -- possible block or bot challenge"
-                )
+            await self._post_navigate(cctx, live, result, response)
         elif isinstance(action, GoBackAction):
             await live.page.go_back()
             live.epoch += 1
@@ -897,6 +904,52 @@ class PatchrightDriver:
         except Exception:
             return {}
         return result if isinstance(result, dict) else {}
+
+    async def _post_navigate(
+        self, cctx: _Context, live: _Page, result: ActionResult, response: Any
+    ) -> None:
+        """Warm-up + block detection after a navigation -- both opt-in per
+        `open()` (`cctx.warmup` / `cctx.detect_blocks`), so the interactive/test
+        callers that opt out get exactly the prior status-only behaviour.
+
+        When `detect_blocks` is on we fetch the page body once and classify it
+        (`block_detect.classify_page`): a bot wall raises `ChallengeDetected`
+        (the session layer's cue to tear down + rotate), while softer verdicts
+        just accrue weighted `leak_warnings` for burn accounting. This is what
+        finally catches Akamai's HTTP-200 Access Denied, which the status-only
+        check silently returned as content."""
+
+        status = response.status if response is not None else None
+
+        if cctx.warmup:
+            # STEALTH timing: warm-up only runs for protected targets. Never
+            # let the flourish fail the navigation it follows.
+            with contextlib.suppress(Exception):
+                await warmup.warm_up(live.page, humanize.STEALTH, wait_abck=cctx.detect_blocks)
+
+        if cctx.detect_blocks:
+            html: str | None = None
+            with contextlib.suppress(Exception):
+                html = await live.page.content()
+            verdict = block_detect.classify_page(html=html, url=live.page.url, status=status)
+            weight = block_detect.warning_weight(verdict)
+            if weight:
+                cctx.health.leak_warnings += weight
+                context_leak_warnings_total.labels(reason=verdict.value).inc()
+            if block_detect.is_blocked(verdict):
+                raise ChallengeDetected(f"{verdict.value} at {live.page.url}")
+            if verdict is not block_detect.Verdict.OK:
+                result.verifications.append(f"warning: page classified {verdict.value}")
+            return
+
+        # Status-only fallback (unchanged) when detect_blocks is off.
+        reason = _navigation_leak_reason(status)
+        if reason is not None:
+            cctx.health.leak_warnings += 1
+            context_leak_warnings_total.labels(reason=reason).inc()
+            result.verifications.append(
+                f"warning: navigation returned {reason} -- possible block or bot challenge"
+            )
 
     async def _settle(self, live: _Page) -> None:
         """Best-effort, bounded wait for the page to reach network-idle before

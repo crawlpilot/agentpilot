@@ -32,13 +32,23 @@ class BrowserDriver(Protocol):
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        warmup: bool = False,
+        detect_blocks: bool = False,
     ) -> ContextRef:
         """`locale`/`timezone_id` (when set) override the browser context's
         reported `navigator.language`/`Accept-Language` and JS timezone --
         an anti-detection consistency lever (a US retail site expects a
         plausible US locale/timezone, not whatever the host container
         happens to run as). `None` leaves Chrome's own defaults untouched,
-        so existing interactive/test callers are unaffected."""
+        so existing interactive/test callers are unaffected.
+
+        `warmup` runs a human pre-read routine (scroll burst + dwell, and an
+        `_abck` wait when `detect_blocks`) after each navigation, so an
+        Akamai-style sensor cookie has a chance to validate before content is
+        read. `detect_blocks` inspects the navigated page's body (not just its
+        status) and raises `ChallengeDetected` on a bot wall -- including the
+        HTTP-200 "Access Denied" pages Akamai serves. Both default off, so
+        interactive/test callers pay nothing and behave exactly as before."""
         ...
 
     async def close(self, ctx: ContextRef) -> None: ...
