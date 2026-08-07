@@ -8,12 +8,14 @@ interactive session for the same tenant+domain.
 
 from __future__ import annotations
 
+import pytest
 from pytest_httpserver import HTTPServer
 
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.scrape import scrape
 from agentpilot.gateway.schemas import ScrapeRequest
 from agentpilot.session.registry import Registry
+from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.identity import IdentityKey
 
 ARTICLE_HTML = """<html><body>
@@ -30,6 +32,16 @@ real multi-paragraph content to check against.</p>
 PROMO_HTML = """<html><body>
 <article>Keep this article text.</article>
 <div class="promo">Drop this promo text.</div>
+</body></html>"""
+
+# An Akamai-style "Access Denied" wall -- served with HTTP 200, exactly the
+# shape that slips past a status-only check (the failure this whole change
+# addresses). `classify_page` catches it on the body markers.
+DENIED_HTML = """<html><head><title>Access Denied</title></head><body>
+<h1>Access Denied</h1>
+<p>You don't have permission to access "/product" on this server.</p>
+<p>Reference #18.6d882c31.1786108810.e8caf214</p>
+<p>https://errors.edgesuite.net/18.6d882c31.1786108810.e8caf214</p>
 </body></html>"""
 
 
@@ -50,6 +62,7 @@ class _FakeWiring:
         self.proxy_pinner = None
         self.vault = None
         self.lease_ttl_seconds = 300.0
+        self.warm_pool = None
 
 
 async def test_scrape_returns_markdown_and_leaves_no_warm_entry(
@@ -157,3 +170,29 @@ async def test_scrape_does_not_disturb_a_concurrent_interactive_session(
     finally:
         await wiring.registry.release(interactive_lease.lease_id)
         await wiring.driver.close(interactive_ctx)
+
+
+async def test_scrape_raises_on_akamai_200_access_denied_and_leaves_no_trace(
+    driver: PatchrightDriver, tmp_path, httpserver: HTTPServer
+) -> None:
+    """End-to-end, real browser: an HTTP-200 Access Denied wall is detected by
+    `_post_navigate`'s body classifier and surfaced as `ChallengeDetected`
+    (the gateway maps it to 422). With `tier="auto"` the scrape climbs the
+    whole ladder (stealth -> enhanced), every rung is walled, and both
+    throwaway identities are torn down -- nothing left warm, no profile dirs."""
+
+    httpserver.expect_request("/product").respond_with_data(
+        DENIED_HTML, content_type="text/html", status=200
+    )
+    wiring = _FakeWiring(driver, tmp_path)
+
+    with pytest.raises(ChallengeDetected):
+        await scrape(
+            ScrapeRequest(tenant="acme", url=httpserver.url_for("/product"), tier="auto"),
+            _FakeRequest(),
+            wiring,
+        )
+
+    assert await wiring.registry.snapshot() == []  # both rungs cleaned up
+    domain_dir = tmp_path / "acme" / "127.0.0.1"
+    assert not domain_dir.exists() or not any(domain_dir.iterdir())

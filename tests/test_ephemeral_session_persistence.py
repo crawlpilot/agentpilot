@@ -9,10 +9,13 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import pytest
+
 from agentpilot.session.ephemeral import run_ephemeral_scrape
 from agentpilot.session.registry import Registry
 from agentpilot.spi.actions import Action, ActionResult
 from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.scrape import ScrapeOptions
@@ -131,14 +134,25 @@ async def test_warm_identity_uses_default_profile_kind(tmp_path: Path) -> None:
     assert identity.is_permanent  # ProfileKind.DEFAULT -> warm/persistent
 
 
-async def test_default_tier_applies_no_stealth_path(tmp_path: Path) -> None:
+async def test_basic_tier_applies_no_stealth_path(tmp_path: Path) -> None:
     driver = _FakeDriver()
-    await _scrape(driver, tmp_path, session_name="s")  # tier defaults to "auto"
+    await _scrape(driver, tmp_path, session_name="s", tier="basic")
     o = driver.opens[0]
     assert o["warmup"] is False
     assert o["detect_blocks"] is False
     assert o["user_agent"] is None
     assert o["init_script"] is None
+
+
+async def test_auto_tier_starts_on_the_protected_rung(tmp_path: Path) -> None:
+    driver = _FakeDriver()
+    await _scrape(driver, tmp_path, session_name="s")  # tier defaults to "auto"
+    o = driver.opens[0]
+    # `auto` enters the escalation ladder at "stealth" -> protected from the
+    # first attempt, so a default scrape is robust out of the box.
+    assert o["warmup"] is True
+    assert o["detect_blocks"] is True
+    assert isinstance(o["user_agent"], str)
 
 
 async def test_protected_tier_pins_fingerprint_and_enables_stealth(tmp_path: Path) -> None:
@@ -164,3 +178,68 @@ async def test_protected_tier_respects_explicit_locale(tmp_path: Path) -> None:
     # Explicit request locale/timezone win over the fingerprint's own geo.
     assert o["locale"] == "fr-FR"
     assert o["timezone_id"] == "Europe/Paris"
+
+
+class _BlockThenPassDriver(_FakeDriver):
+    """First `execute()` raises `ChallengeDetected` (the wall); the next
+    succeeds -- models an `auto` scrape that gets blocked on the `stealth` rung
+    and passes after escalating to `enhanced` with a fresh identity."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.execs = 0
+
+    async def execute(
+        self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
+    ) -> ActionResult:
+        self.execs += 1
+        if self.execs == 1:
+            raise ChallengeDetected("robot_check at https://zara.com/x")
+        return ActionResult(extracts=["# hello"], page_title="Hello")
+
+
+async def test_auto_escalates_on_challenge_to_a_fresh_identity(tmp_path: Path) -> None:
+    driver = _BlockThenPassDriver()
+    document, _ = await run_ephemeral_scrape(
+        tenant="acme",
+        domain="example.com",
+        url="https://example.com/",
+        options=ScrapeOptions(formats=("markdown",)),
+        registry=Registry(),
+        driver=driver,  # type: ignore[arg-type]
+        profiles_root=tmp_path,
+        proxy_pinner=None,
+        lease_ttl_seconds=300.0,
+        tier="auto",  # ladder: stealth -> enhanced
+    )
+    assert driver.execs == 2  # first blocked, escalated, second passed
+    assert len(driver.opens) == 2
+    # Each attempt used a fresh throwaway identity (new proxy pick + fingerprint).
+    assert driver.opens[0]["identity"] != driver.opens[1]["identity"]
+    # Truthful reporting: the tier that actually succeeded.
+    assert document.metadata is not None
+    assert document.metadata.tier_used == "enhanced"
+
+
+async def test_auto_raises_when_every_rung_is_blocked(tmp_path: Path) -> None:
+    class _AlwaysBlock(_FakeDriver):
+        async def execute(
+            self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
+        ) -> ActionResult:
+            raise ChallengeDetected("robot_check")
+
+    driver = _AlwaysBlock()
+    with pytest.raises(ChallengeDetected):
+        await run_ephemeral_scrape(
+            tenant="acme",
+            domain="example.com",
+            url="https://example.com/",
+            options=ScrapeOptions(formats=("markdown",)),
+            registry=Registry(),
+            driver=driver,  # type: ignore[arg-type]
+            profiles_root=tmp_path,
+            proxy_pinner=None,
+            lease_ttl_seconds=300.0,
+            tier="auto",
+        )
+    assert len(driver.opens) == 2  # tried both rungs before giving up

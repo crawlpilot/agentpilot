@@ -44,6 +44,15 @@ land within a few seconds of scrolling; beyond this the site either doesn't use
 Akamai or isn't going to validate us, and we let the caller proceed/handle the
 block rather than hang the scrape."""
 
+# Cookies Akamai Bot Manager sets. If none of these is present the site isn't
+# Akamai-protected, so the _abck wait short-circuits rather than burning the
+# full timeout on every stealth scrape of a non-Akamai page.
+_AKAMAI_COOKIES = frozenset({"_abck", "ak_bmsc", "bm_sz", "bm_sv", "bm_mi"})
+
+
+def _is_akamai(cookies: Sequence[Mapping[str, Any]]) -> bool:
+    return any(c.get("name") in _AKAMAI_COOKIES for c in cookies)
+
 
 def _wheel_scroll_count() -> int:
     # CommonRPA.kt:  n = 2 + Random.nextInt(5)  -> 2..6 scrolls.
@@ -85,6 +94,7 @@ async def wait_for_abck(
     whether to proceed and let block-detection handle a wall), not fatal."""
 
     deadline = time.monotonic() + timeout_s
+    nudged = False
     while time.monotonic() < deadline:
         try:
             cookies = await page.context.cookies()
@@ -92,11 +102,18 @@ async def wait_for_abck(
             return False
         if block_detect.is_abck_valid(_abck_value(cookies)):
             return True
+        if nudged and not _is_akamai(cookies):
+            # After at least one nudge, still no Akamai cookies -> not an Akamai
+            # site; don't burn the timeout waiting for a sensor cookie that will
+            # never appear. (The `nudged` grace avoids racing the first response,
+            # which may set the cookies a beat after navigation.)
+            return False
         # A single nudge to elicit the next sensor submission, then wait.
         try:
             await page.mouse.wheel(0, _wheel_delta_px())
         except Exception:
             return False
+        nudged = True
         await policy.pause("gap")
     return False
 

@@ -34,9 +34,10 @@ from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
 from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.actions import ExtractFormat
+from agentpilot.spi.actions import ActionResult, ExtractFormat
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
+from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
@@ -46,10 +47,20 @@ log = structlog.get_logger(__name__)
 _PROTECTED_TIERS = frozenset({"stealth", "enhanced"})
 """Tiers that opt into the ported stealth path: human warm-up after each
 navigation plus body-level block detection (raises `ChallengeDetected` on a bot
-wall). `basic`/`auto` keep the cheap path -- warm-up adds seconds per scrape and
-the body fetch adds a round trip, neither worth it until a caller asks for the
-stealth tier. Wiring `auto` to *escalate* into this path on a block signal is
-the Stage 4 follow-up."""
+wall). `basic` keeps the cheap path; `auto` starts on the ladder below and
+escalates into the protected path on a block signal."""
+
+_ESCALATION: dict[str, tuple[str, ...]] = {
+    # `auto` climbs the ladder on `ChallengeDetected` (Firecrawl's start-cheap-
+    # escalate-on-failure semantics). Each retry mints a fresh throwaway
+    # identity, so it also gets a new proxy pick and a new pinned fingerprint --
+    # the PRIVACY-scope rotation ported from `BrowserResponseHandlerImpl.kt`.
+    # An explicitly requested tier does *not* auto-escalate: the caller chose it.
+    "auto": ("stealth", "enhanced"),
+    "basic": ("basic",),
+    "stealth": ("stealth",),
+    "enhanced": ("enhanced",),
+}
 
 
 def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
@@ -122,16 +133,19 @@ async def run_ephemeral_scrape(
     straight through to `driver.open()` for locale/timezone consistency."""
 
     warm = session_name is not None
-    if warm:
-        assert session_name is not None  # narrows for the type checker
-        identity = IdentityKey(
-            tenant=tenant, domain=domain, name=session_name, kind=ProfileKind.DEFAULT
-        )
-    else:
-        identity = IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
     owner = f"{tenant}:scrape"
 
-    async def _opener() -> ContextRef:
+    def _make_identity() -> IdentityKey:
+        # A fresh throwaway identity per attempt (new proxy pick + fingerprint);
+        # a warm identity is fixed by session_name and reused across visits.
+        if warm:
+            assert session_name is not None  # narrows for the type checker
+            return IdentityKey(
+                tenant=tenant, domain=domain, name=session_name, kind=ProfileKind.DEFAULT
+            )
+        return IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
+
+    async def _opener(identity: IdentityKey, attempt_tier: str) -> ContextRef:
         if warm:
             # Sticky proxy for a reused identity, same as an interactive
             # session -- the same profile should keep the same egress IP so
@@ -152,7 +166,7 @@ async def run_ephemeral_scrape(
                     return pooled_ctx
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
-        protected = tier in _PROTECTED_TIERS
+        protected = attempt_tier in _PROTECTED_TIERS
         eff_locale, eff_timezone = locale, timezone_id
         user_agent: str | None = None
         init_script: str | None = None
@@ -189,31 +203,58 @@ async def run_ephemeral_scrape(
 
     batch = _build_batch(url, options)
 
-    started = time.monotonic()
-    # Validate-on-acquire: a reused warm/IDLE context that died while idle is
-    # transparently reopened rather than failing this scrape.
-    ctx, _lease = await acquire_validated(
-        registry=registry,
-        driver=driver,
-        identity=identity,
-        owner=owner,
-        ttl_seconds=lease_ttl_seconds,
-        opener=_opener,
-    )
-    try:
-        result = await driver.execute(ctx, batch)
-    finally:
+    async def _attempt(identity: IdentityKey, attempt_tier: str) -> tuple[ActionResult, str]:
+        # One acquire -> execute -> teardown. Raises `ChallengeDetected` (from
+        # the driver's post-navigate body check) straight through the finally,
+        # so the caller can escalate. Returns `(result, node_id)`.
+        ctx, _lease = await acquire_validated(
+            registry=registry,
+            driver=driver,
+            identity=identity,
+            owner=owner,
+            ttl_seconds=lease_ttl_seconds,
+            opener=lambda: _opener(identity, attempt_tier),
+        )
         try:
-            await registry.evict(identity)
-            await driver.close(ctx)
-        except Exception:
-            log.warning("ephemeral_scrape.teardown_failed", url=url)
+            return await driver.execute(ctx, batch), ctx.node_id
         finally:
-            # The warm case's whole point is that the profile dir (cookies,
-            # Chrome state) survives for the next scrape of this identity --
-            # only the throwaway case deletes it.
-            if not warm:
-                delete_profile_dir(profiles_root, identity)
+            try:
+                await registry.evict(identity)
+                await driver.close(ctx)
+            except Exception:
+                log.warning("ephemeral_scrape.teardown_failed", url=url)
+            finally:
+                # The warm case's whole point is that the profile dir (cookies,
+                # Chrome state) survives for the next scrape of this identity --
+                # only the throwaway case deletes it.
+                if not warm:
+                    delete_profile_dir(profiles_root, identity)
+
+    # A warm identity is reused, so escalation across fresh identities would
+    # defeat it -- warm takes a single attempt at the ladder's first tier.
+    ladder = _ESCALATION.get(tier, ("stealth",))
+    attempts = ladder[:1] if warm else ladder
+
+    started = time.monotonic()
+    result: ActionResult | None = None
+    used_tier = tier
+    used_node_id = "unknown"
+    last_challenge: ChallengeDetected | None = None
+    for attempt_tier in attempts:
+        try:
+            result, used_node_id = await _attempt(_make_identity(), attempt_tier)
+            used_tier = attempt_tier
+            break
+        except ChallengeDetected as exc:
+            last_challenge = exc
+            log.info(
+                "ephemeral_scrape.challenge_escalate", url=url, tier=attempt_tier, detail=str(exc)
+            )
+    if result is None:
+        # Every tier on the ladder hit a wall -- surface it (the gateway maps
+        # `ChallengeDetected` to 422 CHALLENGE_UNRESOLVED).
+        assert last_challenge is not None
+        raise last_challenge
 
     duration_ms = (time.monotonic() - started) * 1000
 
@@ -263,8 +304,8 @@ async def run_ephemeral_scrape(
         metadata=DocumentMetadata(
             title=result.page_title,
             status_code=None,
-            tier_used=tier,
-            node_id=ctx.node_id,
+            tier_used=used_tier,
+            node_id=used_node_id,
             duration_ms=duration_ms,
             source_url=url,
         ),
