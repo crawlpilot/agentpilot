@@ -50,6 +50,8 @@ if TYPE_CHECKING:
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from agentpilot.gateway.role import Role, get_role
+from agentpilot.identity.burn_tracker import BurnTracker
+from agentpilot.identity.proxy_config import ProxyConfig
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
@@ -62,24 +64,6 @@ from agentpilot.spi.proxy import ProxyEndpoint
 # a session too, without importing `agentpilot.gateway`). Re-exported under
 # the old name for any external code still importing `gateway.wiring.Session`.
 Session = InteractiveSession
-
-
-def _parse_proxy_pool(raw: str) -> list[ProxyEndpoint]:
-    """`AGENTPILOT_PROXY_POOL` format: comma-separated `scheme://[user:pass@]host:port`."""
-
-    pool = []
-    for entry in filter(None, (e.strip() for e in raw.split(","))):
-        url = httpx.URL(entry)
-        pool.append(
-            ProxyEndpoint(
-                scheme=url.scheme,
-                host=url.host,
-                port=url.port or (443 if url.scheme == "https" else 80),
-                username=url.username or None,
-                password=url.password or None,
-            )
-        )
-    return pool
 
 
 class Wiring:
@@ -297,15 +281,25 @@ class Wiring:
             self.vault = Vault(vault_root, vault_key.encode())
 
         self.proxy_pinner: ProxyPinner | None = None
-        proxy_pool_raw = os.environ.get("AGENTPILOT_PROXY_POOL")
-        if proxy_pool_raw and self.redis is not None:
-            self.proxy_pinner = ProxyPinner(self.redis, _parse_proxy_pool(proxy_pool_raw))
+        proxy_config = ProxyConfig.from_env()
+        if not proxy_config.is_empty and self.redis is not None:
+            self.proxy_pinner = ProxyPinner(self.redis, proxy_config)
+
+        # Per-identity burn accounting (retire a warm identity that keeps
+        # getting walled). Redis-backed, so it survives restarts and is shared
+        # across worker processes; None without Redis (dev/in-memory), which
+        # simply disables burn tracking rather than failing.
+        self.burn_tracker: BurnTracker | None = (
+            BurnTracker(self.redis) if self.redis is not None else None
+        )
 
         # Anticipatory warm-session pool -- pre-launched contexts per proxy
         # tier so a temporary scrape/agent-run skips the cold Chrome launch.
         # Inert at target 0 (the default), so this ships disabled and changes
         # nothing until an operator sets a per-tier target.
-        warm_tiers = list(self.proxy_pinner.pool) if self.proxy_pinner is not None else [None]
+        warm_tiers: list[ProxyEndpoint | None] = (
+            list(self.proxy_pinner.pool) if self.proxy_pinner is not None else [None]
+        )
         self.warm_pool = WarmPool(
             self.driver,
             warm_tiers,

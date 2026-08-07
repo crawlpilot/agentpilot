@@ -18,7 +18,26 @@ from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
+from agentpilot.spi.proxy import ProxyEndpoint
 from agentpilot.spi.scrape import ScrapeOptions
+
+
+class _FakeProxyPinner:
+    """Returns one fixed endpoint for both sticky and ephemeral picks --
+    enough to assert the scrape threads the proxy's country into the pinned
+    fingerprint's geo."""
+
+    def __init__(self, proxy: ProxyEndpoint) -> None:
+        self.proxy = proxy
+        self.tiers_requested: list[str | None] = []
+
+    async def get_or_assign(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+        self.tiers_requested.append(tier)
+        return self.proxy
+
+    def pick_ephemeral(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+        self.tiers_requested.append(tier)
+        return self.proxy
 
 
 class _FakeDriver:
@@ -247,3 +266,88 @@ async def test_auto_raises_when_every_rung_is_blocked(tmp_path: Path) -> None:
             tier="auto",
         )
     assert len(driver.opens) == 2  # tried both rungs before giving up
+
+
+class _FakeBurnTracker:
+    """Records burn-accounting calls and lets a test force `is_burned`."""
+
+    def __init__(self, *, burned: bool = False) -> None:
+        self.burned = burned
+        self.blocks: list[int] = []
+        self.successes = 0
+        self.resets = 0
+
+    async def is_burned(self, identity: IdentityKey) -> bool:
+        return self.burned
+
+    async def record_block(self, identity: IdentityKey, weight: int) -> int:
+        self.blocks.append(weight)
+        return weight
+
+    async def record_success(self, identity: IdentityKey) -> int:
+        self.successes += 1
+        return 0
+
+    async def reset(self, identity: IdentityKey) -> None:
+        self.resets += 1
+
+
+async def test_warm_success_self_heals_the_burn_counter(tmp_path: Path) -> None:
+    tracker = _FakeBurnTracker()
+    driver = _FakeDriver()
+    await _scrape(driver, tmp_path, session_name="s", burn_tracker=tracker)
+    assert tracker.successes == 1  # a clean scrape decrements the warning count
+    assert tracker.blocks == []
+
+
+async def test_warm_pre_burned_identity_is_retired_before_reuse(tmp_path: Path) -> None:
+    tracker = _FakeBurnTracker(burned=True)
+    driver = _FakeDriver()
+    await _scrape(driver, tmp_path, session_name="s", burn_tracker=tracker)
+    # A burned identity is reset (profile retired) before the scrape reuses it.
+    assert tracker.resets >= 1
+
+
+async def test_warm_all_blocked_charges_burn_and_retires_when_over_threshold(
+    tmp_path: Path,
+) -> None:
+    class _AlwaysBlockForbidden(_FakeDriver):
+        async def execute(
+            self, ctx: ContextRef, actions: list[Action], page_id: str | None = None
+        ) -> ActionResult:
+            raise ChallengeDetected("forbidden", verdict="forbidden", weight=8)
+
+    tracker = _FakeBurnTracker(burned=True)  # crosses threshold after the charge
+    driver = _AlwaysBlockForbidden()
+    with pytest.raises(ChallengeDetected):
+        await _scrape(driver, tmp_path, session_name="s", tier="stealth", burn_tracker=tracker)
+    assert tracker.blocks == [8]  # charged the forbidden weight
+    assert tracker.resets >= 1  # and retired the now-burned identity
+
+
+async def test_protected_tier_requests_residential_and_aligns_geo(tmp_path: Path) -> None:
+    proxy = ProxyEndpoint(
+        scheme="http", host="res", port=1, tier="residential", country="IN"
+    )
+    pinner = _FakeProxyPinner(proxy)
+    driver = _FakeDriver()
+    await run_ephemeral_scrape(
+        tenant="acme",
+        domain="example.com",
+        url="https://example.com/",
+        options=ScrapeOptions(formats=("markdown",)),
+        registry=Registry(),
+        driver=driver,  # type: ignore[arg-type]
+        profiles_root=tmp_path,
+        proxy_pinner=pinner,  # type: ignore[arg-type]
+        lease_ttl_seconds=300.0,
+        tier="stealth",
+        session_name="s",
+    )
+    # Protected rung asked the pool for a residential exit...
+    assert pinner.tiers_requested == ["residential"]
+    # ...and the proxy's country (IN) seeded the fingerprint's geo, so the
+    # browser's timezone/locale match the egress.
+    o = driver.opens[0]
+    assert o["timezone_id"] == "Asia/Kolkata"
+    assert o["locale"] == "en-IN"

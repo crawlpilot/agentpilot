@@ -12,6 +12,7 @@ import hashlib
 
 from redis.asyncio import Redis
 
+from agentpilot.identity.proxy_config import ProxyConfig
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -29,12 +30,18 @@ def _serialize(proxy: ProxyEndpoint) -> str:
             proxy.username or "",
             proxy.password or "",
             proxy.vendor or "",
+            proxy.tier or "",
+            proxy.country or "",
         ]
     )
 
 
 def _deserialize(raw: str, identity: IdentityKey) -> ProxyEndpoint:
-    scheme, host, port, username, password, vendor = raw.split(_SEP)
+    # Tolerate the pre-tier 6-field format alongside the current 8-field one so
+    # a pin written before this change still deserializes.
+    parts = raw.split(_SEP)
+    parts += [""] * (8 - len(parts))
+    scheme, host, port, username, password, vendor, tier, country = parts[:8]
     return ProxyEndpoint(
         scheme=scheme,
         host=host,
@@ -42,44 +49,51 @@ def _deserialize(raw: str, identity: IdentityKey) -> ProxyEndpoint:
         username=username or None,
         password=password or None,
         vendor=vendor or None,
+        tier=tier or None,
+        country=country or None,
         sticky_key=identity,
     )
 
 
 class ProxyPinner:
-    def __init__(self, redis: Redis, pool: list[ProxyEndpoint]) -> None:
-        if not pool:
-            raise ValueError("ProxyPinner requires a non-empty pool")
+    def __init__(self, redis: Redis, config: ProxyConfig | list[ProxyEndpoint]) -> None:
+        # Accept a `ProxyConfig` (tier/tenant-aware) or a plain endpoint list
+        # (back-compat -- wrapped as the `("*","*")` default pool).
+        cfg = config if isinstance(config, ProxyConfig) else ProxyConfig.from_flat(config)
+        if cfg.is_empty:
+            raise ValueError("ProxyPinner requires a non-empty proxy config")
         self._redis = redis
-        self._pool = pool
+        self._config = cfg
 
     @property
     def pool(self) -> list[ProxyEndpoint]:
-        """The configured proxy endpoints -- each is a warm-pool "tier"
-        (`session.warm_pool.WarmPool`). Copy, so callers can't mutate the pin
-        source."""
+        """Every configured endpoint (across all tenants/tiers) -- the warm
+        pool pre-launches one context per entry (`session.warm_pool.WarmPool`)."""
 
-        return list(self._pool)
+        return self._config.all_endpoints()
 
-    def _pick(self, identity: IdentityKey) -> ProxyEndpoint:
-        """Deterministic hash-based pick, not round-robin: needs no shared
+    def _pick(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+        """Deterministic hash-based pick from the pool resolved for this
+        identity's tenant + requested `tier`, not round-robin: needs no shared
         counter, and concurrent first-assignments for *different* identities
-        never contend with each other since each only ever touches its own
-        Redis key."""
+        never contend since each only ever touches its own Redis key."""
 
+        pool = self._config.resolve(identity.tenant, tier)
         digest = hashlib.sha256(identity.slug().encode()).hexdigest()
-        return self._pool[int(digest, 16) % len(self._pool)]
+        return pool[int(digest, 16) % len(pool)]
 
-    async def get_or_assign(self, identity: IdentityKey) -> ProxyEndpoint:
+    async def get_or_assign(
+        self, identity: IdentityKey, tier: str | None = None
+    ) -> ProxyEndpoint:
         key = f"{_KEY_PREFIX}{identity.slug()}"
-        candidate = self._pick(identity)
+        candidate = self._pick(identity, tier)
         await self._redis.hsetnx(key, _FIELD, _serialize(candidate))
         raw = await self._redis.hget(key, _FIELD)
         if raw is None:
             raise RuntimeError(f"proxy pin for {identity.slug()!r} vanished immediately after set")
         return _deserialize(raw.decode() if isinstance(raw, bytes) else raw, identity)
 
-    def pick_ephemeral(self, identity: IdentityKey) -> ProxyEndpoint:
+    def pick_ephemeral(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
         """For a one-shot identity (`identity.is_temporary`, e.g.
         `routes/scrape.py`'s per-call minted identity) only -- `get_or_assign`
         persists a `proxy:{slug}` Redis key with no TTL, which is the right
@@ -91,4 +105,4 @@ class ProxyPinner:
         nothing about *which* proxy is chosen -- only whether choosing it
         needs to touch Redis at all."""
 
-        return self._pick(identity)
+        return self._pick(identity, tier)

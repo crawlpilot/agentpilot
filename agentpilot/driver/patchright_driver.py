@@ -955,7 +955,9 @@ class PatchrightDriver:
                 cctx.health.leak_warnings += weight
                 context_leak_warnings_total.labels(reason=verdict.value).inc()
             if block_detect.is_blocked(verdict):
-                raise ChallengeDetected(f"{verdict.value} at {live.page.url}")
+                raise ChallengeDetected(
+                    f"{verdict.value} at {live.page.url}", verdict=verdict.value, weight=weight
+                )
             if verdict is not block_detect.Verdict.OK:
                 result.verifications.append(f"warning: page classified {verdict.value}")
             return

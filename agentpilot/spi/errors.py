@@ -16,7 +16,16 @@ class ContextCrashed(DriverError):
 
 
 class ChallengeDetected(DriverError):
-    pass
+    """A bot wall (CAPTCHA / robot check / Access Denied) was detected on the
+    navigated page. Carries the classifier `verdict` (a `block_detect.Verdict`
+    value, as a plain string to keep `spi` free of a `driver` import) and its
+    `weight` for the session layer's burn accounting -- the driver computes the
+    weight since it owns the classifier."""
+
+    def __init__(self, message: str, *, verdict: str | None = None, weight: int = 0) -> None:
+        super().__init__(message)
+        self.verdict = verdict
+        self.weight = weight
 
 
 class StaleRefError(DriverError):

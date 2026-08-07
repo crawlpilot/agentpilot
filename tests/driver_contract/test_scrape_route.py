@@ -63,6 +63,7 @@ class _FakeWiring:
         self.vault = None
         self.lease_ttl_seconds = 300.0
         self.warm_pool = None
+        self.burn_tracker = None
 
 
 async def test_scrape_returns_markdown_and_leaves_no_warm_entry(

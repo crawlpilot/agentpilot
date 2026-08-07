@@ -76,3 +76,31 @@ def test_pick_ephemeral_never_writes_to_redis() -> None:
     pinner = ProxyPinner(redis, POOL)
     pinner.pick_ephemeral(IDENTITY)
     assert asyncio.run(redis.exists(f"proxy:{IDENTITY.slug()}")) == 0
+
+
+async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+
+    res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="US")
+    dc = ProxyEndpoint(scheme="http", host="dc", port=2, tier="datacenter")
+    cfg = ProxyConfig({("t", "residential"): (res,), ("t", "datacenter"): (dc,)})
+    pinner = ProxyPinner(fakeredis.aioredis.FakeRedis(), cfg)
+
+    assigned = await pinner.get_or_assign(IDENTITY, tier="residential")
+    assert assigned.host == "res"
+    assert assigned.tier == "residential"
+    assert assigned.country == "US"  # survives the Redis round-trip
+    # A different tier resolves to that tier's pool.
+    assert pinner.pick_ephemeral(IDENTITY, tier="datacenter").host == "dc"
+
+
+async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+
+    redis = fakeredis.aioredis.FakeRedis()
+    res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="IN")
+    cfg = ProxyConfig({("t", "residential"): (res,)})
+    first = await ProxyPinner(redis, cfg).get_or_assign(IDENTITY, tier="residential")
+    second = await ProxyPinner(redis, cfg).get_or_assign(IDENTITY, tier="residential")
+    assert first == second
+    assert second.tier == "residential" and second.country == "IN"

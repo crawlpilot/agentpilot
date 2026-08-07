@@ -25,6 +25,7 @@ from pathlib import Path
 
 import structlog
 
+from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
@@ -113,6 +114,7 @@ async def run_ephemeral_scrape(
     locale: str | None = None,
     timezone_id: str | None = None,
     warm_pool: WarmPool | None = None,
+    burn_tracker: BurnTracker | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -146,15 +148,25 @@ async def run_ephemeral_scrape(
         return IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
 
     async def _opener(identity: IdentityKey, attempt_tier: str) -> ContextRef:
+        # Protected rungs want a residential exit (datacenter IPs are the
+        # dominant Akamai edge-block); the proxy config resolves that per-tenant
+        # with a fallback to whatever pool is configured.
+        proxy_tier = "residential" if attempt_tier in _PROTECTED_TIERS else None
         if warm:
             # Sticky proxy for a reused identity, same as an interactive
             # session -- the same profile should keep the same egress IP so
             # cookies/fingerprint/IP stay coherent across visits.
-            proxy = await proxy_pinner.get_or_assign(identity) if proxy_pinner else None
+            proxy = (
+                await proxy_pinner.get_or_assign(identity, tier=proxy_tier)
+                if proxy_pinner
+                else None
+            )
         else:
             # pick_ephemeral(), not get_or_assign(): a throwaway identity is
             # opened exactly once, so there is nothing to keep "sticky" for.
-            proxy = proxy_pinner.pick_ephemeral(identity) if proxy_pinner else None
+            proxy = (
+                proxy_pinner.pick_ephemeral(identity, tier=proxy_tier) if proxy_pinner else None
+            )
             # Anticipatory warm pool: a throwaway identity has no persistent
             # profile, so it can adopt a context pre-launched for its proxy
             # tier and skip the cold Chrome launch entirely. On a miss, fall
@@ -171,13 +183,14 @@ async def run_ephemeral_scrape(
         user_agent: str | None = None
         init_script: str | None = None
         if protected:
-            # Pin one coherent fingerprint to this identity for life. `region`
-            # is None until Stage 1 (residential proxy) can supply the exit-IP
-            # country; today the family is a stable function of the identity
-            # slug. The fingerprint's own geo fills any locale/timezone the
-            # caller didn't pin, so UA/language/timezone stay mutually
-            # consistent -- but an explicit request value still wins.
-            fp = generate_fingerprint(identity.slug())
+            # Pin one coherent fingerprint to this identity for life. When the
+            # resolved proxy declares an exit-IP country, seed the fingerprint
+            # from it so the pinned timezone/locale match the egress geo;
+            # otherwise the family is a stable function of the identity slug.
+            # The fingerprint's own geo fills any locale/timezone the caller
+            # didn't pin -- but an explicit request value still wins.
+            region = proxy.country if proxy else None
+            fp = generate_fingerprint(identity.slug(), region=region)
             user_agent = fp.user_agent
             init_script = fp.init_script()
             eff_locale = locale or fp.geo.locale
@@ -234,6 +247,23 @@ async def run_ephemeral_scrape(
                 if not warm:
                     delete_profile_dir(profiles_root, identity)
 
+    async def _retire_warm(identity: IdentityKey) -> None:
+        # A burned warm identity is started fresh: drop its cookies/profile and
+        # clear its warning counter, so the next open is a clean first visit.
+        delete_profile_dir(profiles_root, identity)
+        if burn_tracker is not None:
+            await burn_tracker.reset(identity)
+
+    # Burn accounting applies only to warm identities (a throwaway is one-shot
+    # and deleted on teardown regardless). Retire a warm identity that is
+    # already burned *before* reusing it, so this scrape doesn't carry a
+    # known-bad profile into the request.
+    if warm and burn_tracker is not None:
+        warm_identity = _make_identity()
+        if await burn_tracker.is_burned(warm_identity):
+            log.info("ephemeral_scrape.retiring_burned_identity", identity=warm_identity.slug())
+            await _retire_warm(warm_identity)
+
     # A warm identity is reused, so escalation across fresh identities would
     # defeat it -- warm takes a single attempt at the ladder's first tier.
     ladder = _ESCALATION.get(tier, ("stealth",))
@@ -255,10 +285,21 @@ async def run_ephemeral_scrape(
                 "ephemeral_scrape.challenge_escalate", url=url, tier=attempt_tier, detail=str(exc)
             )
     if result is None:
-        # Every tier on the ladder hit a wall -- surface it (the gateway maps
-        # `ChallengeDetected` to 422 CHALLENGE_UNRESOLVED).
+        # Every tier on the ladder hit a wall. Charge the warm identity's burn
+        # counter and retire it if it crossed the threshold, then surface the
+        # wall (the gateway maps `ChallengeDetected` to 422 CHALLENGE_UNRESOLVED).
         assert last_challenge is not None
+        if warm and burn_tracker is not None:
+            identity = _make_identity()
+            await burn_tracker.record_block(identity, last_challenge.weight)
+            if await burn_tracker.is_burned(identity):
+                await _retire_warm(identity)
         raise last_challenge
+
+    # Success self-heals a warm identity's warning counter (Pulsar's
+    # `markSuccess()` decrement).
+    if warm and burn_tracker is not None:
+        await burn_tracker.record_success(_make_identity())
 
     duration_ms = (time.monotonic() - started) * 1000
 
