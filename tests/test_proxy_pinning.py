@@ -63,19 +63,19 @@ def test_empty_pool_rejected_at_construction() -> None:
         ProxyPinner(fakeredis.aioredis.FakeRedis(), [])
 
 
-def test_pick_ephemeral_matches_the_deterministic_pick_get_or_assign_would_persist(
+async def test_pick_ephemeral_matches_the_deterministic_pick_get_or_assign_would_persist(
     pinner: ProxyPinner,
 ) -> None:
     # Same proxy either way -- the only difference is whether choosing it
-    # touches Redis, not which one gets chosen.
-    assert pinner.pick_ephemeral(IDENTITY) == pinner._pick(IDENTITY)
+    # touches Redis (a write), not which one gets chosen.
+    assert await pinner.pick_ephemeral(IDENTITY) == pinner._pick(IDENTITY)
 
 
-def test_pick_ephemeral_never_writes_to_redis() -> None:
+async def test_pick_ephemeral_never_writes_to_redis() -> None:
     redis = fakeredis.aioredis.FakeRedis()
     pinner = ProxyPinner(redis, POOL)
-    pinner.pick_ephemeral(IDENTITY)
-    assert asyncio.run(redis.exists(f"proxy:{IDENTITY.slug()}")) == 0
+    await pinner.pick_ephemeral(IDENTITY)
+    assert await redis.exists(f"proxy:{IDENTITY.slug()}") == 0
 
 
 async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
@@ -91,7 +91,7 @@ async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
     assert assigned.tier == "residential"
     assert assigned.country == "US"  # survives the Redis round-trip
     # A different tier resolves to that tier's pool.
-    assert pinner.pick_ephemeral(IDENTITY, tier="datacenter").host == "dc"
+    assert (await pinner.pick_ephemeral(IDENTITY, tier="datacenter")).host == "dc"
 
 
 async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:

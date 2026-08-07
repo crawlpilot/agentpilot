@@ -30,14 +30,18 @@ class _FakeProxyPinner:
     def __init__(self, proxy: ProxyEndpoint) -> None:
         self.proxy = proxy
         self.tiers_requested: list[str | None] = []
+        self.successes: list[ProxyEndpoint] = []
 
     async def get_or_assign(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
         self.tiers_requested.append(tier)
         return self.proxy
 
-    def pick_ephemeral(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+    async def pick_ephemeral(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
         self.tiers_requested.append(tier)
         return self.proxy
+
+    async def record_success(self, proxy: ProxyEndpoint) -> None:
+        self.successes.append(proxy)
 
 
 class _FakeDriver:
@@ -344,8 +348,11 @@ async def test_protected_tier_requests_residential_and_aligns_geo(tmp_path: Path
         tier="stealth",
         session_name="s",
     )
-    # Protected rung asked the pool for a residential exit...
-    assert pinner.tiers_requested == ["residential"]
+    # Protected rung asked the pool for a residential exit (both at open and at
+    # the post-success proxy-health recompute)...
+    assert pinner.tiers_requested and all(t == "residential" for t in pinner.tiers_requested)
+    # ...the served page was counted toward the proxy's retirement cap...
+    assert pinner.successes == [proxy]
     # ...and the proxy's country (IN) seeded the fingerprint's geo, so the
     # browser's timezone/locale match the egress.
     o = driver.opens[0]

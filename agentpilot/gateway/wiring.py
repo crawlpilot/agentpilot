@@ -52,6 +52,7 @@ from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, Post
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.proxy_config import ProxyConfig
+from agentpilot.identity.proxy_health import ProxyHealth
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
@@ -283,7 +284,12 @@ class Wiring:
         self.proxy_pinner: ProxyPinner | None = None
         proxy_config = ProxyConfig.from_env()
         if not proxy_config.is_empty and self.redis is not None:
-            self.proxy_pinner = ProxyPinner(self.redis, proxy_config)
+            # Health-aware: retire a proxy that has served too many pages (with
+            # ±25% jitter) or lost too many connections, and skip retired ones
+            # when picking / re-pin a warm identity off a retired exit.
+            self.proxy_pinner = ProxyPinner(
+                self.redis, proxy_config, ProxyHealth(self.redis)
+            )
 
         # Per-identity burn accounting (retire a warm identity that keeps
         # getting walled). Redis-backed, so it survives restarts and is shared

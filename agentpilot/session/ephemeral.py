@@ -165,7 +165,9 @@ async def run_ephemeral_scrape(
             # pick_ephemeral(), not get_or_assign(): a throwaway identity is
             # opened exactly once, so there is nothing to keep "sticky" for.
             proxy = (
-                proxy_pinner.pick_ephemeral(identity, tier=proxy_tier) if proxy_pinner else None
+                await proxy_pinner.pick_ephemeral(identity, tier=proxy_tier)
+                if proxy_pinner
+                else None
             )
             # Anticipatory warm pool: a throwaway identity has no persistent
             # profile, so it can adopt a context pre-launched for its proxy
@@ -274,10 +276,13 @@ async def run_ephemeral_scrape(
     used_tier = tier
     used_node_id = "unknown"
     last_challenge: ChallengeDetected | None = None
+    used_identity: IdentityKey | None = None
     for attempt_tier in attempts:
+        attempt_identity = _make_identity()
         try:
-            result, used_node_id = await _attempt(_make_identity(), attempt_tier)
+            result, used_node_id = await _attempt(attempt_identity, attempt_tier)
             used_tier = attempt_tier
+            used_identity = attempt_identity
             break
         except ChallengeDetected as exc:
             last_challenge = exc
@@ -300,6 +305,18 @@ async def run_ephemeral_scrape(
     # `markSuccess()` decrement).
     if warm and burn_tracker is not None:
         await burn_tracker.record_success(_make_identity())
+
+    # Count the served page toward the proxy's retirement cap (recomputing the
+    # winning attempt's proxy -- the pick is deterministic per identity+tier, so
+    # this is the exact endpoint the successful open used).
+    if proxy_pinner is not None and used_identity is not None:
+        success_proxy_tier = "residential" if used_tier in _PROTECTED_TIERS else None
+        used_proxy = (
+            await proxy_pinner.get_or_assign(used_identity, tier=success_proxy_tier)
+            if warm
+            else await proxy_pinner.pick_ephemeral(used_identity, tier=success_proxy_tier)
+        )
+        await proxy_pinner.record_success(used_proxy)
 
     duration_ms = (time.monotonic() - started) * 1000
 
