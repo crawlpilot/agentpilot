@@ -182,11 +182,15 @@ async def run_ephemeral_scrape(
             init_script = fp.init_script()
             eff_locale = locale or fp.geo.locale
             eff_timezone = timezone_id or fp.geo.timezone_id
+        # `enhanced` is the top rung: request headful (the driver runs it under
+        # Xvfb on the worker, or degrades to headless where no display exists),
+        # since headless is itself a detection vector on hardened targets.
+        headful = attempt_tier == "enhanced"
         return await driver.open(
             identity,
             profile_dir,
             proxy,
-            headful=False,
+            headful=headful,
             egress=EgressPolicy(),
             block_popups=True,
             enable_cdp=False,

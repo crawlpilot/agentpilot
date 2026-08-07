@@ -48,6 +48,7 @@ class _FakeDriver:
             {
                 "identity": identity,
                 "profile_dir": profile_dir,
+                "headful": headful,
                 "locale": locale,
                 "timezone_id": timezone_id,
                 "warmup": warmup,
@@ -216,6 +217,9 @@ async def test_auto_escalates_on_challenge_to_a_fresh_identity(tmp_path: Path) -
     assert len(driver.opens) == 2
     # Each attempt used a fresh throwaway identity (new proxy pick + fingerprint).
     assert driver.opens[0]["identity"] != driver.opens[1]["identity"]
+    # The stealth rung is headless; the enhanced rung requests headful.
+    assert driver.opens[0]["headful"] is False
+    assert driver.opens[1]["headful"] is True
     # Truthful reporting: the tier that actually succeeded.
     assert document.metadata is not None
     assert document.metadata.tier_used == "enhanced"

@@ -459,11 +459,20 @@ class PatchrightDriver:
         if user_agent is not None:
             context_kwargs["user_agent"] = user_agent
 
+        # Headful is only honoured when a display is actually available (Xvfb on
+        # the Linux worker, or an exported DISPLAY). On a dev machine or a
+        # display-less container it degrades to headless rather than failing to
+        # launch -- the enhanced tier still keeps its fingerprint + warm-up, it
+        # just can't add the (headful-only) OS-level input path yet.
+        effective_headful = headful and self._launcher.ensure_display()
+        if headful and not effective_headful:
+            log.info("driver.headful_downgraded_no_display", context=str(profile_dir))
+
         playwright = await self._launcher.get_playwright()
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             channel="chrome",
-            headless=not headful,
+            headless=not effective_headful,
             no_viewport=True,
             proxy=_proxy_settings(proxy),
             args=launch_args,
