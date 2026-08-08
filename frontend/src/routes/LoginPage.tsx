@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Boxes, Gauge, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { listSessions } from '@/lib/api/sessions'
 import { listNodes } from '@/lib/api/nodes'
@@ -7,7 +8,13 @@ import { ApiError } from '@/lib/api/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Logo } from '@/components/app/Logo'
+
+const BRAND_POINTS = [
+  { icon: Boxes, title: 'Warm session pool', body: 'Reusable browser contexts over a stable HTTP/WebSocket API.' },
+  { icon: ShieldCheck, title: 'Anti-detection built in', body: 'Patched Playwright avoids common CDP bot-detection signals.' },
+  { icon: Gauge, title: 'Scrape, crawl, and drive', body: 'One console for extraction, mapping, and page automation.' },
+]
 
 export function LoginPage() {
   const { isAuthed, isAdmin, login, setAdminToken } = useAuth()
@@ -72,16 +79,59 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-svh items-center justify-center bg-muted p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Sign in</CardTitle>
-          <CardDescription>
-            Paste a tenant API key (from an operator, via <code>/v1/api-keys</code>) and the tenant
-            it belongs to -- or just the admin token below if you only need API Keys/Nodes.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+    // Split screen: a brand/value panel on the left (hidden on small
+    // screens, where it's pure decoration), the sign-in form on the right --
+    // the standard enterprise SaaS login shape (Firecrawl, Vercel, Linear).
+    <div className="grid min-h-svh lg:grid-cols-2">
+      <aside className="relative hidden flex-col justify-between overflow-hidden bg-accent p-10 text-white lg:flex">
+        {/* Soft radial highlights so the flat red panel reads less like a
+            solid block and more like a considered surface. */}
+        <div
+          className="pointer-events-none absolute inset-0 opacity-40"
+          style={{
+            background:
+              'radial-gradient(circle at 20% 20%, rgba(255,255,255,0.25), transparent 45%), radial-gradient(circle at 80% 80%, rgba(0,0,0,0.25), transparent 40%)',
+          }}
+        />
+        <div className="relative">
+          <Logo inverted />
+        </div>
+        <div className="relative flex flex-col gap-6">
+          <div>
+            <h1 className="text-2xl font-semibold leading-tight">Browser-as-a-Service, ready to drive.</h1>
+            <p className="mt-2 max-w-sm text-sm text-white/70">
+              Open a warm browser session once, then scrape, crawl, and automate it over a stable API.
+            </p>
+          </div>
+          <ul className="flex flex-col gap-4">
+            {BRAND_POINTS.map(({ icon: Icon, title, body }) => (
+              <li key={title} className="flex gap-3">
+                <span className="grid size-8 shrink-0 place-items-center rounded-md bg-white/15">
+                  <Icon className="size-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-medium">{title}</p>
+                  <p className="text-xs text-white/60">{body}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="relative text-xs text-white/50">Multi-tenant · warm session pool · anti-detection</p>
+      </aside>
+
+      <div className="flex items-center justify-center bg-background p-6">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 lg:hidden">
+            <Logo />
+          </div>
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold">Sign in</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Paste a tenant API key (from an operator, via <code>/v1/api-keys</code>) and the tenant it
+              belongs to -- or just the admin token below if you only need API Keys/Nodes.
+            </p>
+          </div>
           <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="tenant">Tenant</Label>
@@ -123,8 +173,8 @@ export function LoginPage() {
               {submitting ? 'Verifying...' : 'Continue'}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }

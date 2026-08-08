@@ -36,6 +36,7 @@ class BrowserDriver(Protocol):
         detect_blocks: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
+        extra_http_headers: dict[str, str] | None = None,
     ) -> ContextRef:
         """`locale`/`timezone_id` (when set) override the browser context's
         reported `navigator.language`/`Accept-Language` and JS timezone --
@@ -57,7 +58,13 @@ class BrowserDriver(Protocol):
         runs -- together they apply a pinned per-identity fingerprint (UA +
         WebGL/hardware/language patches). Passed as primitives, not a
         fingerprint object, to keep this contract free of an `identity`-layer
-        import. Both `None` leaves Chrome/Patchright's own values."""
+        import. Both `None` leaves Chrome/Patchright's own values.
+
+        `extra_http_headers` are applied to every request the context makes
+        (`set_extra_http_headers`) -- used to pin the always-sent Client-Hint
+        headers (`Sec-CH-UA*`) to the same Chrome build as `user_agent`, so the
+        wire-level hints don't contradict the spoofed UA (a WAF cross-check).
+        `None` leaves the browser's native headers."""
         ...
 
     async def close(self, ctx: ContextRef) -> None: ...

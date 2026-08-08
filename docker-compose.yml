@@ -85,6 +85,14 @@ services:
       # `gateway` had it), so queued crawl/agent/recipe runs sat `queued`
       # forever, never claimed.
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
+      # Proxy pools for the anti-detection tiers (see README "Anti-detection,
+      # tiers & proxies"). Passed through from your shell/.env; empty by default
+      # -> egress uses the container IP and tier=stealth|enhanced fail closed.
+      # Point AGENTPILOT_PROXY_POOL(S) at a RESIDENTIAL/MOBILE pool for hardened
+      # targets (Akamai/PerimeterX/DataDome).
+      AGENTPILOT_PROXY_POOL: ${AGENTPILOT_PROXY_POOL:-}
+      AGENTPILOT_PROXY_POOLS: ${AGENTPILOT_PROXY_POOLS:-}
+      AGENTPILOT_PROXY_MAX_SUCCESS: ${AGENTPILOT_PROXY_MAX_SUCCESS:-}
       # Left unset deliberately -- AGENTPILOT_NODE_ID defaults to hostname
       # + a fresh uuid suffix per container start, so a restarted node never
       # advertises a stale node_id whose addr might have changed. Don't pin
@@ -111,6 +119,9 @@ services:
       AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-}
       AGENTPILOT_NODE_ADDR: http://worker-2:8000
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
+      AGENTPILOT_PROXY_POOL: ${AGENTPILOT_PROXY_POOL:-}
+      AGENTPILOT_PROXY_POOLS: ${AGENTPILOT_PROXY_POOLS:-}
+      AGENTPILOT_PROXY_MAX_SUCCESS: ${AGENTPILOT_PROXY_MAX_SUCCESS:-}
 
   gateway:
     build:

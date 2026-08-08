@@ -22,6 +22,7 @@ import json
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import structlog
 
@@ -77,10 +78,51 @@ def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
     return options.formats
 
 
-def _build_batch(url: str, options: ScrapeOptions) -> list[spi_actions.Action]:
-    batch: list[spi_actions.Action] = [
-        spi_actions.NavigateAction(url=url, timeout_ms=options.timeout_ms)
-    ]
+# Dwell after the homepage hit so any deferred `Set-Cookie` (Akamai's
+# ak_bmsc/bm_sz land on the first response; _abck validates during the warm-up
+# scroll) is committed before the deep navigation reuses them.
+_PRIME_DWELL_MS = 800
+
+
+def _origin_of(url: str) -> str | None:
+    """The bare `scheme://host[:port]/` origin of `url`, or `None` if `url` has
+    no host to prime against (e.g. a relative or malformed URL)."""
+
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
+
+
+def _needs_priming(url: str, origin: str | None) -> bool:
+    """Prime only when the target is a *deep* link -- a cold hit straight to
+    `/ip/PRODUCT/12345` with no cookies/referrer is itself an Akamai signal.
+    When the target already *is* the origin root there's nothing to prime: the
+    single navigation is the homepage visit."""
+
+    return origin is not None and url.rstrip("/") != origin.rstrip("/")
+
+
+def _build_batch(
+    url: str, options: ScrapeOptions, *, prime_origin: bool = False
+) -> list[spi_actions.Action]:
+    batch: list[spi_actions.Action] = []
+    # Homepage-first priming (protected tiers): visit the site origin first so
+    # the driver's per-navigate warm-up acquires Akamai's cookies (ak_bmsc /
+    # bm_sz / a validated _abck) and the deep hit lands as a same-origin
+    # returning visitor rather than a walled cold deep-link. The entry
+    # navigation runs the same warm-up + block detection as any other, so a
+    # blocked homepage still escalates. block_detect keys a robot_check off the
+    # /blocked URL, so a walled entry nav raises before the deep hit is wasted.
+    if prime_origin:
+        origin = _origin_of(url)
+        if _needs_priming(url, origin):
+            assert origin is not None  # narrowed by _needs_priming
+            batch.append(
+                spi_actions.NavigateAction(url=origin, timeout_ms=options.timeout_ms)
+            )
+            batch.append(spi_actions.WaitAction(ms=_PRIME_DWELL_MS))
+    batch.append(spi_actions.NavigateAction(url=url, timeout_ms=options.timeout_ms))
     if options.wait_for_ms:
         batch.append(spi_actions.WaitAction(ms=options.wait_for_ms))
     batch.extend(options.actions)
@@ -184,6 +226,7 @@ async def run_ephemeral_scrape(
         eff_locale, eff_timezone = locale, timezone_id
         user_agent: str | None = None
         init_script: str | None = None
+        extra_http_headers: dict[str, str] | None = None
         if protected:
             # Pin one coherent fingerprint to this identity for life. When the
             # resolved proxy declares an exit-IP country, seed the fingerprint
@@ -195,6 +238,10 @@ async def run_ephemeral_scrape(
             fp = generate_fingerprint(identity.slug(), region=region)
             user_agent = fp.user_agent
             init_script = fp.init_script()
+            # Pin the Client-Hint headers to the same Chrome build as the UA, so
+            # Sec-CH-UA / navigator.userAgentData / UA all agree (the trio Akamai
+            # cross-checks). Without this the header leaked the real, newer Chrome.
+            extra_http_headers = fp.client_hint_headers()
             eff_locale = locale or fp.geo.locale
             eff_timezone = timezone_id or fp.geo.timezone_id
         # `enhanced` is the top rung: request headful (the driver runs it under
@@ -215,12 +262,23 @@ async def run_ephemeral_scrape(
             detect_blocks=protected,
             user_agent=user_agent,
             init_script=init_script,
+            extra_http_headers=extra_http_headers,
         )
         # No vault load/restore: cookie persistence for the warm case comes
         # from the on-disk profile dir surviving teardown (below), not from
         # the vault -- ephemeral.py has no vault handle by design.
 
-    batch = _build_batch(url, options)
+    # Escalation ladder (resolved up front so it also drives batch shape). A
+    # warm identity is reused, so escalation across fresh identities would defeat
+    # it -- warm takes a single attempt at the ladder's first tier.
+    ladder = _ESCALATION.get(tier, ("stealth",))
+    attempts = ladder[:1] if warm else ladder
+
+    # Homepage-first cookie priming runs on the protected path only (the tiers
+    # that also enable warm-up + block detection); `basic` keeps the cheap
+    # single-navigation shape.
+    prime_origin = any(t in _PROTECTED_TIERS for t in attempts)
+    batch = _build_batch(url, options, prime_origin=prime_origin)
 
     async def _attempt(identity: IdentityKey, attempt_tier: str) -> tuple[ActionResult, str]:
         # One acquire -> execute -> teardown. Raises `ChallengeDetected` (from
@@ -265,11 +323,6 @@ async def run_ephemeral_scrape(
         if await burn_tracker.is_burned(warm_identity):
             log.info("ephemeral_scrape.retiring_burned_identity", identity=warm_identity.slug())
             await _retire_warm(warm_identity)
-
-    # A warm identity is reused, so escalation across fresh identities would
-    # defeat it -- warm takes a single attempt at the ladder's first tier.
-    ladder = _ESCALATION.get(tier, ("stealth",))
-    attempts = ladder[:1] if warm else ladder
 
     started = time.monotonic()
     result: ActionResult | None = None

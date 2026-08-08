@@ -73,6 +73,37 @@ Redis (`6379`) and Postgres (`5432`) are also published, but loopback-only
 (`127.0.0.1:...`), so you can `redis-cli`/`psql` into them from the host for debugging or to run
 migrations, without exposing them to the network.
 
+### Rebuilding after code or Dockerfile changes
+
+`docker compose up` (no flags) reuses whatever images are already built, so **edits to application
+code, dependencies, or a Dockerfile do not take effect until you rebuild.** Pick the cheapest option
+that covers what changed:
+
+```bash
+# Usual case after editing code: rebuild changed layers + recreate containers.
+docker compose up --build -d
+
+# Only the driver/worker changed — rebuild just the (slow, amd64-emulated) workers.
+docker compose up --build -d worker worker-2
+
+# Picked up new .env / environment values but the image itself didn't change.
+# (.env is read at container-creation time, not live — a plain restart won't see it.)
+docker compose up -d --force-recreate
+
+# Force a clean rebuild ignoring the layer cache — use when a cached layer is stale
+# (e.g. a dependency/apt change Docker didn't detect, or a full Chrome reinstall). Slow.
+docker compose build --no-cache worker worker-2
+docker compose up -d --force-recreate
+
+# Nuclear: drop containers AND volumes (empty DB/Redis/profiles), then rebuild from scratch.
+docker compose down -v
+docker compose up --build
+```
+
+> Rule of thumb: **code/Dockerfile change → `--build`; `.env` change → `--force-recreate`; stale
+> cached layer → `--no-cache`.** When in doubt, `docker compose up --build -d --force-recreate`
+> does both a rebuild and a fresh recreate.
+
 ### 3. Run database migrations
 
 Postgres persists tenant API keys (`agentpilot.auth.store`), crawl/agent/recipe jobs, and run
@@ -159,6 +190,86 @@ docker compose down -v       # also wipe volumes -- next `up` starts from an emp
 - **Migrations fail to connect**: `alembic/env.py` requires `AGENTPILOT_DATABASE_URL` to be set
   explicitly (no fallback) and expects it reachable from the host, i.e. `localhost:5432`, not
   `postgres:5432` (that hostname only resolves inside the compose network).
+
+## Anti-detection, tiers & proxies
+
+Scraping bot-protected sites (Akamai / PerimeterX / DataDome — Zara, COS, most major retail) is
+driven by a per-request **tier** on `/v1/scrape` and `/v1/sessions`, backed by a proxy pool. The
+tiers use Firecrawl's vocabulary:
+
+| `tier` | what runs |
+|---|---|
+| `basic` | plain browser, no stealth extras — cheapest/fastest |
+| `stealth` | + human warm-up (mouse/scroll/dwell + `_abck` wait), coherent per-identity fingerprint, body-level block detection |
+| `enhanced` | stealth **+ headful** (under Xvfb on the worker) + residential proxy |
+| `auto` *(default)* | starts on `stealth` and auto-escalates to `enhanced` on a detected block, each retry using a fresh identity / proxy / fingerprint |
+
+For hardened targets the decisive factor is the **exit IP**: datacenter/cloud IPs are
+reputation-blocked at the edge *regardless of fingerprint quality*, so `stealth`/`enhanced` require a
+**residential or mobile** proxy pool and **fail closed with HTTP 503** when none is configured
+(`basic`/`auto` proceed without one).
+
+### Configuring proxies
+
+Proxy pinning, per-proxy health, and burn accounting are Redis-backed, so this needs
+`AGENTPILOT_REDIS_URL`. Set the proxy vars on the **worker** (or `monolith`) process — that's where
+the driver runs; the `gateway` never scrapes.
+
+- **`AGENTPILOT_PROXY_POOL`** — a flat, comma-separated list; the default pool for every tenant and
+  tier:
+
+  ```bash
+  AGENTPILOT_PROXY_POOL=http://user:pass@res-gw:8000,http://user:pass@res-gw:8001
+  ```
+
+- **`AGENTPILOT_PROXY_POOLS`** — JSON for **per-client (tenant) + per-tier** pools, each endpoint
+  optionally carrying `?country=XX` to declare its exit geo (used to align the browser's
+  timezone/locale with the egress):
+
+  ```bash
+  AGENTPILOT_PROXY_POOLS='{
+    "*":    { "residential": ["http://u:p@res-gw:8000?country=us"] },
+    "acme": { "residential": ["http://u:p@acme-res:8000?country=in"],
+              "datacenter":  ["http://acme-dc:8080"] }
+  }'
+  ```
+
+  Resolution walks `tenant+tier → tenant+* → *+tier → *+*`, so a sparse config still resolves;
+  `stealth`/`enhanced` request the `residential` tier. Either var works alone or together (the flat
+  pool becomes the `*/*` default).
+
+- **`AGENTPILOT_PROXY_MAX_SUCCESS`** *(default 100)* — retire a proxy after it has served roughly this
+  many pages (±25% jitter), so one exit IP isn't reused long enough to be fingerprint-tracked.
+  Proxies are also retired after 3 connection losses; retired proxies are skipped when picking, and a
+  warm identity pinned to a now-retired proxy is re-pinned to a healthy one.
+
+Beyond the proxy, the `stealth`/`enhanced` path also: pins a coherent per-identity browser
+fingerprint (UA / WebGL / hardware / timezone, geo-matched to the proxy's country); runs a human
+warm-up so Akamai's `_abck` sensor cookie validates before the page is read; detects bot walls in the
+**response body** — including the HTTP-200 "Access Denied" pages Akamai serves — and raises a
+challenge that drives auto-escalation; and retires a warm identity (`session_name`) that keeps
+getting walled so its next visit is a clean, cookie-less browser.
+
+> **Example — scrape a Zara product through a residential IN exit:**
+> ```bash
+> # on the worker/monolith:
+> export AGENTPILOT_REDIS_URL=redis://localhost:6379/0
+> export AGENTPILOT_PROXY_POOLS='{"*":{"residential":["http://user:pass@res-gw:8000?country=in"]}}'
+> # then scrape with tier=enhanced (or auto, which escalates into it)
+> curl -X POST http://localhost:8000/v1/scrape -H "Authorization: Bearer bk_live_…" \
+>   -H "Content-Type: application/json" \
+>   -d '{"tenant":"dev","url":"https://www.zara.com/in/en/…","tier":"enhanced"}'
+> ```
+
+### In Docker Compose
+
+The compose `worker`/`worker-2` services pass the proxy vars through from your shell / `.env`
+(`AGENTPILOT_PROXY_POOL`, `AGENTPILOT_PROXY_POOLS`, `AGENTPILOT_PROXY_MAX_SUCCESS`), but they're empty
+by default. Set them in `.env`, then recreate the workers so they pick the new values up:
+
+```bash
+docker compose up -d --force-recreate worker worker-2
+```
 
 ## Local development (no Docker)
 

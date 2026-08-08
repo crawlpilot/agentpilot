@@ -66,6 +66,7 @@ class _FakeDriver:
         detect_blocks: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
+        extra_http_headers: dict[str, str] | None = None,
     ) -> ContextRef:
         self.opens.append(
             {
@@ -78,6 +79,7 @@ class _FakeDriver:
                 "detect_blocks": detect_blocks,
                 "user_agent": user_agent,
                 "init_script": init_script,
+                "extra_http_headers": extra_http_headers,
             }
         )
         return ContextRef(

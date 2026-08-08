@@ -412,6 +412,7 @@ class PatchrightDriver:
         detect_blocks: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
+        extra_http_headers: dict[str, str] | None = None,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -483,6 +484,12 @@ class PatchrightDriver:
             # page script runs -- the pinned per-identity fingerprint's
             # navigator/WebGL/language patches (see identity/fingerprint.py).
             await context.add_init_script(init_script)
+        if extra_http_headers:
+            # Pin the always-sent Client-Hint headers (Sec-CH-UA*) to the same
+            # Chrome build as `user_agent` + navigator.userAgentData, so the
+            # wire-level hints agree with the spoofed UA rather than leaking the
+            # real (newer) Chrome the header would otherwise carry.
+            await context.set_extra_http_headers(extra_http_headers)
         if enable_cdp:
             assert cdp_port is not None
             await _wait_for_cdp_ready(cdp_port)

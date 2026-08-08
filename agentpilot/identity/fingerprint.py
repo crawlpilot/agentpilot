@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 
 
@@ -75,6 +76,27 @@ class Fingerprint:
     webgl: WebGLParameters
     geo: GeoTimeParameters
     canvas_seed: str
+    # Client-Hint block, pinned to the same Chrome version as the UA string so
+    # UA / Sec-CH-UA / navigator.userAgentData all describe one build.
+    chrome_full_version: str
+    chrome_major: str
+    ch_platform: str
+    ch_platform_version: str
+    ch_architecture: str
+
+    def client_hint_headers(self) -> dict[str, str]:
+        """The always-sent (low-entropy) Client-Hint request headers, pinned to
+        this fingerprint's Chrome major + platform. Applied via the context's
+        extra HTTP headers so the wire-level Sec-CH-UA agrees with the spoofed
+        UA header and with navigator.userAgentData (patched in init_script) --
+        the trio Akamai cross-checks. These three are exactly the hints Chrome
+        sends by default (no Accept-CH negotiation needed)."""
+
+        return {
+            "sec-ch-ua": _sec_ch_ua(self.chrome_major),
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": f'"{self.ch_platform}"',
+        }
 
     def context_kwargs(self) -> dict[str, str]:
         """Patchright `launch_persistent_context` kwargs that Playwright applies
@@ -100,6 +122,22 @@ class Fingerprint:
             "languages": list(self.geo.languages),
             "webglVendor": self.webgl.unmasked_vendor,
             "webglRenderer": self.webgl.unmasked_renderer,
+            # navigator.userAgentData, kept coherent with the spoofed UA and the
+            # Sec-CH-UA headers (client_hint_headers). Patchright leaves this at
+            # the *real* Chrome's values, which disagree with our pinned UA -- the
+            # mismatch WAFs flag. getHighEntropyValues echoes only requested hints.
+            "uaData": {
+                "brands": _brands(self.chrome_major),
+                "mobile": False,
+                "platform": self.ch_platform,
+                "architecture": self.ch_architecture,
+                "bitness": "64",
+                "model": "",
+                "platformVersion": self.ch_platform_version,
+                "uaFullVersion": self.chrome_full_version,
+                "fullVersionList": _full_version_list(self.chrome_full_version, self.chrome_major),
+                "wow64": False,
+            },
         }
         return _INIT_SCRIPT_TEMPLATE.replace("__CFG__", json.dumps(cfg))
 
@@ -109,7 +147,50 @@ class Fingerprint:
 # consistency contract). WebGL strings are the real ANGLE renderer names from
 # FingerprintParameters.kt:283-329; the headless leaks they replace are
 # "Google Inc." / "Google SwiftShader".
-_CHROME_VER = "120.0.0.0"
+
+# The Chrome version claimed across *every* UA-derived surface: the UA string,
+# the Sec-CH-UA request headers, and navigator.userAgentData. `channel="chrome"`
+# launches the real system Chrome, so pinning a stale version here (the old
+# hardcoded 120) while the browser -- and its native Sec-CH-UA / userAgentData --
+# reported a much newer build was a hard, deterministic bot tell for WAFs
+# (Akamai) that cross-check UA against Client Hints. Keep this aligned with the
+# deployed Chrome via AGENTPILOT_CHROME_VERSION; the default tracks a recent
+# stable so a fresh install and the pinned value already agree.
+_CHROME_FULL_VERSION = os.environ.get("AGENTPILOT_CHROME_VERSION", "131.0.6778.86").strip()
+_CHROME_MAJOR = _CHROME_FULL_VERSION.split(".", 1)[0]
+# Chrome freezes the UA string's minor/build/patch to `.0.0.0` (the UA-reduction
+# rollout); only the major is real there. The full version is carried by the
+# high-entropy Client Hints (uaFullVersion / fullVersionList) instead.
+_CHROME_VER = f"{_CHROME_MAJOR}.0.0.0"
+
+# Sec-CH-UA GREASE brand. The greasy `"Not_A Brand";v="24"` pair is stable for
+# this Chromium era; the real major rides on the Chromium / Google Chrome
+# brands. WAFs check the version, not the brand order, so a fixed order is safe.
+_GREASE_BRAND = "Not_A Brand"
+_GREASE_VERSION = "24"
+
+
+def _brands(major: str) -> list[dict[str, str]]:
+    """Low-entropy brand list shared by Sec-CH-UA and userAgentData.brands."""
+    return [
+        {"brand": _GREASE_BRAND, "version": _GREASE_VERSION},
+        {"brand": "Chromium", "version": major},
+        {"brand": "Google Chrome", "version": major},
+    ]
+
+
+def _full_version_list(full: str, major: str) -> list[dict[str, str]]:
+    """High-entropy fullVersionList: same brands, but full dotted versions."""
+    return [
+        {"brand": _GREASE_BRAND, "version": f"{_GREASE_VERSION}.0.0.0"},
+        {"brand": "Chromium", "version": full},
+        {"brand": "Google Chrome", "version": full},
+    ]
+
+
+def _sec_ch_ua(major: str) -> str:
+    """The `Sec-CH-UA` header value (always-sent, low-entropy)."""
+    return ", ".join(f'"{b["brand"]}";v="{b["version"]}"' for b in _brands(major))
 
 
 @dataclass(frozen=True)
@@ -119,6 +200,14 @@ class _DevicePreset:
     hardware: HardwareParameters
     webgl: WebGLParameters
     geo: GeoTimeParameters
+    # Client-Hint geometry. `ch_platform` is the Sec-CH-UA-Platform /
+    # userAgentData.platform token ("Windows"/"macOS"/"Linux") -- note this is
+    # *not* navigator.platform ("Win32"/"MacIntel"/...), which the hardware block
+    # carries separately. `ch_architecture` must agree with the WebGL/hardware
+    # family ("arm" for Apple Silicon, "x86" otherwise).
+    ch_platform: str
+    ch_platform_version: str
+    ch_architecture: str
 
 
 _WINDOWS_INTEL_US = _DevicePreset(
@@ -135,6 +224,9 @@ _WINDOWS_INTEL_US = _DevicePreset(
         unmasked_renderer="Intel(R) UHD Graphics",
     ),
     geo=GeoTimeParameters("America/New_York", 300, "en-US", ("en-US", "en")),
+    ch_platform="Windows",
+    ch_platform_version="15.0.0",
+    ch_architecture="x86",
 )
 
 _MAC_APPLE_UK = _DevicePreset(
@@ -151,6 +243,9 @@ _MAC_APPLE_UK = _DevicePreset(
         unmasked_renderer="Apple M1",
     ),
     geo=GeoTimeParameters("Europe/London", 0, "en-GB", ("en-GB", "en")),
+    ch_platform="macOS",
+    ch_platform_version="14.5.0",
+    ch_architecture="arm",
 )
 
 _LINUX_NVIDIA_IN = _DevicePreset(
@@ -167,6 +262,9 @@ _LINUX_NVIDIA_IN = _DevicePreset(
         unmasked_renderer="NVIDIA GeForce GTX 1650",
     ),
     geo=GeoTimeParameters("Asia/Kolkata", -330, "en-IN", ("en-IN", "en")),
+    ch_platform="Linux",
+    ch_platform_version="6.5.0",
+    ch_architecture="x86",
 )
 
 _PRESETS: tuple[_DevicePreset, ...] = (_WINDOWS_INTEL_US, _MAC_APPLE_UK, _LINUX_NVIDIA_IN)
@@ -199,6 +297,11 @@ def generate(identity_slug: str, *, region: str | None = None) -> Fingerprint:
         webgl=preset.webgl,
         geo=preset.geo,
         canvas_seed=canvas_seed,
+        chrome_full_version=_CHROME_FULL_VERSION,
+        chrome_major=_CHROME_MAJOR,
+        ch_platform=preset.ch_platform,
+        ch_platform_version=preset.ch_platform_version,
+        ch_architecture=preset.ch_architecture,
     )
 
 
@@ -234,6 +337,36 @@ _INIT_SCRIPT_TEMPLATE = """
   };
   try { patchGL(WebGLRenderingContext && WebGLRenderingContext.prototype); } catch (e) {}
   try { patchGL(WebGL2RenderingContext && WebGL2RenderingContext.prototype); } catch (e) {}
+  // navigator.userAgentData -- pin brands/platform/high-entropy to the same
+  // Chrome build as the UA string + Sec-CH-UA headers. getHighEntropyValues
+  // returns only the hints the caller asked for (Chrome's contract).
+  const uad = cfg.uaData;
+  if (uad) {
+    const high = {
+      architecture: uad.architecture,
+      bitness: uad.bitness,
+      model: uad.model,
+      platformVersion: uad.platformVersion,
+      uaFullVersion: uad.uaFullVersion,
+      fullVersionList: uad.fullVersionList,
+      wow64: uad.wow64,
+    };
+    const low = { brands: uad.brands, mobile: uad.mobile, platform: uad.platform };
+    const getHighEntropyValues = function (hints) {
+      const out = Object.assign({}, low);
+      (hints || []).forEach((h) => { if (h in high) out[h] = high[h]; });
+      return Promise.resolve(out);
+    };
+    patched.add(getHighEntropyValues);
+    const data = Object.assign({}, low, {
+      getHighEntropyValues,
+      toJSON: () => Object.assign({}, low),
+    });
+    patched.add(data.toJSON);
+    try {
+      Object.defineProperty(navigator, 'userAgentData', { get: () => data, configurable: true });
+    } catch (e) {}
+  }
   // Keep toString native for patched getters (stealth.js core trick).
   const toStringProxy = new Proxy(nativeToString, {
     apply(target, thisArg, args) {
