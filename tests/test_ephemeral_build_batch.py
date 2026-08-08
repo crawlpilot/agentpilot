@@ -5,8 +5,12 @@ Firecrawl-pipeline port closes)."""
 
 from __future__ import annotations
 
-from agentpilot.session.ephemeral import _build_batch, _effective_formats
-from agentpilot.spi.actions import ExtractAction, NavigateAction, WaitAction
+from agentpilot.session.ephemeral import (
+    _build_batch,
+    _effective_formats,
+    _search_engine_referer,
+)
+from agentpilot.spi.actions import ExtractAction, NavigateAction
 from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 
@@ -48,41 +52,35 @@ def test_build_batch_only_adds_one_extract_action_for_internal_markdown() -> Non
     assert [a.format for a in extract_actions] == ["html", "markdown"]
 
 
-def test_no_priming_by_default_keeps_single_leading_navigation() -> None:
-    batch = _build_batch("https://www.walmart.com/ip/x/123", ScrapeOptions())
-    navs = [a for a in batch if isinstance(a, NavigateAction)]
-    assert [n.url for n in navs] == ["https://www.walmart.com/ip/x/123"]
-
-
-def test_priming_prepends_homepage_visit_for_deep_links() -> None:
-    # Protected path: hit the origin first (so the driver's warm-up acquires
-    # Akamai cookies) before the deep, cold deep-link that would otherwise wall.
-    batch = _build_batch(
-        "https://www.walmart.com/ip/x/123", ScrapeOptions(), prime_origin=True
-    )
-    navs = [a for a in batch if isinstance(a, NavigateAction)]
-    assert [n.url for n in navs] == [
-        "https://www.walmart.com/",
-        "https://www.walmart.com/ip/x/123",
-    ]
-    # A dwell sits between the entry nav and the deep nav so deferred Set-Cookie
-    # is committed before reuse.
-    entry_idx = batch.index(navs[0])
-    deep_idx = batch.index(navs[1])
-    assert any(
-        isinstance(a, WaitAction) for a in batch[entry_idx + 1 : deep_idx]
-    )
-
-
-def test_priming_is_skipped_when_target_is_already_the_origin_root() -> None:
-    # Nothing to prime -- the single navigation IS the homepage visit.
-    for url in ("https://www.walmart.com/", "https://www.walmart.com"):
-        batch = _build_batch(url, ScrapeOptions(), prime_origin=True)
+def test_always_a_single_navigation_to_the_requested_url() -> None:
+    # No homepage-first double navigation, with or without a referer -- one hit
+    # straight to the product (Pulsar's visit() shape).
+    for referer in (None, "https://www.google.com/"):
+        batch = _build_batch(
+            "https://www.walmart.com/ip/x/123", ScrapeOptions(), referer=referer
+        )
         navs = [a for a in batch if isinstance(a, NavigateAction)]
-        assert len(navs) == 1, url
+        assert [n.url for n in navs] == ["https://www.walmart.com/ip/x/123"]
 
 
-def test_priming_no_ops_on_a_hostless_url() -> None:
-    batch = _build_batch("not-a-url", ScrapeOptions(), prime_origin=True)
-    navs = [a for a in batch if isinstance(a, NavigateAction)]
-    assert [n.url for n in navs] == ["not-a-url"]
+def test_referer_is_threaded_onto_the_navigation() -> None:
+    batch = _build_batch(
+        "https://www.walmart.com/ip/x/123",
+        ScrapeOptions(),
+        referer="https://www.google.com/",
+    )
+    nav = next(a for a in batch if isinstance(a, NavigateAction))
+    assert nav.referer == "https://www.google.com/"
+
+
+def test_no_referer_by_default() -> None:
+    nav = next(
+        a for a in _build_batch("https://x.test/p", ScrapeOptions())
+        if isinstance(a, NavigateAction)
+    )
+    assert nav.referer is None
+
+
+def test_search_engine_referer_only_for_hosted_urls() -> None:
+    assert _search_engine_referer("https://www.walmart.com/ip/x/123") == "https://www.google.com/"
+    assert _search_engine_referer("not-a-url") is None

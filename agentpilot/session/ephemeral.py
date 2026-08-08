@@ -22,7 +22,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -78,51 +78,37 @@ def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
     return options.formats
 
 
-# Dwell after the homepage hit so any deferred `Set-Cookie` (Akamai's
-# ak_bmsc/bm_sz land on the first response; _abck validates during the warm-up
-# scroll) is committed before the deep navigation reuses them.
-_PRIME_DWELL_MS = 800
+def _search_engine_referer(url: str) -> str | None:
+    """A plausible referrer for a *cold, cookieless* first hit: an organic
+    search landing. A deep product URL reached straight from Google (no prior
+    same-site navigation, no cookies) is the single most common legitimate path
+    a real user takes to a product page, and Chrome derives a coherent
+    `Sec-Fetch-Site: cross-site` from it -- unlike a bare no-referrer hit, which
+    reads as a scripted deep-link. Pulsar's referrer handling (CommonRPA
+    .waitForReferrer) achieves this by actually visiting the referrer; we get
+    the same behavioural signal in a *single* navigation by setting the header.
 
-
-def _origin_of(url: str) -> str | None:
-    """The bare `scheme://host[:port]/` origin of `url`, or `None` if `url` has
-    no host to prime against (e.g. a relative or malformed URL)."""
+    Only for URLs with a host; `None` (no referer) for relative/malformed URLs.
+    """
 
     parts = urlsplit(url)
     if not parts.scheme or not parts.netloc:
         return None
-    return urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
-
-
-def _needs_priming(url: str, origin: str | None) -> bool:
-    """Prime only when the target is a *deep* link -- a cold hit straight to
-    `/ip/PRODUCT/12345` with no cookies/referrer is itself an Akamai signal.
-    When the target already *is* the origin root there's nothing to prime: the
-    single navigation is the homepage visit."""
-
-    return origin is not None and url.rstrip("/") != origin.rstrip("/")
+    return "https://www.google.com/"
 
 
 def _build_batch(
-    url: str, options: ScrapeOptions, *, prime_origin: bool = False
+    url: str, options: ScrapeOptions, *, referer: str | None = None
 ) -> list[spi_actions.Action]:
-    batch: list[spi_actions.Action] = []
-    # Homepage-first priming (protected tiers): visit the site origin first so
-    # the driver's per-navigate warm-up acquires Akamai's cookies (ak_bmsc /
-    # bm_sz / a validated _abck) and the deep hit lands as a same-origin
-    # returning visitor rather than a walled cold deep-link. The entry
-    # navigation runs the same warm-up + block detection as any other, so a
-    # blocked homepage still escalates. block_detect keys a robot_check off the
-    # /blocked URL, so a walled entry nav raises before the deep hit is wasted.
-    if prime_origin:
-        origin = _origin_of(url)
-        if _needs_priming(url, origin):
-            assert origin is not None  # narrowed by _needs_priming
-            batch.append(
-                spi_actions.NavigateAction(url=origin, timeout_ms=options.timeout_ms)
-            )
-            batch.append(spi_actions.WaitAction(ms=_PRIME_DWELL_MS))
-    batch.append(spi_actions.NavigateAction(url=url, timeout_ms=options.timeout_ms))
+    # One navigation, straight to the requested URL -- Pulsar's `visit()` shape
+    # (navigate -> settle on body -> in-place human warm-up), never a
+    # homepage-first double navigation. The `referer` (protected tiers) makes the
+    # single hit look like an organic-search landing rather than a cold
+    # scripted deep-link; the driver's per-navigate warm-up + block detection do
+    # the rest on the target page itself.
+    batch: list[spi_actions.Action] = [
+        spi_actions.NavigateAction(url=url, timeout_ms=options.timeout_ms, referer=referer)
+    ]
     if options.wait_for_ms:
         batch.append(spi_actions.WaitAction(ms=options.wait_for_ms))
     batch.extend(options.actions)
@@ -274,11 +260,11 @@ async def run_ephemeral_scrape(
     ladder = _ESCALATION.get(tier, ("stealth",))
     attempts = ladder[:1] if warm else ladder
 
-    # Homepage-first cookie priming runs on the protected path only (the tiers
-    # that also enable warm-up + block detection); `basic` keeps the cheap
-    # single-navigation shape.
-    prime_origin = any(t in _PROTECTED_TIERS for t in attempts)
-    batch = _build_batch(url, options, prime_origin=prime_origin)
+    # A search-engine referer on the (single) navigation is a protected-path
+    # anti-detection lever only; `basic` keeps a bare, refererless hit.
+    protected = any(t in _PROTECTED_TIERS for t in attempts)
+    referer = _search_engine_referer(url) if protected else None
+    batch = _build_batch(url, options, referer=referer)
 
     async def _attempt(identity: IdentityKey, attempt_tier: str) -> tuple[ActionResult, str]:
         # One acquire -> execute -> teardown. Raises `ChallengeDetected` (from

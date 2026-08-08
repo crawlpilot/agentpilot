@@ -718,7 +718,13 @@ class PatchrightDriver:
     ) -> None:
         if isinstance(action, NavigateAction):
             try:
-                response = await live.page.goto(action.url, timeout=action.timeout_ms)
+                goto_kwargs: dict[str, Any] = {
+                    "timeout": action.timeout_ms,
+                    "wait_until": action.wait_until,
+                }
+                if action.referer is not None:
+                    goto_kwargs["referer"] = action.referer
+                response = await live.page.goto(action.url, **goto_kwargs)
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
             # Any ref taken before this navigation must not resolve against

@@ -28,6 +28,15 @@ SnapshotEngine = Literal["aria", "fusion"]
 
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
+# When `page.goto` considers a navigation "done". `"load"` (Playwright's own
+# default) waits for every subresource, which heavy retail SPAs (Walmart,
+# Amazon) with continuous ad/telemetry traffic never actually reach -- the goto
+# then hangs to its timeout and surfaces as a spurious NavigationTimeout/504.
+# `"domcontentloaded"` returns once the DOM is parsed; the warm-up scroll +
+# dwell + extract that follow drive the rest of the render, so it's both the
+# regression fix and the robust scraper default.
+NavigateWaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
+
 # The UI's anti-detection tiers that forbid any CDP `Runtime` use. Mapping the
 # already-persisted `tier` (on `AgentRunCreateRequest` / `SessionOpenRequest` /
 # `ScrapeRequest`) to the fusion engine's `no_runtime` flag is what makes the
@@ -47,6 +56,12 @@ def stealth_from_tier(tier: str) -> bool:
 class NavigateAction:
     url: str
     timeout_ms: int = 30_000
+    wait_until: NavigateWaitUntil = "domcontentloaded"
+    referer: str | None = None
+    """Overrides the `Referer` header (and the `Sec-Fetch-Site` Chrome derives
+    from it) for this navigation. Used by the protected scrape path to present a
+    plausible organic-search landing instead of a cold, refererless deep-link.
+    `None` leaves Chrome's own referer behaviour."""
     terminates_sequence: bool = True
 
 
