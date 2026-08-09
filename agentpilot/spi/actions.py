@@ -278,3 +278,16 @@ class ActionResult:
     policy. Not set by `NewTabAction`/`SwitchTabAction` themselves -- those
     are explicit, caller-driven tab changes, not "the ground shifted under
     you" signals this field exists to carry."""
+    status_code: int | None = None
+    """HTTP status of the batch's navigation response (when one occurred), so
+    callers can populate `DocumentMetadata.status_code` without a second fetch.
+    `None` for batches that didn't navigate or whose response was unavailable."""
+    soft_verdict: str | None = None
+    """A CRAWL-scope block-detection verdict (`too_small`/`rate_limited`/
+    `wrong_geo`) that did NOT raise `ChallengeDetected` -- the page rendered and
+    its content is returned, but the caller may choose a cheap same-identity
+    retry (Pulsar's CRAWL retry scope). `None` when the page classified OK or a
+    hard PRIVACY wall was raised instead."""
+    soft_weight: int = 0
+    """The burn weight of `soft_verdict` (0 when none), for the session layer's
+    minor-warning accounting on a retryable soft failure."""

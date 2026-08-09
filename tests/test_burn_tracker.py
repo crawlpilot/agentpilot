@@ -6,7 +6,11 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
-from agentpilot.identity.burn_tracker import MAX_WARNINGS, BurnTracker
+from agentpilot.identity.burn_tracker import (
+    MAX_WARNINGS,
+    MINOR_WARNING_FACTOR,
+    BurnTracker,
+)
 from agentpilot.spi.identity import IdentityKey
 
 IDENTITY = IdentityKey(tenant="t", domain="example.com", name="alice")
@@ -42,12 +46,27 @@ async def test_zero_weight_block_is_a_noop(tracker: BurnTracker) -> None:
     assert await tracker.warnings(IDENTITY) == 0
 
 
+async def test_minor_warnings_convert_to_one_real_warning(tracker: BurnTracker) -> None:
+    # The first FACTOR-1 minor blocks don't touch the real counter...
+    for _ in range(MINOR_WARNING_FACTOR - 1):
+        assert await tracker.record_minor_block(IDENTITY) == 0
+    # ...the FACTOR-th converts to exactly one real warning and resets the minor.
+    assert await tracker.record_minor_block(IDENTITY) == 1
+    # And the cycle restarts from zero minor warnings.
+    assert await tracker.record_minor_block(IDENTITY) == 1
+    assert await tracker.warnings(IDENTITY) == 1
+
+
 async def test_reset_clears_the_counter(tracker: BurnTracker) -> None:
     await tracker.record_block(IDENTITY, MAX_WARNINGS)
+    await tracker.record_minor_block(IDENTITY)
     assert await tracker.is_burned(IDENTITY) is True
     await tracker.reset(IDENTITY)
     assert await tracker.warnings(IDENTITY) == 0
     assert await tracker.is_burned(IDENTITY) is False
+    # Minor counter is cleared too: a fresh cycle needs the full factor again.
+    for _ in range(MINOR_WARNING_FACTOR - 1):
+        assert await tracker.record_minor_block(IDENTITY) == 0
 
 
 async def test_survives_a_fresh_tracker_instance_same_redis() -> None:

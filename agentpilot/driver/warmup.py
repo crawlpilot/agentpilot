@@ -30,8 +30,8 @@ from typing import Any
 import structlog
 from patchright.async_api import Page
 
-from agentpilot.driver import block_detect
 from agentpilot.driver.humanize import DelayPolicy
+from agentpilot.extraction import block_detect
 
 log = structlog.get_logger(__name__)
 

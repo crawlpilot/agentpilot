@@ -89,3 +89,25 @@ def test_apple_silicon_reports_arm_architecture() -> None:
     assert fp.generate("x", region="GB").ch_architecture == "arm"
     assert fp.generate("x", region="US").ch_architecture == "x86"
     assert '"architecture": "arm"' in fp.generate("x", region="GB").init_script()
+
+
+def test_launch_args_match_screen_and_omit_patchright_owned_flags() -> None:
+    f = fp.generate("x", region="US")
+    args = f.launch_args()
+    # Window size matches the pinned screen (coherence with window.screen).
+    assert f"--window-size={f.screen.width},{f.screen.height}" in args
+    # We must never pass a --disable-blink-features flag: Patchright only injects
+    # its AutomationControlled patch when none is present.
+    assert not any("disable-blink-features" in a for a in args)
+    # And we don't duplicate flags Patchright already owns.
+    for owned in ("--no-first-run", "--disable-sync", "--disable-background-networking"):
+        assert owned not in args
+
+
+def test_init_script_pins_window_screen() -> None:
+    f = fp.generate("x", region="US")
+    script = f.init_script()
+    assert "window.screen" in script
+    assert str(f.screen.width) in script
+    assert str(f.screen.avail_height) in script
+    assert "devicePixelRatio" in script

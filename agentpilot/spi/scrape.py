@@ -44,6 +44,20 @@ class ScrapeOptions:
     screenshot: bool = False
     full_page_screenshot: bool = False
     extract: ExtractConfig | None = None
+    block_images: bool = False
+    """Shorthand: block image/media/font requests (a common speed/bandwidth win
+    -- a scraper rarely needs pixels). Expands into `block_resource_types` at the
+    driver. Off by default (no interception, unchanged behavior)."""
+    block_resource_types: tuple[str, ...] = ()
+    """Playwright `request.resource_type` values to abort during the scrape
+    (e.g. `("image", "media", "font", "stylesheet")`). Never include `script`,
+    `xhr`, `fetch`, or `document` -- JS-rendered content and Akamai's sensor
+    depend on them. Ported from Pulsar's `Network.setBlockedURLs` /
+    `BrowserSettings.blockImages`, via Patchright's `context.route`. Empty by
+    default (no interception)."""
+    block_hosts: tuple[str, ...] = ()
+    """Substrings matched against each request URL; a match aborts the request
+    (analytics/beacon hosts, third-party trackers). Empty by default."""
 
 
 @dataclass

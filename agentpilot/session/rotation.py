@@ -8,9 +8,11 @@ Two rotation policies, selectable per run:
   profile (cookies/logged-in session preserved). Resets health + in-memory
   browser state; cheap; weak against persistent fingerprinting.
 - FRESH: also wipe the identity's profile dir, so the next open starts from a
-  clean browser identity to the site. (Proxy rotation is a separate follow-up:
-  `ProxyPinner._pick` is deterministic per identity, so a genuinely different
-  egress IP needs a pinner change; FRESH rotates the profile only for now.)
+  clean browser identity to the site. Egress-IP rotation is now available too:
+  `ProxyPinner.rotate(identity)` moves a warm identity to a different endpoint,
+  and `run_ephemeral_scrape._retire_warm` calls it when a warm identity is
+  burned -- so a PRIVACY reset rotates profile + proxy together (Pulsar's model),
+  not the profile alone.
 """
 
 from __future__ import annotations

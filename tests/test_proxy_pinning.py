@@ -32,6 +32,31 @@ async def test_get_or_assign_is_stable_across_repeated_calls(pinner: ProxyPinner
     assert first == second
 
 
+async def test_rotate_moves_to_a_different_endpoint(pinner: ProxyPinner) -> None:
+    first = await pinner.get_or_assign(IDENTITY)
+    rotated = await pinner.rotate(IDENTITY)
+    assert rotated is not None
+    assert rotated != first  # a genuinely different egress IP
+    # ...and the new pin sticks on subsequent reads.
+    assert await pinner.get_or_assign(IDENTITY) == rotated
+
+
+async def test_rotate_with_single_endpoint_pool_is_stable() -> None:
+    solo = [ProxyEndpoint(scheme="http", host="only.example.com", port=8080)]
+    pinner = ProxyPinner(fakeredis.aioredis.FakeRedis(), solo)
+    first = await pinner.get_or_assign(IDENTITY)
+    # Nothing to rotate to -- the single endpoint stays pinned.
+    assert await pinner.rotate(IDENTITY) == first
+
+
+async def test_release_drops_the_pin(pinner: ProxyPinner) -> None:
+    first = await pinner.get_or_assign(IDENTITY)
+    await pinner.release(IDENTITY)
+    # After release the pin is re-derived from scratch (deterministic -> same),
+    # but the key was genuinely gone: assert it re-assigns cleanly.
+    assert await pinner.get_or_assign(IDENTITY) == first
+
+
 async def test_get_or_assign_survives_a_fresh_pinner_instance_same_redis() -> None:
     redis = fakeredis.aioredis.FakeRedis()
     first = await ProxyPinner(redis, POOL).get_or_assign(IDENTITY)

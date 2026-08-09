@@ -18,9 +18,11 @@ this module in the layering (`gateway -> session -> identity -> ... -> spi`)
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,6 +35,7 @@ from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
 from agentpilot.session.acquire import acquire_validated
+from agentpilot.session.http_fetch import fetch_via_http
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
 from agentpilot.spi import actions as spi_actions
@@ -58,11 +61,37 @@ _ESCALATION: dict[str, tuple[str, ...]] = {
     # identity, so it also gets a new proxy pick and a new pinned fingerprint --
     # the PRIVACY-scope rotation ported from `BrowserResponseHandlerImpl.kt`.
     # An explicitly requested tier does *not* auto-escalate: the caller chose it.
+    # `basic` fetches over plain HTTP first (no browser) and, only if that hits a
+    # hard wall, escalates to the real `stealth` browser -- the cheap-first path.
     "auto": ("stealth", "enhanced"),
-    "basic": ("basic",),
+    "basic": ("basic", "stealth"),
     "stealth": ("stealth",),
     "enhanced": ("enhanced",),
 }
+
+# The `basic` HTTP fast-path fetcher seam (dependency-injected for tests). Must
+# match `http_fetch.fetch_via_http`'s keyword signature.
+HttpFetcher = Callable[..., Awaitable[ActionResult]]
+
+_DEFAULT_CRAWL_RETRY_MAX = 2
+"""How many times a *soft* (CRAWL-scope) verdict -- thin/rate-limited/wrong-geo,
+which returned content rather than raising -- is retried on the same tier before
+the page is accepted as-is. Pulsar re-queues CRAWL retries in the scheduler; a
+synchronous scrape instead retries in place a bounded number of times."""
+
+_DEFAULT_RETRY_DELAY_S = 5.0
+"""Base backoff between soft retries -- Walmart's cadence (`WalmartCrawler
+.retryDelayPolicy`: ~10 s for the first couple of retries). Injectable (tests
+pass 0.0) so the unit suite doesn't actually sleep."""
+
+
+def _retry_delay_s(attempt: int, verdict: str | None, base: float) -> float:
+    """Backoff before a soft-verdict retry: linear in the attempt number, with a
+    longer wait for `rate_limited` (a fresh identity/IP needs time to matter)."""
+    if base <= 0:
+        return 0.0
+    factor = 2.0 if verdict == "rate_limited" else 1.0
+    return base * factor * attempt
 
 
 def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
@@ -143,6 +172,9 @@ async def run_ephemeral_scrape(
     timezone_id: str | None = None,
     warm_pool: WarmPool | None = None,
     burn_tracker: BurnTracker | None = None,
+    crawl_retry_max: int = _DEFAULT_CRAWL_RETRY_MAX,
+    retry_delay_base_s: float = _DEFAULT_RETRY_DELAY_S,
+    http_fetcher: HttpFetcher | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -213,6 +245,7 @@ async def run_ephemeral_scrape(
         user_agent: str | None = None
         init_script: str | None = None
         extra_http_headers: dict[str, str] | None = None
+        extra_launch_args: list[str] | None = None
         if protected:
             # Pin one coherent fingerprint to this identity for life. When the
             # resolved proxy declares an exit-IP country, seed the fingerprint
@@ -228,6 +261,7 @@ async def run_ephemeral_scrape(
             # Sec-CH-UA / navigator.userAgentData / UA all agree (the trio Akamai
             # cross-checks). Without this the header leaked the real, newer Chrome.
             extra_http_headers = fp.client_hint_headers()
+            extra_launch_args = fp.launch_args()
             eff_locale = locale or fp.geo.locale
             eff_timezone = timezone_id or fp.geo.timezone_id
         # `enhanced` is the top rung: request headful (the driver runs it under
@@ -249,6 +283,12 @@ async def run_ephemeral_scrape(
             user_agent=user_agent,
             init_script=init_script,
             extra_http_headers=extra_http_headers,
+            extra_launch_args=extra_launch_args,
+            # Protected tiers interact on the slow, most-human STEALTH timing
+            # table (click/fill/type/gap); other tiers keep the default cadence.
+            interact_profile="stealth" if protected else None,
+            block_resource_types=block_resource_types,
+            block_hosts=block_hosts,
         )
         # No vault load/restore: cookie persistence for the warm case comes
         # from the on-disk profile dir surviving teardown (below), not from
@@ -266,10 +306,55 @@ async def run_ephemeral_scrape(
     referer = _search_engine_referer(url) if protected else None
     batch = _build_batch(url, options, referer=referer)
 
+    # Protected scrapes pin a residential exit; a warm identity being retired
+    # rotates within that same tier (see `_retire_warm`).
+    warm_proxy_tier = "residential" if protected else None
+
+    # Resource blocking (default off). `block_images` expands to the safe media
+    # set; scripts/xhr/fetch/document are never blocked (JS content + Akamai
+    # sensor need them).
+    _block_types = set(options.block_resource_types)
+    if options.block_images:
+        _block_types |= {"image", "media", "font"}
+    block_resource_types = tuple(sorted(_block_types)) or None
+    block_hosts = tuple(options.block_hosts) or None
+
+    fetcher = http_fetcher or fetch_via_http
+
+    async def _http_attempt(identity: IdentityKey) -> ActionResult:
+        # The `basic` rung: a plain HTTP GET, no browser. Coherent UA + Client
+        # Hints from a pinned fingerprint (httpx's default UA is an instant
+        # block); proxy resolved the same way the browser path would. Raises
+        # `ChallengeDetected` on a hard wall so the loop escalates to `stealth`.
+        proxy = None
+        if proxy_pinner is not None:
+            proxy = await (
+                proxy_pinner.get_or_assign(identity, tier=None)
+                if warm
+                else proxy_pinner.pick_ephemeral(identity, tier=None)
+            )
+        fp = generate_fingerprint(identity.slug(), region=proxy.country if proxy else None)
+        headers = {
+            "User-Agent": fp.user_agent,
+            "Accept-Language": ", ".join(fp.geo.languages),
+            **fp.client_hint_headers(),
+        }
+        return await fetcher(
+            url=url,
+            formats=_effective_formats(options),
+            options=options,
+            headers=headers,
+            proxy=proxy,
+            timeout_ms=options.timeout_ms,
+        )
+
     async def _attempt(identity: IdentityKey, attempt_tier: str) -> tuple[ActionResult, str]:
         # One acquire -> execute -> teardown. Raises `ChallengeDetected` (from
         # the driver's post-navigate body check) straight through the finally,
         # so the caller can escalate. Returns `(result, node_id)`.
+        if attempt_tier == "basic":
+            # HTTP fast-path -- no browser context to acquire or tear down.
+            return await _http_attempt(identity), "http"
         ctx, _lease = await acquire_validated(
             registry=registry,
             driver=driver,
@@ -294,11 +379,15 @@ async def run_ephemeral_scrape(
                     delete_profile_dir(profiles_root, identity)
 
     async def _retire_warm(identity: IdentityKey) -> None:
-        # A burned warm identity is started fresh: drop its cookies/profile and
-        # clear its warning counter, so the next open is a clean first visit.
+        # A burned warm identity is started fresh: drop its cookies/profile,
+        # clear its warning counter, AND rotate its pinned egress IP so the next
+        # open is a clean first visit from a *different* exit -- Pulsar's PRIVACY
+        # reset rotates fingerprint + proxy together, not the profile alone.
         delete_profile_dir(profiles_root, identity)
         if burn_tracker is not None:
             await burn_tracker.reset(identity)
+        if proxy_pinner is not None:
+            await proxy_pinner.rotate(identity, tier=warm_proxy_tier)
 
     # Burn accounting applies only to warm identities (a throwaway is one-shot
     # and deleted on teardown regardless). Retire a warm identity that is
@@ -316,18 +405,51 @@ async def run_ephemeral_scrape(
     used_node_id = "unknown"
     last_challenge: ChallengeDetected | None = None
     used_identity: IdentityKey | None = None
+    # Two nested loops mirror Pulsar's retry-scope split: the outer loop climbs
+    # the tier ladder on a hard PRIVACY wall (fresh identity => new proxy +
+    # fingerprint); the inner loop retries the *same* tier on a soft CRAWL-scope
+    # verdict (thin/rate-limited page that still rendered) before accepting it.
     for attempt_tier in attempts:
-        attempt_identity = _make_identity()
-        try:
-            result, used_node_id = await _attempt(attempt_identity, attempt_tier)
+        crawl_tries = 0
+        while True:
+            attempt_identity = _make_identity()
+            try:
+                attempt_result, node_id = await _attempt(attempt_identity, attempt_tier)
+            except ChallengeDetected as exc:
+                last_challenge = exc
+                log.info(
+                    "ephemeral_scrape.challenge_escalate",
+                    url=url,
+                    tier=attempt_tier,
+                    scope=exc.scope,
+                    detail=str(exc),
+                )
+                break  # hard wall -> next tier with a fresh identity
+            if attempt_result.soft_verdict and crawl_tries < crawl_retry_max:
+                crawl_tries += 1
+                # A warm identity's soft failures accrue minor warnings (5 => 1
+                # real warning), so a run of thin pages eventually retires it.
+                if warm and burn_tracker is not None:
+                    await burn_tracker.record_minor_block(attempt_identity)
+                log.info(
+                    "ephemeral_scrape.soft_retry",
+                    url=url,
+                    tier=attempt_tier,
+                    verdict=attempt_result.soft_verdict,
+                    attempt=crawl_tries,
+                )
+                await asyncio.sleep(
+                    _retry_delay_s(crawl_tries, attempt_result.soft_verdict, retry_delay_base_s)
+                )
+                continue  # same tier, same-scope retry
+            # Accept: a clean page, or a soft verdict whose retries are spent
+            # (return the content best-effort rather than fail on a non-hard tell).
+            result, used_node_id = attempt_result, node_id
             used_tier = attempt_tier
             used_identity = attempt_identity
             break
-        except ChallengeDetected as exc:
-            last_challenge = exc
-            log.info(
-                "ephemeral_scrape.challenge_escalate", url=url, tier=attempt_tier, detail=str(exc)
-            )
+        if result is not None:
+            break
     if result is None:
         # Every tier on the ladder hit a wall. Charge the warm identity's burn
         # counter and retire it if it crossed the threshold, then surface the
@@ -404,7 +526,7 @@ async def run_ephemeral_scrape(
         screenshot_artifact_id=None,
         metadata=DocumentMetadata(
             title=result.page_title,
-            status_code=None,
+            status_code=result.status_code,
             tier_used=used_tier,
             node_id=used_node_id,
             duration_ms=duration_ms,

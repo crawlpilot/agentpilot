@@ -22,17 +22,28 @@ from __future__ import annotations
 
 import enum
 import re
+from typing import Protocol
 
 
 class Verdict(enum.Enum):
     OK = "ok"
+    # Graduated robot-check severities, ported from Pulsar's ROBOT_CHECK /
+    # ROBOT_CHECK_2 / ROBOT_CHECK_3 (Htmls.kt:55-57). Higher severity carries a
+    # heavier burn weight so a strong tell (a per-site checker's confident block,
+    # e.g. Walmart's /blocked wall) retires an identity in fewer hits than an
+    # ambiguous one. All three are PRIVACY-scope (full rotation).
     ROBOT_CHECK = "robot_check"  # CAPTCHA / JS challenge / Akamai sensor wall
+    ROBOT_CHECK_2 = "robot_check_2"  # a stronger robot-check tell
+    ROBOT_CHECK_3 = "robot_check_3"  # a definitive block wall (per-site checker)
     FORBIDDEN = "forbidden"  # hard 403 / Access Denied
     RATE_LIMITED = "rate_limited"  # 429
     WRONG_GEO = "wrong_geo"  # served, but wrong country/district/lang
     TOO_SMALL = "too_small"  # rendered, but suspiciously thin
     EMPTY = "empty"  # blank / no-body / no-anchor
     NOT_FOUND = "not_found"  # genuine 404, do not retry
+
+
+_ROBOT_CHECKS = frozenset({Verdict.ROBOT_CHECK, Verdict.ROBOT_CHECK_2, Verdict.ROBOT_CHECK_3})
 
 
 class Scope(enum.Enum):
@@ -63,10 +74,9 @@ _CHALLENGE_MARKERS = (
     "attention required",
 )
 
-# --- Amazon-style CAPTCHA (AmazonHtmlIntegrityChecker.kt:120): a short page
-# carrying this exact prompt is a robot check.
-_AMAZON_CAPTCHA = "type the characters you see in this image"
-_AMAZON_ROBOT_MAX_LEN = 150_000
+# Amazon-style CAPTCHA and other site-specific tells now live in
+# `agentpilot.extraction.site_checkers` (installed into the chain at the bottom
+# of this module), not inline here.
 
 # Below this, a "rendered" page is almost certainly a stub/wall, not content
 # (generic HtmlIntegrityChecker "too small"; Amazon uses 500 KiB / 250 KiB for
@@ -88,6 +98,41 @@ def is_abck_valid(abck_cookie_value: str | None) -> bool:
     return _ABCK_INVALID.search(abck_cookie_value) is None
 
 
+class SiteChecker(Protocol):
+    """A per-site block/integrity checker -- a port of Pulsar's
+    `HtmlIntegrityChecker` (`HtmlIntegrityChecker.kt:27-30`). `is_relevant`
+    gates it by URL; `check` returns a `Verdict` when it has an opinion (a
+    site-specific redirect/captcha/undersize tell) or `None` to defer to the
+    next checker / the generic classifier. Registered checkers run *before* the
+    generic markers (Pulsar's `addFirst`), so a site's own definitive signal
+    (e.g. Walmart's `/blocked` wall -> ROBOT_CHECK_3) wins."""
+
+    def is_relevant(self, url: str) -> bool: ...
+
+    def check(self, *, html: str | None, url: str, status: int | None) -> Verdict | None: ...
+
+
+_SITE_CHECKERS: list[SiteChecker] = []
+
+
+def register_site_checker(checker: SiteChecker) -> None:
+    """Append a per-site checker to the chain (Pulsar `ChainedHtmlIntegrityChecker
+    .addLast`). Idempotent per instance is not enforced -- callers install once."""
+    _SITE_CHECKERS.append(checker)
+
+
+def _site_verdict(html: str | None, url: str, status: int | None) -> Verdict | None:
+    """First non-OK verdict from a relevant site checker, or `None` if none has
+    an opinion (`ChainedHtmlIntegrityChecker.kt:90-96`)."""
+    for checker in _SITE_CHECKERS:
+        if not checker.is_relevant(url):
+            continue
+        verdict = checker.check(html=html, url=url, status=status)
+        if verdict is not None and verdict is not Verdict.OK:
+            return verdict
+    return None
+
+
 def classify_page(
     *,
     html: str | None,
@@ -96,11 +141,10 @@ def classify_page(
 ) -> Verdict:
     """Pure classifier: `(html, url, status) -> Verdict`. Status is the primary
     signal when present, but body markers win for the 200-body walls Akamai and
-    Cloudflare serve. Order matters -- most-specific block signals first, then
-    the generic empty/too-small fallbacks, then OK."""
+    Cloudflare serve. Order matters -- hard status, then per-site checkers, then
+    the generic provider walls, then the empty/too-small fallbacks, then OK."""
 
     body = (html or "").lower()
-    lurl = url.lower()
 
     # Hard status signals first.
     if status == 404:
@@ -108,21 +152,27 @@ def classify_page(
     if status == 429:
         return Verdict.RATE_LIMITED
 
+    # Per-site checkers (Pulsar addFirst): host-aware redirect/captcha/undersize
+    # tells that the generic markers can't see (silent redirects to a block URL,
+    # per-page-type minimum content size).
+    site_verdict = _site_verdict(html, url, status)
+    if site_verdict is not None:
+        return site_verdict
+
     # Akamai / Cloudflare walls -- often 200, so check the body regardless.
     if any(m in body for m in _AKAMAI_MARKERS):
         return Verdict.FORBIDDEN
     if any(m in body for m in _CHALLENGE_MARKERS):
         return Verdict.ROBOT_CHECK
 
-    # Walmart-style URL / body tells (WalmartCrawler.kt:33-41).
-    if "blocked" in lurl:
+    # Generic redirect-to-block / forbidden-body tells (a site checker upgrades
+    # these to a heavier severity for hosts it knows; this is the fallback for
+    # everything else). WalmartCrawler.kt:33-41.
+    lurl = url.lower()
+    if "/blocked" in lurl or "blocked?" in lurl or "/verify" in lurl:
         return Verdict.ROBOT_CHECK
     if "403 forbidden" in body:
         return Verdict.FORBIDDEN
-
-    # Amazon-style CAPTCHA: a *short* page carrying the prompt.
-    if len(body) < _AMAZON_ROBOT_MAX_LEN and _AMAZON_CAPTCHA in body:
-        return Verdict.ROBOT_CHECK
 
     # Generic forbidden after body checks (a 403 with no known wall markers).
     if status == 403:
@@ -144,6 +194,8 @@ def classify_page(
 # 1 (self-healing). FORBIDDEN is an instant retire (weight == MAX_WARNINGS).
 MAX_WARNINGS = 8
 
+# Weights ported from `AbstractPrivacyContext.afterRun` (:311-346): robot checks
+# 1/2/3 by severity, wrong-geo +2, empty +3, forbidden an instant retire.
 _WARNING_WEIGHT = {
     Verdict.OK: 0,
     Verdict.NOT_FOUND: 0,
@@ -151,10 +203,15 @@ _WARNING_WEIGHT = {
     Verdict.WRONG_GEO: 2,
     Verdict.EMPTY: 3,
     Verdict.RATE_LIMITED: 2,
-    Verdict.ROBOT_CHECK: 2,
+    Verdict.ROBOT_CHECK: 1,
+    Verdict.ROBOT_CHECK_2: 2,
+    Verdict.ROBOT_CHECK_3: 3,
     Verdict.FORBIDDEN: MAX_WARNINGS,  # instant retire
 }
 
+# Scope ported from `BrowserResponseHandlerImpl.createProtocolStatusForBrokenContent`
+# (:143-163): robot/forbidden/empty tear the identity down (PRIVACY); small /
+# rate-limited / wrong-geo are cheap same-identity retries (CRAWL).
 _SCOPE = {
     Verdict.OK: Scope.NONE,
     Verdict.NOT_FOUND: Scope.NONE,
@@ -163,6 +220,8 @@ _SCOPE = {
     Verdict.RATE_LIMITED: Scope.CRAWL,
     Verdict.EMPTY: Scope.PRIVACY,
     Verdict.ROBOT_CHECK: Scope.PRIVACY,
+    Verdict.ROBOT_CHECK_2: Scope.PRIVACY,
+    Verdict.ROBOT_CHECK_3: Scope.PRIVACY,
     Verdict.FORBIDDEN: Scope.PRIVACY,
 }
 
@@ -176,8 +235,17 @@ def retry_scope(verdict: Verdict) -> Scope:
 
 
 def is_blocked(verdict: Verdict) -> bool:
-    """A verdict that should raise `ChallengeDetected` rather than return
-    content -- the robot/forbidden/challenge family, not the soft
-    too-small/wrong-geo signals a retry might still recover from."""
+    """A hard wall (PRIVACY scope): the robot/forbidden/empty family that should
+    raise `ChallengeDetected` and rotate the whole identity, not the soft
+    too-small/wrong-geo/rate-limited signals a same-identity retry may recover
+    from (those are surfaced as CRAWL-scope soft verdicts instead)."""
 
-    return verdict in (Verdict.ROBOT_CHECK, Verdict.FORBIDDEN)
+    return retry_scope(verdict) is Scope.PRIVACY
+
+
+# Install the built-in per-site checkers into the chain. Done at the bottom so
+# every name `site_checkers` imports from this module is already defined; the
+# import is deferred here (not at the top) to avoid a circular import.
+from agentpilot.extraction import site_checkers as _site_checkers  # noqa: E402
+
+_site_checkers.install_default_site_checkers()

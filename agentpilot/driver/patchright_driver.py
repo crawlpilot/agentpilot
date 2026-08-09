@@ -48,7 +48,7 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from agentpilot.driver import block_detect, humanize, warmup
+from agentpilot.driver import humanize, warmup
 from agentpilot.driver.aria_parse import (
     collect_leaf_refs,
     filter_snapshot,
@@ -64,6 +64,7 @@ from agentpilot.driver.live_view import (
 from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.driver.ref_cache import RefCache
 from agentpilot.egress.policy import apply_baseline
+from agentpilot.extraction import block_detect
 from agentpilot.extraction.extractor import extract
 from agentpilot.observability.metrics import (
     context_leak_warnings_total,
@@ -113,6 +114,21 @@ log = structlog.get_logger(__name__)
 
 _REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
 
+# Interactive actions that get a human `gap` pause *before* them when they
+# follow another action in the same batch -- the between-actions dwell Pulsar
+# applies (InteractSettings `gap`). Navigate/Extract/Snapshot/Wait are excluded
+# so a plain scrape batch (Navigate -> Extract) pays no extra latency; only
+# genuine interaction sequences (click, fill, press, scroll, hover, select) are
+# paced.
+_GAP_BEFORE = (
+    ClickAction,
+    FillAction,
+    SelectOptionAction,
+    HoverAction,
+    PressAction,
+    ScrollAction,
+)
+
 _BOUNDING_BOX_TIMEOUT_MS = 3_000
 """Bounded well below Playwright's 30s default -- see `_resolve_ref`'s and
 `_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
@@ -146,11 +162,6 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
 # regularity. These add human-plausible variance without changing what an
 # action ultimately does. All keyed off `random`, seeded per-process, so
 # tests that need determinism can `random.seed()`.
-
-_TYPE_DELAY_MS_RANGE = (90, 240)
-"""Per-character keystroke delay for `FillAction`, matching the range a
-sibling project documented for realistic typing (see CLAUDE.md's
-`randomDelayMillis("type")` note)."""
 
 _MOUSE_MOVE_STEPS_RANGE = (8, 18)
 """Intermediate `mouse.move` steps before a click -- Playwright interpolates
@@ -274,6 +285,12 @@ class _Context:
     health: _ContextHealth = field(default_factory=_ContextHealth)
     """Per-context health tallies (Wave 0 instrumentation) -- see
     `_ContextHealth`. Updated in `execute()`; not yet consumed by any policy."""
+    delay_policy: humanize.DelayPolicy = humanize.DEFAULT
+    """The human-timing preset (`humanize.DelayPolicy`) this context's
+    interactions sample from -- click/fill/type keystroke delays and the
+    between-actions `gap`. Set from the scrape tier at `open()` (protected tiers
+    get STEALTH), so the tier actually modulates interaction cadence rather than
+    every context using one hardcoded set of ranges."""
     expecting_explicit_tab: bool = False
     """Set around `_create_tab`'s own `context.new_page()` call.
     `new_page()` fires the exact same context-level `"page"` event an
@@ -413,6 +430,10 @@ class PatchrightDriver:
         user_agent: str | None = None,
         init_script: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
+        extra_launch_args: list[str] | None = None,
+        interact_profile: str | None = None,
+        block_resource_types: tuple[str, ...] | None = None,
+        block_hosts: tuple[str, ...] | None = None,
     ) -> ContextRef:
         apply_baseline(egress)
         if headful:
@@ -447,6 +468,13 @@ class PatchrightDriver:
             # so Chrome's origin-check middleware (which only blocks WS
             # upgrades carrying a *mismatched* `Origin`) never triggers.
             launch_args.append(f"--remote-debugging-port={cdp_port}")
+
+        if extra_launch_args:
+            # Curated hardening flags (window geometry + suppressed background
+            # chatter) from the pinned fingerprint. Additive to Patchright's own
+            # defaults; we never pass `--disable-blink-features` here so
+            # Patchright still injects its AutomationControlled patch.
+            launch_args.extend(extra_launch_args)
 
         # Only pass locale/timezone through when the caller actually set
         # them -- Playwright treats an explicit `None` and an omitted kwarg
@@ -490,6 +518,10 @@ class PatchrightDriver:
             # wire-level hints agree with the spoofed UA rather than leaking the
             # real (newer) Chrome the header would otherwise carry.
             await context.set_extra_http_headers(extra_http_headers)
+        if block_resource_types or block_hosts:
+            await self._install_resource_blocking(
+                context, tuple(block_resource_types or ()), tuple(block_hosts or ())
+            )
         if enable_cdp:
             assert cdp_port is not None
             await _wait_for_cdp_ready(cdp_port)
@@ -506,6 +538,9 @@ class PatchrightDriver:
             cdp_http_base=f"http://127.0.0.1:{cdp_port}" if enable_cdp else None,
             warmup=warmup,
             detect_blocks=detect_blocks,
+            delay_policy=(
+                humanize.by_name(interact_profile) if interact_profile else humanize.DEFAULT
+            ),
         )
 
         def _wire_page(pid: str, pg: Page) -> None:
@@ -676,6 +711,7 @@ class PatchrightDriver:
         succeeded = False
         try:
             stale = False
+            dispatched_any = False
             for action in actions:
                 consumes_ref = isinstance(action, _REF_CONSUMING) or (
                     isinstance(action, (WaitAction, ScrollAction)) and action.ref is not None
@@ -683,9 +719,15 @@ class PatchrightDriver:
                 if stale and consumes_ref:
                     result.sequence_aborted = True
                     break
+                # Human between-actions dwell before an interactive action that
+                # follows another -- paces a click/fill/press/scroll sequence the
+                # way a person does, without slowing plain navigate+extract scrapes.
+                if dispatched_any and isinstance(action, _GAP_BEFORE):
+                    await cctx.delay_policy.pause("gap")
                 try:
                     pre_url = live.page.url
                     await self._dispatch(cctx, live, action, result)
+                    dispatched_any = True
                 except TargetClosedError as exc:
                     # Belt-and-suspenders alongside `_wire_page`'s "close"
                     # listener above: that listener and the actual close can
@@ -810,16 +852,16 @@ class PatchrightDriver:
             locator = await self._resolve_ref(live, action.ref)
             if action.all:
                 for i in range(await locator.count()):
-                    await self._human_click(live, locator.nth(i))
+                    await self._human_click(live, locator.nth(i), cctx.delay_policy)
             else:
-                await self._human_click(live, locator)
+                await self._human_click(live, locator, cctx.delay_policy)
             if live.page.url != pre_click_url:
                 result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
             else:
                 result.verifications.append(f"clicked {action.ref}")
         elif isinstance(action, FillAction):
             locator = await self._resolve_ref(live, action.ref)
-            await self._human_fill(live, locator, action.text)
+            await self._human_fill(live, locator, action.text, cctx.delay_policy)
             # Read-back grounding: confirm the value actually landed in the
             # field rather than assuming success. Best-effort -- a field that
             # can't report its value must not fail the fill.
@@ -836,6 +878,7 @@ class PatchrightDriver:
             await locator.hover()
         elif isinstance(action, PressAction):
             await live.page.keyboard.press(action.key)
+            await cctx.delay_policy.pause("press")
         elif isinstance(action, ScrollAction):
             if action.ref is not None:
                 locator = await self._resolve_ref(live, action.ref)
@@ -936,6 +979,31 @@ class PatchrightDriver:
             return {}
         return result if isinstance(result, dict) else {}
 
+    async def _install_resource_blocking(
+        self, context: BrowserContext, resource_types: tuple[str, ...], hosts: tuple[str, ...]
+    ) -> None:
+        """Abort requests whose Playwright `resource_type` is in `resource_types`
+        or whose URL contains any of `hosts` -- the idiomatic Patchright
+        equivalent of Pulsar's `Network.setBlockedURLs` (`PulsarWebDriver.kt:643`).
+        Registered on the context so it covers every page. A route error must
+        never fail the request, so anything unexpected falls through to
+        `continue_()`."""
+
+        type_set = frozenset(resource_types)
+
+        async def _route(route: Any) -> None:
+            try:
+                req = route.request
+                if req.resource_type in type_set or any(h in req.url for h in hosts):
+                    await route.abort()
+                    return
+                await route.continue_()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await route.continue_()
+
+        await context.route("**/*", _route)
+
     async def _post_navigate(
         self, cctx: _Context, live: _Page, result: ActionResult, response: Any
     ) -> None:
@@ -951,6 +1019,7 @@ class PatchrightDriver:
         check silently returned as content."""
 
         status = response.status if response is not None else None
+        result.status_code = status
 
         if cctx.warmup:
             # STEALTH timing: warm-up only runs for protected targets. Never
@@ -964,14 +1033,28 @@ class PatchrightDriver:
                 html = await live.page.content()
             verdict = block_detect.classify_page(html=html, url=live.page.url, status=status)
             weight = block_detect.warning_weight(verdict)
+            scope = block_detect.retry_scope(verdict)
             if weight:
                 cctx.health.leak_warnings += weight
                 context_leak_warnings_total.labels(reason=verdict.value).inc()
-            if block_detect.is_blocked(verdict):
+            if scope is block_detect.Scope.PRIVACY:
+                # A hard wall: rotate the whole identity (fresh proxy+fingerprint).
                 raise ChallengeDetected(
-                    f"{verdict.value} at {live.page.url}", verdict=verdict.value, weight=weight
+                    f"{verdict.value} at {live.page.url}",
+                    verdict=verdict.value,
+                    weight=weight,
+                    scope="privacy",
                 )
-            if verdict is not block_detect.Verdict.OK:
+            if scope is block_detect.Scope.CRAWL:
+                # A soft failure: the page rendered, so return its content, but
+                # flag it so the session layer can choose a cheap same-identity
+                # retry (Pulsar's CRAWL retry scope) rather than rotate.
+                result.soft_verdict = verdict.value
+                result.soft_weight = weight
+                result.verifications.append(
+                    f"warning: page classified {verdict.value} (soft, retryable)"
+                )
+            elif verdict is not block_detect.Verdict.OK:
                 result.verifications.append(f"warning: page classified {verdict.value}")
             return
 
@@ -1016,13 +1099,16 @@ class PatchrightDriver:
             raise StaleRefError(ref, epoch_superseded=False)
         return locator
 
-    async def _human_click(self, live: _Page, locator: Locator) -> None:
+    async def _human_click(
+        self, live: _Page, locator: Locator, policy: humanize.DelayPolicy
+    ) -> None:
         """Approach the target over several interpolated `mouse.move` steps
         to a jittered point *inside* the element, then click -- versus
-        Playwright's default single teleport to the exact center. Best
-        effort: if the box can't be resolved quickly, fall straight through
-        to a plain `.click()` (which does its own actionability wait) rather
-        than failing the action for the sake of the flourish."""
+        Playwright's default single teleport to the exact center. A short
+        `click`-preset dwell precedes the click (settling on the target, as a
+        human does). Best effort: if the box can't be resolved quickly, fall
+        straight through to a plain `.click()` (which does its own actionability
+        wait) rather than failing the action for the sake of the flourish."""
 
         try:
             box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
@@ -1033,14 +1119,19 @@ class PatchrightDriver:
             ty = box["y"] + box["height"] * random.uniform(0.3, 0.7)
             with contextlib.suppress(Exception):
                 await live.page.mouse.move(tx, ty, steps=random.randint(*_MOUSE_MOVE_STEPS_RANGE))
+            await policy.pause("click")
         await locator.click()
 
-    async def _human_fill(self, live: _Page, locator: Locator, text: str) -> None:
-        """Clear, then type character-by-character with a randomized delay
-        *between* keystrokes -- versus `locator.fill()`'s single instantaneous
-        DOM write, which is a strong automation tell to keystroke-timing
-        telemetry. `fill("")` clears any existing value first; the final
-        field value is identical to what `fill(text)` would have produced."""
+    async def _human_fill(
+        self, live: _Page, locator: Locator, text: str, policy: humanize.DelayPolicy
+    ) -> None:
+        """Clear, then type character-by-character with a randomized inter-key
+        delay from the tier's `type` preset -- versus `locator.fill()`'s single
+        instantaneous DOM write, which is a strong automation tell to
+        keystroke-timing telemetry. The delay now scales with the tier (STEALTH
+        types slower than FAST) instead of one hardcoded range. `fill("")` clears
+        any existing value first; the final field value is identical to what
+        `fill(text)` would have produced."""
 
         await locator.fill("")
         if not text:
@@ -1048,7 +1139,7 @@ class PatchrightDriver:
         await locator.focus()
         for ch in text:
             await live.page.keyboard.type(ch)
-            await asyncio.sleep(random.uniform(*_TYPE_DELAY_MS_RANGE) / 1000)
+            await policy.pause("type")
 
     async def _capture_fused(self, live: _Page, *, no_runtime: bool):
         """Capture a fused `EnhancedDOMTreeNode` via the CDP fusion engine,

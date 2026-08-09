@@ -100,14 +100,36 @@ class Fingerprint:
 
     def context_kwargs(self) -> dict[str, str]:
         """Patchright `launch_persistent_context` kwargs that Playwright applies
-        natively (UA + locale + timezone + viewport). Screen/DPR go through CDP
-        `Emulation.setDeviceMetricsOverride` at the driver, not here."""
+        natively (UA + locale + timezone). Screen/DPR are pinned in JS via
+        `init_script` (patching `window.screen`/`devicePixelRatio`), not CDP
+        device-metrics -- the driver runs `no_viewport=True` with a real window,
+        which `Emulation.setDeviceMetricsOverride` would override."""
 
         return {
             "user_agent": self.user_agent,
             "locale": self.geo.locale,
             "timezone_id": self.geo.timezone_id,
         }
+
+    def launch_args(self) -> list[str]:
+        """Curated Chrome hardening flags that Patchright/Playwright does NOT
+        already pass (verified against its `chromiumSwitches`). We deliberately
+        omit everything Patchright owns -- above all
+        `--disable-blink-features=AutomationControlled`, which Patchright adds
+        itself only if no `--disable-blink-features` is present, so we never pass
+        one. `--window-size` matches the pinned screen so a headful window's
+        geometry agrees with the spoofed `window.screen`. Ported from
+        `Options.kt:69-127` / `BrowserSettings.kt:548-571`, filtered by Phase 0."""
+
+        return [
+            f"--window-size={self.screen.width},{self.screen.height}",
+            "--window-position=0,0",
+            "--mute-audio",
+            "--disable-client-side-phishing-detection",
+            "--disable-default-apps",
+            "--metrics-recording-only",
+            "--safebrowsing-disable-auto-update",
+        ]
 
     def init_script(self) -> str:
         """JS injected via `add_init_script` to pin the values Patchright does
@@ -122,6 +144,18 @@ class Fingerprint:
             "languages": list(self.geo.languages),
             "webglVendor": self.webgl.unmasked_vendor,
             "webglRenderer": self.webgl.unmasked_renderer,
+            # window.screen / devicePixelRatio, pinned to the device family so a
+            # headless (or differently-sized-host) context reports the same
+            # display geometry as the --window-size launch flag and the WebGL/UA
+            # blocks describe. window.screen otherwise leaks the real host size.
+            "screen": {
+                "width": self.screen.width,
+                "height": self.screen.height,
+                "availWidth": self.screen.avail_width,
+                "availHeight": self.screen.avail_height,
+                "colorDepth": self.screen.color_depth,
+                "devicePixelRatio": self.screen.device_pixel_ratio,
+            },
             # navigator.userAgentData, kept coherent with the spoofed UA and the
             # Sec-CH-UA headers (client_hint_headers). Patchright leaves this at
             # the *real* Chrome's values, which disagree with our pinned UA -- the
@@ -337,6 +371,25 @@ _INIT_SCRIPT_TEMPLATE = """
   };
   try { patchGL(WebGLRenderingContext && WebGLRenderingContext.prototype); } catch (e) {}
   try { patchGL(WebGL2RenderingContext && WebGL2RenderingContext.prototype); } catch (e) {}
+  // window.screen / devicePixelRatio -- pin display geometry to the device family.
+  const scr = cfg.screen;
+  if (scr) {
+    const defScreen = (prop, value) => {
+      try { Object.defineProperty(window.screen, prop, { get: () => value, configurable: true }); }
+      catch (e) {}
+    };
+    defScreen('width', scr.width);
+    defScreen('height', scr.height);
+    defScreen('availWidth', scr.availWidth);
+    defScreen('availHeight', scr.availHeight);
+    defScreen('colorDepth', scr.colorDepth);
+    defScreen('pixelDepth', scr.colorDepth);
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        get: () => scr.devicePixelRatio, configurable: true,
+      });
+    } catch (e) {}
+  }
   // navigator.userAgentData -- pin brands/platform/high-entropy to the same
   // Chrome build as the UA string + Sec-CH-UA headers. getHighEntropyValues
   // returns only the hints the caller asked for (Chrome's contract).

@@ -124,6 +124,41 @@ class ProxyPinner:
             raise RuntimeError(f"proxy pin for {identity.slug()!r} vanished immediately after set")
         return _deserialize(raw.decode() if isinstance(raw, bytes) else raw, identity)
 
+    async def rotate(
+        self, identity: IdentityKey, tier: str | None = None
+    ) -> ProxyEndpoint | None:
+        """Rotate a warm identity's pinned egress to a *different* endpoint --
+        the piece that makes a FRESH/burn rotation actually change the exit IP
+        (Pulsar's "PRIVACY reset rotates fingerprint + proxy together",
+        `ProxyContext.kt:211-237`). Without this the pin drop alone re-picks the
+        same deterministic endpoint. Picks deterministically from the healthy
+        pool *excluding* the current pin, then overwrites the pin. Returns the
+        new endpoint, or `None` if no pool is configured. When only one endpoint
+        exists there's nothing to rotate to, so the pin is left as-is."""
+
+        key = f"{_KEY_PREFIX}{identity.slug()}"
+        pool = self._config.resolve(identity.tenant, tier)
+        if not pool:
+            return None
+        if self._health is not None:
+            healthy = [p for p in pool if not await self._health.is_retired(p)]
+            if healthy:
+                pool = healthy
+
+        raw = await self._redis.hget(key, _FIELD)
+        current_ser = (raw.decode() if isinstance(raw, bytes) else raw) if raw is not None else None
+        # Compare on the serialized form (config endpoints carry no sticky_key,
+        # so direct equality against the pinned/deserialized one would never match).
+        candidates = [p for p in pool if _serialize(p) != current_ser] or pool
+        new_ser = _serialize(self._pick_from(identity, candidates))
+        await self._redis.hset(key, _FIELD, new_ser)
+        return _deserialize(new_ser, identity)
+
+    async def release(self, identity: IdentityKey) -> None:
+        """Drop a warm identity's proxy pin entirely (next `get_or_assign`
+        re-picks from the pool). Used when an identity is torn down for good."""
+        await self._redis.delete(f"{_KEY_PREFIX}{identity.slug()}")
+
     async def pick_ephemeral(
         self, identity: IdentityKey, tier: str | None = None
     ) -> ProxyEndpoint:

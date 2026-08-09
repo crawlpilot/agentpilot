@@ -37,6 +37,10 @@ class BrowserDriver(Protocol):
         user_agent: str | None = None,
         init_script: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
+        extra_launch_args: list[str] | None = None,
+        interact_profile: str | None = None,
+        block_resource_types: tuple[str, ...] | None = None,
+        block_hosts: tuple[str, ...] | None = None,
     ) -> ContextRef:
         """`locale`/`timezone_id` (when set) override the browser context's
         reported `navigator.language`/`Accept-Language` and JS timezone --
@@ -64,7 +68,23 @@ class BrowserDriver(Protocol):
         (`set_extra_http_headers`) -- used to pin the always-sent Client-Hint
         headers (`Sec-CH-UA*`) to the same Chrome build as `user_agent`, so the
         wire-level hints don't contradict the spoofed UA (a WAF cross-check).
-        `None` leaves the browser's native headers."""
+        `None` leaves the browser's native headers.
+
+        `extra_launch_args` are appended to Chrome's command line -- curated
+        hardening flags (window geometry, suppressed background chatter) that
+        Patchright doesn't already pass. `None` leaves Patchright's own defaults
+        (which already include `--disable-blink-features=AutomationControlled`).
+
+        `interact_profile` names the human-timing preset
+        (`driver.humanize`: `"stealth"`/`"fast"`/`"default"`) this context's
+        click/fill/type keystroke delays and between-actions `gap` sample from,
+        so the scrape tier modulates interaction cadence. `None` -> the default
+        preset (unchanged timing for interactive/test callers).
+
+        `block_resource_types` / `block_hosts` abort matching requests (by
+        Playwright `resource_type` and by URL substring respectively) to save
+        bandwidth/time. Both `None`/empty -> no request interception (unchanged).
+        Callers must never block `script`/`xhr`/`fetch`/`document`."""
         ...
 
     async def close(self, ctx: ContextRef) -> None: ...
