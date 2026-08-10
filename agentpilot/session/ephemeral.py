@@ -35,7 +35,6 @@ from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
 from agentpilot.session.acquire import acquire_validated
-from agentpilot.session.http_fetch import fetch_via_http
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
 from agentpilot.spi import actions as spi_actions
@@ -319,13 +318,21 @@ async def run_ephemeral_scrape(
     block_resource_types = tuple(sorted(_block_types)) or None
     block_hosts = tuple(options.block_hosts) or None
 
-    fetcher = http_fetcher or fetch_via_http
-
     async def _http_attempt(identity: IdentityKey) -> ActionResult:
         # The `basic` rung: a plain HTTP GET, no browser. Coherent UA + Client
         # Hints from a pinned fingerprint (httpx's default UA is an instant
         # block); proxy resolved the same way the browser path would. Raises
         # `ChallengeDetected` on a hard wall so the loop escalates to `stealth`.
+        #
+        # `fetch_via_http` is imported lazily (not at module top) on purpose: it
+        # pulls in `agentpilot.extraction` -> `lxml`, which only the worker image
+        # bundles. The gateway imports this module (via its scrape route) but has
+        # no lxml and never runs a scrape, so a top-level import would crash it.
+        fetcher = http_fetcher
+        if fetcher is None:
+            from agentpilot.session.http_fetch import fetch_via_http
+
+            fetcher = fetch_via_http
         proxy = None
         if proxy_pinner is not None:
             proxy = await (
