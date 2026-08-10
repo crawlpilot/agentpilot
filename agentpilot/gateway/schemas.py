@@ -298,6 +298,13 @@ class MapRequest(BaseModel):
     include_subdomains: bool = False
     ignore_query_parameters: bool = False
     limit: int = 100_000
+    search: str | None = None
+    allow_external_links: bool = False
+    filter_by_path: bool = True
+    max_discovery_depth: int = Field(default=2, ge=0, le=10)
+    timeout: int | None = Field(default=None, gt=0)
+    """Overall discovery deadline in milliseconds; on expiry the route
+    returns HTTP 408 (mirrors Firecrawl's `MapTimeoutError`)."""
 
 
 class MapLinkOut(BaseModel):
@@ -311,6 +318,7 @@ class MapResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
     links: list[MapLinkOut]
+    warning: str | None = None
 
 
 # --- crawl (async, Postgres-queue-backed -- routes/crawl.py, P4) ---

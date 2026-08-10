@@ -23,6 +23,7 @@ function parseCommaList(value: string): string[] {
 export function PlaygroundMapTab() {
   const { apiKey } = useAuth()
   const [url, setUrl] = useState('')
+  const [search, setSearch] = useState('')
   const [limit, setLimit] = useState(100)
   const [sitemap, setSitemap] = useState<SitemapMode>('include')
   const [includeSubdomains, setIncludeSubdomains] = useState(false)
@@ -46,6 +47,7 @@ export function PlaygroundMapTab() {
     e.preventDefault()
     const trimmed = url.trim()
     if (!trimmed) return
+    const trimmedSearch = search.trim()
     map.mutate(
       {
         url: trimmed,
@@ -55,6 +57,7 @@ export function PlaygroundMapTab() {
         ignore_query_parameters: ignoreQueryParameters,
         include_paths: parseCommaList(includePaths),
         exclude_paths: parseCommaList(excludePaths),
+        ...(trimmedSearch ? { search: trimmedSearch } : {}),
       },
       {
         onSuccess: () => append({ endpoint: 'map', url: trimmed, status: 'success' }),
@@ -84,6 +87,16 @@ export function PlaygroundMapTab() {
             <RouteIcon className="size-4" />
             {map.isPending ? 'Mapping…' : 'Start mapping'}
           </Button>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="map-search">Search (optional)</Label>
+          <Input
+            id="map-search"
+            placeholder="Rank results by relevance, e.g. pricing"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         <div className="flex flex-wrap items-end gap-4">
@@ -158,6 +171,11 @@ export function PlaygroundMapTab() {
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {map.data ? `${map.data.links.length} links found` : 'Result'}
         </p>
+        {map.data?.warning ? (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            {map.data.warning}
+          </p>
+        ) : null}
         {map.data ? (
           map.data.links.length === 0 ? (
             <EmptyState title="No links found" description="Try a broader sitemap mode or a different URL." />

@@ -314,6 +314,11 @@ export interface MapRequest {
   include_subdomains?: boolean
   ignore_query_parameters?: boolean
   limit?: number
+  search?: string
+  allow_external_links?: boolean
+  filter_by_path?: boolean
+  max_discovery_depth?: number
+  timeout?: number
 }
 
 export interface MapLinkOut {
@@ -325,6 +330,7 @@ export interface MapLinkOut {
 export interface MapResponse {
   success: boolean
   links: MapLinkOut[]
+  warning?: string | null
 }
 
 // --- crawl (routes/crawl.py, async job -- POST creates, GET polls, DELETE cancels) ---

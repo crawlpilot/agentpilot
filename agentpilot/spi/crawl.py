@@ -52,6 +52,25 @@ class MapOptions:
     include_subdomains: bool = False
     ignore_query_parameters: bool = False
     limit: int = 100_000
+    search: str | None = None
+    """Relevance query -- when set, discovered links are re-ranked by cosine
+    similarity of their URL string against this query (port of Firecrawl's
+    `performCosineSimilarity`). Discovery itself is unchanged; this only
+    reorders the result set."""
+    allow_external_links: bool = False
+    filter_by_path: bool = True
+    """When the seed URL has a non-trivial path (not `/`), keep only links
+    whose path starts with it -- mirrors Firecrawl map-utils' `filterByPath`,
+    so mapping `example.com/blog` returns blog URLs, not the whole site.
+    Ignored when `allow_external_links` is set."""
+    max_discovery_depth: int = 2
+    """Depth bound for the recursive-crawl fallback (the driver-free
+    substitute for Firecrawl's search-engine/index sources): 0 = seed page
+    only, 1 = seed + its links' pages, etc."""
+    max_crawl_pages: int = 500
+    """Hard cap on pages the recursive fallback fetches, independent of
+    `limit` (which caps returned URLs) -- guards against runaway fan-out."""
+    timeout_ms: int | None = None
 
 
 @dataclass
