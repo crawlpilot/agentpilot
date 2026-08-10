@@ -9,6 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EmptyState } from '@/components/app/EmptyState'
 import { DocumentPreview } from '@/components/app/DocumentPreview'
 import { ScrapeOptionsFields, DEFAULT_SCRAPE_OPTIONS, type ScrapeOptionsValue } from '@/components/app/ScrapeOptionsFields'
+import { StringListField } from '@/components/app/StringListField'
+import { JsonTextareaField } from '@/components/app/JsonTextareaField'
+import { CopyButton } from '@/components/app/CopyButton'
 import { RecentRunsList } from '@/components/app/RecentRunsList'
 import { useCreateCrawl } from '@/hooks/useCreateCrawl'
 import { useCrawlStatus } from '@/hooks/useCrawlStatus'
@@ -17,7 +20,9 @@ import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { getCrawlStatus } from '@/lib/api/crawl'
-import type { CrawlJobStatus, DocumentOut, SitemapMode } from '@/lib/api/types'
+import type { CrawlJobStatus, DocumentOut, SitemapMode, WebhookEvent } from '@/lib/api/types'
+
+const WEBHOOK_EVENTS: WebhookEvent[] = ['started', 'page', 'completed', 'failed']
 
 function statusVariant(status: CrawlJobStatus): NonNullable<BadgeProps['variant']> {
   switch (status) {
@@ -48,9 +53,15 @@ export function PlaygroundCrawlTab() {
   const [ignoreQueryParameters, setIgnoreQueryParameters] = useState(false)
   const [delayMs, setDelayMs] = useState<number | null>(null)
   const [maxConcurrency, setMaxConcurrency] = useState(10)
+  const [includePaths, setIncludePaths] = useState<string[]>([])
+  const [excludePaths, setExcludePaths] = useState<string[]>([])
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([...WEBHOOK_EVENTS])
+  const [webhookHeaders, setWebhookHeaders] = useState<Record<string, unknown> | null>(null)
   const [scrapeOptions, setScrapeOptions] = useState<ScrapeOptionsValue>(DEFAULT_SCRAPE_OPTIONS)
 
   const [jobId, setJobId] = useState<string | null>(searchParams.get('id'))
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null)
   const [documents, setDocuments] = useState<Record<string, DocumentOut>>({})
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [paginated, setPaginated] = useState(false)
@@ -92,11 +103,14 @@ export function PlaygroundCrawlTab() {
     e.preventDefault()
     const trimmed = url.trim()
     if (!trimmed) return
+    const trimmedWebhook = webhookUrl.trim()
     createCrawl.mutate(
       {
         url: trimmed,
         limit,
         max_discovery_depth: maxDiscoveryDepth,
+        include_paths: includePaths,
+        exclude_paths: excludePaths,
         allow_external_links: allowExternalLinks,
         allow_subdomains: allowSubdomains,
         allow_backward_crawling: allowBackwardCrawling,
@@ -107,6 +121,13 @@ export function PlaygroundCrawlTab() {
         delay_ms: delayMs,
         max_concurrency: maxConcurrency,
         scrape_options: scrapeOptions,
+        webhook: trimmedWebhook
+          ? {
+              url: trimmedWebhook,
+              events: webhookEvents,
+              headers: (webhookHeaders as Record<string, string> | null) ?? {},
+            }
+          : null,
       },
       {
         onSuccess: (resp) => {
@@ -115,6 +136,7 @@ export function PlaygroundCrawlTab() {
           setDocuments({})
           setNextCursor(null)
           setPaginated(false)
+          setWebhookSecret(resp.webhook_secret ?? null)
           append({
             endpoint: 'crawl',
             url: trimmed,
@@ -300,6 +322,66 @@ export function PlaygroundCrawlTab() {
                 />
               </div>
             </div>
+            <div className="flex flex-col gap-3">
+              <StringListField
+                label="Include paths (regex, comma-separated)"
+                value={includePaths}
+                onChange={setIncludePaths}
+                placeholder="/blog/.*, /docs/.*"
+              />
+              <StringListField
+                label="Exclude paths (regex, comma-separated)"
+                value={excludePaths}
+                onChange={setExcludePaths}
+                placeholder="/admin/.*, .*\\.pdf"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Webhook (optional)
+              </p>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="crawl-webhook-url">Callback URL</Label>
+                <Input
+                  id="crawl-webhook-url"
+                  placeholder="https://your-server.example/hooks/crawl"
+                  value={webhookUrl}
+                  onChange={(e) => setWebhookUrl(e.target.value)}
+                />
+              </div>
+              {webhookUrl.trim() && (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <Label>Events</Label>
+                    <div className="flex flex-wrap gap-3">
+                      {WEBHOOK_EVENTS.map((event) => (
+                        <label key={event} className="flex items-center gap-1.5 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={webhookEvents.includes(event)}
+                            onChange={(e) =>
+                              setWebhookEvents((prev) =>
+                                e.target.checked ? [...prev, event] : prev.filter((x) => x !== event),
+                              )
+                            }
+                          />
+                          {event}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <JsonTextareaField
+                    label="Custom headers (optional)"
+                    value={webhookHeaders}
+                    onChange={setWebhookHeaders}
+                    rows={3}
+                    placeholder={'{\n  "Authorization": "Bearer …"\n}'}
+                  />
+                </>
+              )}
+            </div>
+
             <div className="rounded-md border border-border p-3">
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Scrape options (applied per page)
@@ -309,6 +391,24 @@ export function PlaygroundCrawlTab() {
           </div>
         </details>
       </form>
+
+      {webhookSecret && (
+        <div className="flex flex-col gap-2 rounded-md border border-border bg-muted p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Webhook signing secret</p>
+          <p className="text-xs text-muted-foreground">
+            Copy this now — it's shown once. Use it to verify the HMAC signature on incoming webhook deliveries.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 select-all break-all rounded bg-background px-2 py-1 font-mono text-xs">
+              {webhookSecret}
+            </code>
+            <CopyButton text={webhookSecret} />
+            <Button size="sm" variant="ghost" onClick={() => setWebhookSecret(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
 
       {status && (
         <div className="flex flex-col gap-2 rounded-md border border-border p-3">

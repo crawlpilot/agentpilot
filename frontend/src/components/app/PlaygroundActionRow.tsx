@@ -31,19 +31,81 @@ export function PlaygroundActionRow({ action, onChange, onRemove, onMoveUp, onMo
       case 'go_back':
         return <span className="text-xs text-muted-foreground">no parameters</span>
       case 'snapshot':
-        return <span className="text-xs text-muted-foreground">captures the current accessibility tree</span>
+        return (
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={action.viewport_only ?? false}
+                onChange={(e) => onChange({ ...action, viewport_only: e.target.checked })}
+              />
+              viewport only
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={action.with_bbox ?? false}
+                onChange={(e) => onChange({ ...action, with_bbox: e.target.checked })}
+              />
+              bounding boxes
+            </label>
+            <Input
+              type="number"
+              placeholder="max nodes"
+              className="w-28"
+              value={action.max_nodes ?? ''}
+              onChange={(e) => onChange({ ...action, max_nodes: e.target.value ? Number(e.target.value) : null })}
+            />
+            <Input
+              placeholder="roles (comma-sep)"
+              className="w-40"
+              value={action.roles?.join(', ') ?? ''}
+              onChange={(e) => {
+                const roles = e.target.value.split(',').map((s) => s.trim()).filter(Boolean)
+                onChange({ ...action, roles: roles.length ? roles : null })
+              }}
+            />
+          </div>
+        )
       case 'extract':
         return (
-          <Select value={action.format ?? 'markdown'} onValueChange={(v) => onChange({ ...action, format: v as never })}>
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="markdown">markdown</SelectItem>
-              <SelectItem value="text">text</SelectItem>
-              <SelectItem value="html">html</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <Select value={action.format ?? 'markdown'} onValueChange={(v) => onChange({ ...action, format: v as never })}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="markdown">markdown</SelectItem>
+                <SelectItem value="text">text</SelectItem>
+                <SelectItem value="html">html</SelectItem>
+                <SelectItem value="structured_data">structured_data</SelectItem>
+              </SelectContent>
+            </Select>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={action.main_content ?? true}
+                onChange={(e) => onChange({ ...action, main_content: e.target.checked })}
+              />
+              main content
+            </label>
+            <Input
+              placeholder="include tags (comma-sep)"
+              className="w-44"
+              value={action.include_tags?.join(', ') ?? ''}
+              onChange={(e) =>
+                onChange({ ...action, include_tags: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })
+              }
+            />
+            <Input
+              placeholder="exclude tags (comma-sep)"
+              className="w-44"
+              value={action.exclude_tags?.join(', ') ?? ''}
+              onChange={(e) =>
+                onChange({ ...action, exclude_tags: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })
+              }
+            />
+          </div>
         )
       case 'screenshot':
         return (

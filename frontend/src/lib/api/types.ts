@@ -92,11 +92,14 @@ export interface SnapshotAction {
   viewport_only?: boolean
   max_nodes?: number | null
   roles?: string[] | null
+  with_bbox?: boolean
 }
 export interface ExtractAction {
   type: 'extract'
-  format?: 'markdown' | 'text' | 'html'
+  format?: ScrapeFormat
   main_content?: boolean
+  include_tags?: string[]
+  exclude_tags?: string[]
 }
 export interface ScreenshotAction {
   type: 'screenshot'
@@ -256,6 +259,8 @@ export interface ScrapeRequest {
   tier?: Tier
   formats?: ScrapeFormat[]
   only_main_content?: boolean
+  include_tags?: string[]
+  exclude_tags?: string[]
   timeout_ms?: number
   wait_for_ms?: number | null
   actions?: ActionIn[]
@@ -327,6 +332,8 @@ export interface MapResponse {
 export interface ScrapeOptionsIn {
   formats?: ScrapeFormat[]
   only_main_content?: boolean
+  include_tags?: string[]
+  exclude_tags?: string[]
   timeout_ms?: number
   wait_for_ms?: number | null
   screenshot?: boolean

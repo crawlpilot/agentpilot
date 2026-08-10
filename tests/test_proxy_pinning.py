@@ -32,6 +32,31 @@ async def test_get_or_assign_is_stable_across_repeated_calls(pinner: ProxyPinner
     assert first == second
 
 
+async def test_rotate_moves_to_a_different_endpoint(pinner: ProxyPinner) -> None:
+    first = await pinner.get_or_assign(IDENTITY)
+    rotated = await pinner.rotate(IDENTITY)
+    assert rotated is not None
+    assert rotated != first  # a genuinely different egress IP
+    # ...and the new pin sticks on subsequent reads.
+    assert await pinner.get_or_assign(IDENTITY) == rotated
+
+
+async def test_rotate_with_single_endpoint_pool_is_stable() -> None:
+    solo = [ProxyEndpoint(scheme="http", host="only.example.com", port=8080)]
+    pinner = ProxyPinner(fakeredis.aioredis.FakeRedis(), solo)
+    first = await pinner.get_or_assign(IDENTITY)
+    # Nothing to rotate to -- the single endpoint stays pinned.
+    assert await pinner.rotate(IDENTITY) == first
+
+
+async def test_release_drops_the_pin(pinner: ProxyPinner) -> None:
+    first = await pinner.get_or_assign(IDENTITY)
+    await pinner.release(IDENTITY)
+    # After release the pin is re-derived from scratch (deterministic -> same),
+    # but the key was genuinely gone: assert it re-assigns cleanly.
+    assert await pinner.get_or_assign(IDENTITY) == first
+
+
 async def test_get_or_assign_survives_a_fresh_pinner_instance_same_redis() -> None:
     redis = fakeredis.aioredis.FakeRedis()
     first = await ProxyPinner(redis, POOL).get_or_assign(IDENTITY)
@@ -63,16 +88,81 @@ def test_empty_pool_rejected_at_construction() -> None:
         ProxyPinner(fakeredis.aioredis.FakeRedis(), [])
 
 
-def test_pick_ephemeral_matches_the_deterministic_pick_get_or_assign_would_persist(
+async def test_pick_ephemeral_matches_the_deterministic_pick_get_or_assign_would_persist(
     pinner: ProxyPinner,
 ) -> None:
     # Same proxy either way -- the only difference is whether choosing it
-    # touches Redis, not which one gets chosen.
-    assert pinner.pick_ephemeral(IDENTITY) == pinner._pick(IDENTITY)
+    # touches Redis (a write), not which one gets chosen.
+    assert await pinner.pick_ephemeral(IDENTITY) == pinner._pick(IDENTITY)
 
 
-def test_pick_ephemeral_never_writes_to_redis() -> None:
+async def test_pick_ephemeral_never_writes_to_redis() -> None:
     redis = fakeredis.aioredis.FakeRedis()
     pinner = ProxyPinner(redis, POOL)
-    pinner.pick_ephemeral(IDENTITY)
-    assert asyncio.run(redis.exists(f"proxy:{IDENTITY.slug()}")) == 0
+    await pinner.pick_ephemeral(IDENTITY)
+    assert await redis.exists(f"proxy:{IDENTITY.slug()}") == 0
+
+
+async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+
+    res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="US")
+    dc = ProxyEndpoint(scheme="http", host="dc", port=2, tier="datacenter")
+    cfg = ProxyConfig({("t", "residential"): (res,), ("t", "datacenter"): (dc,)})
+    pinner = ProxyPinner(fakeredis.aioredis.FakeRedis(), cfg)
+
+    assigned = await pinner.get_or_assign(IDENTITY, tier="residential")
+    assert assigned.host == "res"
+    assert assigned.tier == "residential"
+    assert assigned.country == "US"  # survives the Redis round-trip
+    # A different tier resolves to that tier's pool.
+    assert (await pinner.pick_ephemeral(IDENTITY, tier="datacenter")).host == "dc"
+
+
+async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+
+    redis = fakeredis.aioredis.FakeRedis()
+    res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="IN")
+    cfg = ProxyConfig({("t", "residential"): (res,)})
+    first = await ProxyPinner(redis, cfg).get_or_assign(IDENTITY, tier="residential")
+    second = await ProxyPinner(redis, cfg).get_or_assign(IDENTITY, tier="residential")
+    assert first == second
+    assert second.tier == "residential" and second.country == "IN"
+
+
+async def test_retired_proxy_is_skipped_and_a_pin_is_repinned() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.identity.proxy_health import ProxyHealth
+
+    redis = fakeredis.aioredis.FakeRedis()
+    a = ProxyEndpoint(scheme="http", host="a", port=1, tier="residential")
+    b = ProxyEndpoint(scheme="http", host="b", port=2, tier="residential")
+    cfg = ProxyConfig({("t", "residential"): (a, b)})
+    health = ProxyHealth(redis, max_success=1)
+    pinner = ProxyPinner(redis, cfg, health)
+
+    first = await pinner.get_or_assign(IDENTITY, tier="residential")
+    # Retire whichever one got pinned; the next assign must drop the stale pin
+    # and hand back the surviving healthy proxy.
+    await health.record_success(first)  # cap==1 -> retired
+    second = await pinner.get_or_assign(IDENTITY, tier="residential")
+    assert second != first
+    assert await health.is_retired(second) is False
+
+
+async def test_pick_ephemeral_avoids_retired_proxies() -> None:
+    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.identity.proxy_health import ProxyHealth
+
+    redis = fakeredis.aioredis.FakeRedis()
+    a = ProxyEndpoint(scheme="http", host="a", port=1, tier="residential")
+    b = ProxyEndpoint(scheme="http", host="b", port=2, tier="residential")
+    cfg = ProxyConfig({("t", "residential"): (a, b)})
+    health = ProxyHealth(redis, max_success=1)
+    pinner = ProxyPinner(redis, cfg, health)
+
+    picked = await pinner.pick_ephemeral(IDENTITY, tier="residential")
+    await health.record_success(picked)  # retire it
+    again = await pinner.pick_ephemeral(IDENTITY, tier="residential")
+    assert again != picked

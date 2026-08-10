@@ -28,11 +28,14 @@
   `agentpilot.driver`), and `/v1/api-keys` (admin-gated). Never
   imports/constructs a driver.
 
-The frontend (`frontend/`) is never served from here -- no `/ui` mount, no
-Node/npm anywhere in this repo's Docker images. It's deployed completely
-separately (dev server locally, a static host later), exactly how Firecrawl
-keeps its own dashboard (`apps/ui/ingestion-ui`) out of its backend images
-and docker-compose entirely.
+The frontend (`frontend/`) is normally deployed separately (dev server
+locally, a static host in production) -- there's no Node/npm in any of this
+repo's Docker images, exactly how Firecrawl keeps its own dashboard
+(`apps/ui/ingestion-ui`) out of its backend images. As an opt-in convenience
+the built SPA can instead be served *same-origin* from the tenant-facing
+roles (`monolith`/`gateway`) so no reverse proxy is needed -- see
+`agentpilot.gateway.spa`; it stays inert (nothing mounted) unless a build is
+present, and `worker` never serves it.
 """
 
 from __future__ import annotations
@@ -62,6 +65,7 @@ from agentpilot.gateway.routes import (
     sessions,
 )
 from agentpilot.gateway.routes import map as map_routes
+from agentpilot.gateway.spa import mount_spa, resolve_ui_dir
 from agentpilot.gateway.wiring import get_wiring, reset_wiring
 
 
@@ -151,3 +155,11 @@ if _role == "gateway":
         api_keys.router, prefix="/v1/api-keys", dependencies=[Depends(require_admin)]
     )
     app.include_router(nodes.router, prefix="/v1/nodes", dependencies=[Depends(require_admin)])
+
+# Optional same-origin SPA serving (see agentpilot.gateway.spa). Mounted last
+# so every API router is matched first; only the tenant-facing roles serve it,
+# and only when a built bundle is actually present.
+if _role in ("monolith", "gateway"):
+    _ui_dir = resolve_ui_dir()
+    if _ui_dir is not None:
+        mount_spa(app, _ui_dir)

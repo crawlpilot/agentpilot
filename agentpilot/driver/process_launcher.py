@@ -8,8 +8,10 @@ sessions.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
+import sys
 
 import structlog
 from patchright.async_api import Playwright, async_playwright
@@ -53,6 +55,30 @@ class ProcessLauncher:
             stderr=subprocess.DEVNULL,
         )
         log.info("process_launcher.xvfb_started", display=display, pid=self._xvfb_proc.pid)
+
+    def ensure_display(self) -> bool:
+        """Ensure a usable display exists for a *headful* launch, and return
+        whether headful is actually possible on this host.
+
+        - An already-exported `DISPLAY` (someone else's Xvfb, a real X server) is
+          used as-is.
+        - On Linux we lazily start our own Xvfb (`:99`) and export `DISPLAY` to
+          it -- this is the production worker path (headful under Xvfb is what
+          `cdp_patches` OS-level input, a P1 spike, will eventually need).
+        - Otherwise (macOS/dev, or a Linux container without Xvfb) headful is
+          not available, so this returns `False` and the caller degrades to
+          headless rather than failing the launch. We deliberately do NOT pop a
+          real window on a dev machine or in tests.
+        """
+
+        if os.environ.get("DISPLAY"):
+            return True
+        if sys.platform.startswith("linux"):
+            self.ensure_xvfb()
+            if self._xvfb_proc is not None:
+                os.environ["DISPLAY"] = ":99"
+                return True
+        return False
 
     async def close(self) -> None:
         async with self._lock:

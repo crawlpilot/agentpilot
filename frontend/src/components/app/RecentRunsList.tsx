@@ -95,10 +95,12 @@ function RunCard({ entry }: { entry: RecentRunEntry }) {
   )
 }
 
-export function RecentRunsList({ runs }: { runs: RecentRunEntry[] }) {
+export function RecentRunsList({ runs, showHeader = true }: { runs: RecentRunEntry[]; showHeader?: boolean }) {
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recent Runs</p>
+      {showHeader && (
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Recent Runs</p>
+      )}
       {runs.length === 0 ? (
         <EmptyState title="No runs yet" description="Runs you start from this tab will show up here." />
       ) : (

@@ -17,10 +17,13 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 COPY pyproject.toml uv.lock* ./
-RUN uv sync --no-install-project --extra driver
+# postgres extra too: docker-compose gives the worker an AGENTPILOT_DATABASE_URL
+# so it runs the crawl/agent/recipe worker loops, whose PostgresJobStore needs
+# psycopg[pool] -- without it the worker crashes at boot importing psycopg_pool.
+RUN uv sync --no-install-project --extra driver --extra postgres
 
 COPY . .
-RUN uv sync --extra driver
+RUN uv sync --extra driver --extra postgres
 RUN uv run patchright install --with-deps chrome
 
 ENV DISPLAY=:99

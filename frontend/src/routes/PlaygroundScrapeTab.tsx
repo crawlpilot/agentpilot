@@ -16,12 +16,14 @@ import { useScrape } from '@/hooks/useScrape'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth/AuthContext'
-import type { Tier } from '@/lib/api/types'
+import type { ScrapeRequest, Tier } from '@/lib/api/types'
 
 export function PlaygroundScrapeTab() {
   const { apiKey } = useAuth()
   const [url, setUrl] = useState('')
   const [tier, setTier] = useState<Tier>('auto')
+  const [locale, setLocale] = useState('')
+  const [timezoneId, setTimezoneId] = useState('')
   const [options, setOptions] = useState<ScrapeOptionsValue>(DEFAULT_SCRAPE_OPTIONS)
   const scrape = useScrape()
   const { toast } = useToast()
@@ -40,9 +42,15 @@ export function PlaygroundScrapeTab() {
     e.preventDefault()
     const trimmed = url.trim()
     if (!trimmed) return
-    scrape.mutate(
-      { url: trimmed, tier, ...options },
-      {
+    // Only attach locale/timezone_id when actually set -- don't send `null`
+    // for untouched optional fields (keeps the request minimal, and avoids
+    // tripping an older backend that predates these fields).
+    const req: Omit<ScrapeRequest, 'tenant'> = { url: trimmed, tier, ...options }
+    const trimmedLocale = locale.trim()
+    if (trimmedLocale) req.locale = trimmedLocale
+    const trimmedTimezone = timezoneId.trim()
+    if (trimmedTimezone) req.timezone_id = trimmedTimezone
+    scrape.mutate(req, {
         onSuccess: (resp) =>
           append({
             endpoint: 'scrape',
@@ -92,6 +100,29 @@ export function PlaygroundScrapeTab() {
           </Button>
         </div>
         <ScrapeOptionsFields value={options} onChange={setOptions} />
+
+        <div className="flex flex-wrap gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="scrape-locale">Locale (optional)</Label>
+            <Input
+              id="scrape-locale"
+              className="w-40"
+              placeholder="en-US"
+              value={locale}
+              onChange={(e) => setLocale(e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="scrape-timezone">Timezone (optional)</Label>
+            <Input
+              id="scrape-timezone"
+              className="w-52"
+              placeholder="America/New_York"
+              value={timezoneId}
+              onChange={(e) => setTimezoneId(e.target.value)}
+            />
+          </div>
+        </div>
       </form>
 
       <div className="flex flex-col gap-2">

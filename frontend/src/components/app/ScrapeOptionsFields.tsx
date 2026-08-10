@@ -2,11 +2,14 @@ import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { JsonTextareaField } from '@/components/app/JsonTextareaField'
+import { StringListField } from '@/components/app/StringListField'
 import type { ExtractConfigIn, ScrapeFormat } from '@/lib/api/types'
 
 export interface ScrapeOptionsValue {
   formats: ScrapeFormat[]
   only_main_content: boolean
+  include_tags: string[]
+  exclude_tags: string[]
   screenshot: boolean
   full_page_screenshot: boolean
   timeout_ms: number
@@ -17,6 +20,8 @@ export interface ScrapeOptionsValue {
 export const DEFAULT_SCRAPE_OPTIONS: ScrapeOptionsValue = {
   formats: ['markdown'],
   only_main_content: true,
+  include_tags: [],
+  exclude_tags: [],
   screenshot: false,
   full_page_screenshot: false,
   timeout_ms: 30_000,
@@ -124,6 +129,18 @@ export function ScrapeOptionsFields({
                 onChange={(e) => onChange({ ...value, wait_for_ms: e.target.value ? Number(e.target.value) : null })}
               />
             </div>
+            <StringListField
+              label="Include tags (CSS selectors, comma-separated)"
+              value={value.include_tags}
+              onChange={(include_tags) => onChange({ ...value, include_tags })}
+              placeholder="article, main, .content"
+            />
+            <StringListField
+              label="Exclude tags (CSS selectors, comma-separated)"
+              value={value.exclude_tags}
+              onChange={(exclude_tags) => onChange({ ...value, exclude_tags })}
+              placeholder="nav, footer, .ads"
+            />
 
             <div className="flex flex-col gap-2 rounded-md border border-border p-3">
               <label className="flex items-center gap-2 text-sm">

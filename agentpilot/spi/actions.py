@@ -16,18 +16,52 @@ needed a breaking shape change -- and now dispatch for real in P1 via
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from agentpilot.spi.artifact import ArtifactRef
 from agentpilot.spi.snapshot import AXSnapshot
 
+if TYPE_CHECKING:
+    from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+
+SnapshotEngine = Literal["aria", "fusion"]
+
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
+
+# When `page.goto` considers a navigation "done". `"load"` (Playwright's own
+# default) waits for every subresource, which heavy retail SPAs (Walmart,
+# Amazon) with continuous ad/telemetry traffic never actually reach -- the goto
+# then hangs to its timeout and surfaces as a spurious NavigationTimeout/504.
+# `"domcontentloaded"` returns once the DOM is parsed; the warm-up scroll +
+# dwell + extract that follow drive the rest of the render, so it's both the
+# regression fix and the robust scraper default.
+NavigateWaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
+
+# The UI's anti-detection tiers that forbid any CDP `Runtime` use. Mapping the
+# already-persisted `tier` (on `AgentRunCreateRequest` / `SessionOpenRequest` /
+# `ScrapeRequest`) to the fusion engine's `no_runtime` flag is what makes the
+# stealth mode UI-driven -- no separate request field or DB column needed.
+_STEALTH_TIERS = frozenset({"basic", "stealth"})
+
+
+def stealth_from_tier(tier: str) -> bool:
+    """Whether the fusion engine must run Runtime-free for this UI tier.
+    `basic`/`stealth` -> True (no `getEventListeners`); `enhanced`/`auto` ->
+    False (full browser-use parity, Runtime allowed)."""
+
+    return tier in _STEALTH_TIERS
 
 
 @dataclass
 class NavigateAction:
     url: str
     timeout_ms: int = 30_000
+    wait_until: NavigateWaitUntil = "domcontentloaded"
+    referer: str | None = None
+    """Overrides the `Referer` header (and the `Sec-Fetch-Site` Chrome derives
+    from it) for this navigation. Used by the protected scrape path to present a
+    plausible organic-search landing instead of a cold, refererless deep-link.
+    `None` leaves Chrome's own referer behaviour."""
     terminates_sequence: bool = True
 
 
@@ -49,6 +83,16 @@ class SnapshotAction:
     """Wait (best-effort, bounded) for the page to reach network-idle before
     capturing the snapshot -- opt-in so only the agent's step loop pays for it
     (stable perception across steps); ordinary snapshot callers don't."""
+    engine: SnapshotEngine = "aria"
+    """Which perception pipeline to use. `"aria"` (default) is the battle-tested
+    Playwright aria-snapshot path producing `AXSnapshot`. `"fusion"` uses the
+    CDP DOM/Snapshot/Accessibility fusion engine producing an
+    `EnhancedDOMTreeNode` (in `ActionResult.fused_trees`) with stable
+    backendNodeId identity, element hashing, and cross-step change detection."""
+    no_runtime: bool = False
+    """UI-driven stealth flag (from `tier`). When set, the fusion engine skips
+    every CDP `Runtime` call (`getEventListeners`), keeping Patchright's
+    anti-leak posture at the cost of JS-listener-based interactivity detection."""
     terminates_sequence: bool = False
 
 
@@ -185,6 +229,7 @@ Action = (
     | ListTabsAction
 )
 
+
 @dataclass
 class TabInfo:
     """One `ListTabsAction` entry -- mirrors a prior internal system's
@@ -202,6 +247,9 @@ class ActionResult:
     """Per-type correlated output lists, mirroring Firecrawl's response shape."""
 
     snapshots: list[AXSnapshot] = field(default_factory=list)
+    fused_trees: list[EnhancedDOMTreeNode] = field(default_factory=list)
+    """One fused `EnhancedDOMTreeNode` per `SnapshotAction(engine="fusion")` in
+    the batch, index-correlated like `snapshots`. Empty on the aria path."""
     screenshots: list[bytes] = field(default_factory=list)
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)
@@ -230,3 +278,16 @@ class ActionResult:
     policy. Not set by `NewTabAction`/`SwitchTabAction` themselves -- those
     are explicit, caller-driven tab changes, not "the ground shifted under
     you" signals this field exists to carry."""
+    status_code: int | None = None
+    """HTTP status of the batch's navigation response (when one occurred), so
+    callers can populate `DocumentMetadata.status_code` without a second fetch.
+    `None` for batches that didn't navigate or whose response was unavailable."""
+    soft_verdict: str | None = None
+    """A CRAWL-scope block-detection verdict (`too_small`/`rate_limited`/
+    `wrong_geo`) that did NOT raise `ChallengeDetected` -- the page rendered and
+    its content is returned, but the caller may choose a cheap same-identity
+    retry (Pulsar's CRAWL retry scope). `None` when the page classified OK or a
+    hard PRIVACY wall was raised instead."""
+    soft_weight: int = 0
+    """The burn weight of `soft_verdict` (0 when none), for the session layer's
+    minor-warning accounting on a retryable soft failure."""

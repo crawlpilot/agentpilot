@@ -39,6 +39,7 @@ from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
 from agentpilot.session.ephemeral import run_ephemeral_scrape
 from agentpilot.session.registry import RegistryProtocol
+from agentpilot.session.warm_pool import WarmPool
 from agentpilot.spi.crawl import CrawlOptions
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
@@ -66,12 +67,14 @@ class CrawlWorkerLoop:
         max_concurrent: int = 5,
         poll_interval_seconds: float = 2.0,
         stale_after_seconds: float = 120.0,
+        warm_pool: WarmPool | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
         self._proxy_pinner = proxy_pinner
+        self._warm_pool = warm_pool
         self._lease_ttl_seconds = lease_ttl_seconds
         self._batch_size = batch_size
         self._max_concurrent = max_concurrent
@@ -154,6 +157,7 @@ class CrawlWorkerLoop:
             profiles_root=self._profiles_root,
             proxy_pinner=self._proxy_pinner,
             lease_ttl_seconds=self._lease_ttl_seconds,
+            warm_pool=self._warm_pool,
         )
 
         if document.markdown is None and document.html is None and document.text is None:

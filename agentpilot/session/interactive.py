@@ -31,6 +31,7 @@ import structlog
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.observability.metrics import context_rotations_total
+from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.rotation import RotationConfig, RotationPolicy, should_retire
 from agentpilot.spi import actions as spi_actions
@@ -111,7 +112,16 @@ async def open_interactive_session(
                 await driver.restore_state(ctx, state)
         return ctx
 
-    ctx, lease = await registry.acquire(identity, owner, lease_ttl_seconds, _opener)
+    # Validate-on-acquire: a reused warm context that died while idle is
+    # transparently evicted + reopened rather than failing the first action.
+    ctx, lease = await acquire_validated(
+        registry=registry,
+        driver=driver,
+        identity=identity,
+        owner=owner,
+        ttl_seconds=lease_ttl_seconds,
+        opener=_opener,
+    )
 
     return InteractiveSession(
         session_id=session_id,

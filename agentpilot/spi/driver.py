@@ -32,16 +32,78 @@ class BrowserDriver(Protocol):
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        warmup: bool = False,
+        detect_blocks: bool = False,
+        user_agent: str | None = None,
+        init_script: str | None = None,
+        extra_http_headers: dict[str, str] | None = None,
+        extra_launch_args: list[str] | None = None,
+        interact_profile: str | None = None,
+        block_resource_types: tuple[str, ...] | None = None,
+        block_hosts: tuple[str, ...] | None = None,
     ) -> ContextRef:
         """`locale`/`timezone_id` (when set) override the browser context's
         reported `navigator.language`/`Accept-Language` and JS timezone --
         an anti-detection consistency lever (a US retail site expects a
         plausible US locale/timezone, not whatever the host container
         happens to run as). `None` leaves Chrome's own defaults untouched,
-        so existing interactive/test callers are unaffected."""
+        so existing interactive/test callers are unaffected.
+
+        `warmup` runs a human pre-read routine (scroll burst + dwell, and an
+        `_abck` wait when `detect_blocks`) after each navigation, so an
+        Akamai-style sensor cookie has a chance to validate before content is
+        read. `detect_blocks` inspects the navigated page's body (not just its
+        status) and raises `ChallengeDetected` on a bot wall -- including the
+        HTTP-200 "Access Denied" pages Akamai serves. Both default off, so
+        interactive/test callers pay nothing and behave exactly as before.
+
+        `user_agent` overrides the context UA; `init_script` is JS added to
+        every page in the context (`add_init_script`) before any page script
+        runs -- together they apply a pinned per-identity fingerprint (UA +
+        WebGL/hardware/language patches). Passed as primitives, not a
+        fingerprint object, to keep this contract free of an `identity`-layer
+        import. Both `None` leaves Chrome/Patchright's own values.
+
+        `extra_http_headers` are applied to every request the context makes
+        (`set_extra_http_headers`) -- used to pin the always-sent Client-Hint
+        headers (`Sec-CH-UA*`) to the same Chrome build as `user_agent`, so the
+        wire-level hints don't contradict the spoofed UA (a WAF cross-check).
+        `None` leaves the browser's native headers.
+
+        `extra_launch_args` are appended to Chrome's command line -- curated
+        hardening flags (window geometry, suppressed background chatter) that
+        Patchright doesn't already pass. `None` leaves Patchright's own defaults
+        (which already include `--disable-blink-features=AutomationControlled`).
+
+        `interact_profile` names the human-timing preset
+        (`driver.humanize`: `"stealth"`/`"fast"`/`"default"`) this context's
+        click/fill/type keystroke delays and between-actions `gap` sample from,
+        so the scrape tier modulates interaction cadence. `None` -> the default
+        preset (unchanged timing for interactive/test callers).
+
+        `block_resource_types` / `block_hosts` abort matching requests (by
+        Playwright `resource_type` and by URL substring respectively) to save
+        bandwidth/time. Both `None`/empty -> no request interception (unchanged).
+        Callers must never block `script`/`xhr`/`fetch`/`document`."""
         ...
 
     async def close(self, ctx: ContextRef) -> None: ...
+
+    async def is_alive(self, ctx: ContextRef) -> bool:
+        """Fast, non-blocking liveness: the context's process still exists AND
+        it answers a cheap, bounded CDP ping (responsive, not just present).
+        The session layer calls this to validate a *reused* warm/IDLE context
+        before handing it out -- a `False` triggers evict + reopen rather than
+        letting a zombie Chrome surface as a failed action mid-request."""
+        ...
+
+    async def keepalive(self, ctx: ContextRef) -> bool:
+        """Nudge an idle context's CDP connection so an intermediate proxy
+        doesn't silently drop it during long idle periods (the analog of
+        agent-browser's WebSocket ping + TCP `SO_KEEPALIVE`). Returns whether
+        the context is still responsive; a `False` lets the keepalive loop
+        evict it so the next acquire auto-restarts a fresh one."""
+        ...
 
     async def execute(
         self, ctx: ContextRef, actions: list[Action], page_id: str | None = None

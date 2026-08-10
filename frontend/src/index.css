@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+/* Inter (variable) is imported from main.tsx, NOT here: routing its @font-face
+   through Tailwind's `@import` inliner rebases the font's `url(./files/...)`
+   paths relative to this file, so the .woff2 assets silently fail to bundle
+   and 404 in production. A JS-side import lets Vite resolve them correctly. */
 
 /*
  * White-and-red palette, Target.com-inspired: bright white surfaces, a
@@ -32,6 +36,8 @@
 }
 
 @theme inline {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
   --color-card: hsl(var(--card));
@@ -60,6 +66,22 @@
 body {
   @apply bg-background text-foreground antialiased;
   margin: 0;
+  font-family: var(--font-sans);
+  /* Inter's contextual alternates + tabular-friendly defaults; kerning on for
+     crisper headings. `optimizeLegibility` pairs with the antialiasing above. */
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Headings track slightly tighter than body -- the small, deliberate detail
+   that separates "default HTML" from a designed type system. */
+h1,
+h2,
+h3,
+h4 {
+  letter-spacing: -0.011em;
 }
 
 #root {

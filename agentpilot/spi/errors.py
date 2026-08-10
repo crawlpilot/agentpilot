@@ -16,7 +16,27 @@ class ContextCrashed(DriverError):
 
 
 class ChallengeDetected(DriverError):
-    pass
+    """A hard bot wall (CAPTCHA / robot check / Access Denied) was detected on
+    the navigated page. Carries the classifier `verdict` (a `block_detect.Verdict`
+    value, as a plain string to keep `spi` free of a `driver` import), its
+    `weight` for the session layer's burn accounting, and its `scope`
+    (`"privacy"` -- the only scope that raises; soft CRAWL-scope verdicts are
+    surfaced on `ActionResult` instead of raised). The driver computes all three
+    since it owns the classifier. `scope` defaults to `"privacy"` so existing
+    call sites (and tests) that raise a bare wall keep full-rotation semantics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        verdict: str | None = None,
+        weight: int = 0,
+        scope: str = "privacy",
+    ) -> None:
+        super().__init__(message)
+        self.verdict = verdict
+        self.weight = weight
+        self.scope = scope
 
 
 class StaleRefError(DriverError):
