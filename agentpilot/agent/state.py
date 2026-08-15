@@ -40,6 +40,13 @@ class AgentStepRecord:
     thinking: str | None = None
     """The model's raw reasoning trace (`AgentOutput.thinking`) -- parsed but
     previously dropped. Kept for audit/replay; persisted by `agent_store`."""
+    duration_ms: int | None = None
+    """Wall-clock latency of this step's LLM call, in milliseconds."""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    screenshot: bytes | None = None
+    """Raw viewport PNG captured this step under vision. Persisted to BYTEA and
+    served by its own image route; never inlined into the step-list payload."""
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

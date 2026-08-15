@@ -21,11 +21,11 @@ import { JsonTextareaField } from '@/components/app/JsonTextareaField'
 import { RecentRunsList } from '@/components/app/RecentRunsList'
 import { AgentActionCard } from '@/components/app/AgentActionCard'
 import { AgentLiveView } from '@/components/app/AgentLiveView'
-import { useCreateAgentRun, useAgentRunStatus, useCancelAgentRun } from '@/hooks/useAgentRuns'
+import { useCreateAgentRun, useAgentRunStatus, useAgentRunStream, useCancelAgentRun } from '@/hooks/useAgentRuns'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useToast } from '@/components/ui/toast'
-import { getAgentRunStatus } from '@/lib/api/agentRuns'
+import { getAgentRunStatus, agentStepScreenshotUrl } from '@/lib/api/agentRuns'
 import { cn } from '@/lib/utils'
 import type { AgentStepOut, RunStatus, Tier } from '@/lib/api/types'
 
@@ -63,6 +63,18 @@ function fmtTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour12: false })
 }
 
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(1)}s`
+  const m = Math.floor(s / 60)
+  return `${m}:${String(Math.round(s % 60)).padStart(2, '0')}`
+}
+
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
 function statusVariant(status: RunStatus): NonNullable<BadgeProps['variant']> {
   switch (status) {
     case 'completed':
@@ -98,6 +110,7 @@ export function PlaygroundAgentTab() {
   const createRun = useCreateAgentRun()
   const cancelRun = useCancelAgentRun()
   const { data: status } = useAgentRunStatus(runId)
+  useAgentRunStream(runId)
 
   useEffect(() => {
     if (!status) return
@@ -182,6 +195,12 @@ export function PlaygroundAgentTab() {
   const isRunning = run ? run.status === 'queued' || run.status === 'running' : false
   const pct = run && run.max_steps > 0 ? Math.round((run.current_step / run.max_steps) * 100) : 0
   const activeSeq = stepList.length > 0 ? stepList[stepList.length - 1].seq : null
+  const totalIn = stepList.reduce((s, x) => s + (x.input_tokens ?? 0), 0)
+  const totalOut = stepList.reduce((s, x) => s + (x.output_tokens ?? 0), 0)
+  const timedSteps = stepList.filter((x) => x.duration_ms != null)
+  const totalMs = timedSteps.reduce((s, x) => s + (x.duration_ms ?? 0), 0)
+  const avgMs = timedSteps.length ? Math.round(totalMs / timedSteps.length) : 0
+  const hasTelemetry = totalIn + totalOut > 0 || timedSteps.length > 0
 
   return (
     <div className="flex flex-col gap-6">
@@ -269,6 +288,13 @@ export function PlaygroundAgentTab() {
           <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
             <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${pct}%` }} />
           </div>
+          {hasTelemetry && (
+            <div className="mt-1 flex flex-wrap gap-x-6 gap-y-2 text-xs">
+              <Stat label="Tokens" value={`${fmtTokens(totalIn)} in · ${fmtTokens(totalOut)} out`} />
+              <Stat label="LLM time" value={fmtDuration(totalMs)} />
+              <Stat label="Avg step" value={avgMs ? fmtDuration(avgMs) : '—'} />
+            </div>
+          )}
         </div>
       )}
 
@@ -327,7 +353,13 @@ export function PlaygroundAgentTab() {
                           running
                         </span>
                       ) : (
-                        <span>{fmtTime(step.created_at)}</span>
+                        <>
+                          {step.duration_ms != null && <span>{fmtDuration(step.duration_ms)}</span>}
+                          {(step.input_tokens ?? 0) + (step.output_tokens ?? 0) > 0 && (
+                            <span>{fmtTokens((step.input_tokens ?? 0) + (step.output_tokens ?? 0))} tok</span>
+                          )}
+                          {step.duration_ms == null && <span>{fmtTime(step.created_at)}</span>}
+                        </>
                       )}
                       <ChevronRight className="size-4 transition-transform group-open:rotate-90" />
                     </span>
@@ -373,6 +405,23 @@ export function PlaygroundAgentTab() {
                         })}
                       </ul>
                     )}
+
+                    {step.has_screenshot && runId && apiKey && (
+                      <a
+                        href={agentStepScreenshotUrl(apiKey, runId, step.seq)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="w-fit"
+                        title="Open full screenshot"
+                      >
+                        <img
+                          src={agentStepScreenshotUrl(apiKey, runId, step.seq)}
+                          alt={`Step ${step.step_number} screenshot`}
+                          loading="lazy"
+                          className="max-h-40 rounded-md border border-border object-cover object-top"
+                        />
+                      </a>
+                    )}
                   </div>
                 </details>
               )
@@ -416,6 +465,15 @@ export function PlaygroundAgentTab() {
       </div>
 
       <RecentRunsList runs={runs} />
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="tabular-nums font-medium">{value}</span>
     </div>
   )
 }

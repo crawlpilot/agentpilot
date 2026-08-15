@@ -24,6 +24,16 @@ class LLMNotConfiguredError(Exception):
 
 
 @dataclass
+class LLMUsage:
+    """Token counts from a completion's `usage` block. Zeroed when the endpoint
+    omits `usage` (some OpenAI-compatible servers do), so callers can always
+    sum without a None check."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
 class LLMConfig:
     api_key: str
     base_url: str
@@ -69,13 +79,29 @@ async def chat_json_conversation(
     config: LLMConfig,
     json_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Parsed-JSON-only convenience wrapper over
+    `chat_json_conversation_with_usage` for the callers that don't track
+    tokens (schema extraction, history compaction, the judge)."""
+
+    parsed, _usage = await chat_json_conversation_with_usage(
+        messages, config=config, json_schema=json_schema
+    )
+    return parsed
+
+
+async def chat_json_conversation_with_usage(
+    messages: list[dict[str, Any]],
+    *,
+    config: LLMConfig,
+    json_schema: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], LLMUsage]:
     """One `/chat/completions` call, structured-output mode, over an
     arbitrary message list -- the primitive `agentpilot.agent`'s step loop
     needs (system + rendered-history-as-text + current state each turn, not
     a raw growing transcript -- see `agent/prompts.py`). Returns the parsed
-    JSON object the model produced. A malformed/non-JSON model response
-    raises `json.JSONDecodeError`/`KeyError` -- callers catch broadly and
-    surface it as an error field rather than crashing the whole run.
+    JSON object the model produced *and* its token usage. A malformed/non-JSON
+    model response raises `json.JSONDecodeError`/`KeyError` -- callers catch
+    broadly and surface it as an error field rather than crashing the run.
 
     A message's `content` may be a plain string or, for a vision-capable
     model, the OpenAI multimodal parts list (`[{"type": "text", ...},
@@ -106,4 +132,9 @@ async def chat_json_conversation(
         body = response.json()
 
     content = body["choices"][0]["message"]["content"]
-    return cast("dict[str, Any]", json.loads(content))
+    usage_raw = body.get("usage") or {}
+    usage = LLMUsage(
+        input_tokens=int(usage_raw.get("prompt_tokens", 0) or 0),
+        output_tokens=int(usage_raw.get("completion_tokens", 0) or 0),
+    )
+    return cast("dict[str, Any]", json.loads(content)), usage

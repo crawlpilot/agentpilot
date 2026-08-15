@@ -438,6 +438,10 @@ class AgentStepOut(BaseModel):
     actions: list[dict[str, Any]]
     action_results: list[str]
     thinking: str | None
+    duration_ms: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    has_screenshot: bool
     created_at: str
 
 

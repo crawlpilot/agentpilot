@@ -473,6 +473,10 @@ export interface AgentStepOut {
   actions: Record<string, unknown>[]
   action_results: string[]
   thinking: string | null
+  duration_ms: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  has_screenshot: boolean
   created_at: string
 }
 

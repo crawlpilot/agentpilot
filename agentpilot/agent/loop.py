@@ -35,7 +35,7 @@ from agentpilot.agent.reliability import (
 )
 from agentpilot.agent.security import is_url_allowed, redact_secrets, substitute_secrets
 from agentpilot.agent.state import AgentHistory, AgentStepRecord, LoopDetector
-from agentpilot.llm.client import LLMConfig, chat_json_conversation
+from agentpilot.llm.client import LLMConfig, LLMUsage, chat_json_conversation_with_usage
 from agentpilot.observability.metrics import (
     agent_judge_verdicts_total,
     agent_loop_nudges_total,
@@ -205,15 +205,17 @@ async def run_agent_loop(
         # with backoff; a validation failure (bad output shape) is not.
         async def _call_llm(
             _messages: list[dict[str, Any]] = messages, _schema: dict[str, Any] = schema
-        ) -> dict[str, Any]:
+        ) -> tuple[dict[str, Any], LLMUsage]:
             return await _with_timeout(
-                chat_json_conversation(_messages, config=llm_config, json_schema=_schema),
+                chat_json_conversation_with_usage(
+                    _messages, config=llm_config, json_schema=_schema
+                ),
                 step_timeout_s,
             )
 
         llm_started = time.monotonic()
         try:
-            raw = await retry.execute(_call_llm)
+            raw, usage = await retry.execute(_call_llm)
             output = parse_agent_output(raw)
         except Exception as exc:
             agent_steps_total.labels(outcome="llm_error").inc()
@@ -228,7 +230,8 @@ async def run_agent_loop(
             except CircuitBreakerTripped:
                 break
             continue
-        agent_step_llm_latency_seconds.observe(time.monotonic() - llm_started)
+        step_duration_ms = int((time.monotonic() - llm_started) * 1000)
+        agent_step_llm_latency_seconds.observe(step_duration_ms / 1000)
 
         done = next((a for a in output.actions if isinstance(a, DoneAction)), None)
         driver_actions = [a for a in output.actions if not isinstance(a, DoneAction)]
@@ -296,6 +299,10 @@ async def run_agent_loop(
             actions=[_action_to_dict(a) for a in driver_actions],
             action_results=action_results,
             thinking=output.thinking,
+            duration_ms=step_duration_ms,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            screenshot=screenshot,
         )
         history.add(step_record)
         if on_step is not None:
