@@ -2,11 +2,10 @@
 `agentpilot.session.ephemeral.run_ephemeral_scrape` (the same function the
 crawl-worker loop uses per-task, `agentpilot.jobs.worker_loop`), converting
 `ScrapeRequest` into `spi.scrape.ScrapeOptions` and the result into
-`ScrapeResponse`. No baked-in path prefix -- `app.py` mounts this same
-router at `/internal/scrape` (monolith/worker) and `/v1/scrape` (monolith,
-tenant-auth-gated), the same dual-mount idiom `routes/sessions.py` uses. A
-`gateway`-role process never mounts this; it mounts `scrape_proxy.py` at
-`/v1/scrape` instead, proxying to a worker's `/internal/scrape`.
+`ScrapeResponse`. No baked-in path prefix -- `app.py` mounts this router only
+on the `worker` role, at `/internal/scrape`. A `gateway`-role process never
+mounts this; it mounts `scrape_proxy.py` at `/v1/scrape` instead, proxying to
+a worker's `/internal/scrape`.
 """
 
 from __future__ import annotations
