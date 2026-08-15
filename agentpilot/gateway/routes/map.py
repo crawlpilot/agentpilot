@@ -1,6 +1,6 @@
 """`POST /v1/map` -- fast URL discovery, synchronous, no job queue. Mounted
-identically on both `monolith` and `gateway` (no `_proxy` variant, no
-`/internal/...` counterpart): `agentpilot.crawl` is pure guarded-HTTP
+on the `gateway` (no `_proxy` variant, no `/internal/...` counterpart):
+`agentpilot.crawl` is pure guarded-HTTP
 discovery, no browser/driver involved, so a `gateway` process can serve this
 directly out of its own (Chrome-free) process without a worker hop, exactly
 like `routes/api_keys.py`/`routes/nodes.py` need no proxy variant. Each

@@ -4,12 +4,12 @@ it -- sitemap + the seed page's own links -- one level deeper at depth 1;
 this split is load-bearing, see the comment at the enqueue call below and
 `agentpilot.jobs.worker_loop`'s own tests, which caught the bug of enqueueing
 the whole batch at depth 0), `GET /{id}` polls status + paginated results,
-`DELETE /{id}` cancels. Mounted identically on both `monolith` and `gateway`
-(no `_proxy` variant): job CRUD never touches `agentpilot.driver`, exactly
-like `routes/api_keys.py` needs none either. The actual crawl *processing*
-happens in `agentpilot.jobs.worker_loop.CrawlWorkerLoop`, running
-independently on every worker/monolith process -- this route only
-creates/reads/cancels rows in `agentpilot.jobs.store.PostgresJobStore`.
+`DELETE /{id}` cancels. Mounted on the `gateway` (no `_proxy` variant): job
+CRUD never touches `agentpilot.driver`, exactly like `routes/api_keys.py`
+needs none either. The actual crawl *processing* happens in
+`agentpilot.jobs.worker_loop.CrawlWorkerLoop`, running independently on every
+`worker` process -- this route only creates/reads/cancels rows in
+`agentpilot.jobs.store.PostgresJobStore`.
 """
 
 from __future__ import annotations
