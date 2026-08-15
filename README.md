@@ -104,22 +104,28 @@ docker compose up --build
 > cached layer → `--no-cache`.** When in doubt, `docker compose up --build -d --force-recreate`
 > does both a rebuild and a fresh recreate.
 
-### 3. Run database migrations
+### 3. Database migrations (automatic)
 
 Postgres persists tenant API keys (`agentpilot.auth.store`), crawl/agent/recipe jobs, and run
-history. There is **no automatic migration step** — run Alembic yourself, from the host, against the
-compose Postgres **before issuing any API keys or starting jobs**. Alembic ships in the `postgres`
-extra (not the dev group), so install it once:
+history. **Migrations run automatically on `docker compose up`**: a one-shot `migrate` service runs
+`alembic upgrade head` against a healthy Postgres and exits, and `worker`/`worker-2`/`gateway` all
+`depends_on: migrate` with `condition: service_completed_successfully` — so no app process serves a
+request against a stale schema. Re-running when already at head is a fast no-op, so every deploy
+brings the DB to head before the app starts. Watch it with:
+
+```bash
+docker compose logs migrate              # shows "Running upgrade 00NN -> 00NN+1 …" then exits 0
+```
+
+You only need Alembic on the host for **manual** inspection or authoring new revisions (below); the
+normal `up` flow needs none of it:
 
 ```bash
 uv sync --extra postgres                 # puts `alembic` + psycopg on the path (host-side only)
-
-# Point every alembic command at the compose Postgres (host reaches it on localhost:5432).
 export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
-
-uv run alembic upgrade head              # apply all migrations (idempotent — safe to re-run)
 uv run alembic current                   # show the revision the DB is on
-uv run alembic history --verbose         # list every revision (0001_create_api_keys … 0007_…)
+uv run alembic upgrade head              # apply manually (idempotent — safe to re-run)
+uv run alembic history --verbose         # list every revision (0001_create_api_keys … 0009_…)
 ```
 
 **Authoring a new migration** (schema changes are **hand-written SQL** — this repo has no ORM

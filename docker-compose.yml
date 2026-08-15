@@ -45,6 +45,34 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432" # loopback-only, so you can still redis-cli/psql from the host for debugging/migrations
+    # Gates the `migrate` job (and, transitively, the app services) so schema
+    # changes only run against a Postgres that's actually accepting connections
+    # -- not merely "container started".
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentpilot -d agentpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot schema migrator: runs `alembic upgrade head` and exits. Every app
+  # service below `depends_on` it with `service_completed_successfully`, so a
+  # `docker compose up` always brings the DB to head *before* any worker or the
+  # gateway serves a request -- the standard "migrations are a deploy step, not
+  # a manual afterthought" pattern. Re-running when already at head is a fast
+  # no-op. Deliberately NOT run inside the app process: three replicas
+  # (worker, worker-2, gateway) would otherwise race the same DDL on boot.
+  # Uses the lean gateway image (has alembic + alembic/ + no Chrome).
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    environment:
+      AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   worker:
     build:
@@ -99,9 +127,16 @@ services:
       # this to a stable value without re-reading agentpilot/gateway/
       # routing.py's docstring on why node_id -> addr stays a live lookup.
     depends_on:
-      - detection-page
-      - redis
-      - postgres
+      detection-page:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      # Don't claim/process runs until the schema is at head -- otherwise the
+      # worker loops query columns a stale DB doesn't have yet.
+      migrate:
+        condition: service_completed_successfully
     # No published port -- internal-only, VPC-bound, never tenant-exposed
     # per plan.md's topology; only the `gateway` service talks to it.
 
@@ -142,9 +177,14 @@ services:
       AGENTPILOT_ADMIN_TOKEN: ${AGENTPILOT_ADMIN_TOKEN:-}
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
     depends_on:
-      - worker
-      - worker-2
-      - postgres
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      worker:
+        condition: service_started
+      worker-2:
+        condition: service_started
 
 volumes:
   profiles:

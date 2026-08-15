@@ -232,6 +232,25 @@ async def test_cancel_run_only_from_queued_or_running(store: PostgresAgentStore)
     assert await store.cancel_run(run.run_id, tenant) is False
 
 
+async def test_list_runs_newest_first_and_tenant_scoped(store: PostgresAgentStore) -> None:
+    tenant = _tenant()
+    other = _tenant()
+    first = await store.create_run(
+        tenant=tenant, task="first", domain="d", tier="auto", output_schema=None, max_steps=5
+    )
+    second = await store.create_run(
+        tenant=tenant, task="second", domain="d", tier="auto", output_schema=None, max_steps=5
+    )
+    await store.create_run(
+        tenant=other, task="other tenant", domain="d", tier="auto", output_schema=None, max_steps=5
+    )
+
+    runs, next_cursor = await store.list_runs(tenant, after=None)
+    # Newest-first, and only this tenant's runs.
+    assert [r.run_id for r in runs] == [second.run_id, first.run_id]
+    assert next_cursor is None
+
+
 async def test_list_steps_paginates_with_keyset_cursor(store: PostgresAgentStore) -> None:
     tenant = _tenant()
     run = await store.create_run(
