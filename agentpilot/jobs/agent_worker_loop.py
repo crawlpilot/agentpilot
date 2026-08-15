@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -31,6 +32,10 @@ from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.rotation import RotationConfig
 from agentpilot.spi.actions import stealth_from_tier
 from agentpilot.spi.driver import BrowserDriver
+
+if TYPE_CHECKING:
+    from agentpilot.placement.placer import SessionPlacer
+    from agentpilot.session.interactive import Session
 
 log = structlog.get_logger(__name__)
 
@@ -54,6 +59,8 @@ class AgentWorkerLoop:
         enable_vision: bool = False,
         enable_judge: bool = False,
         rotation: RotationConfig | None = None,
+        sessions: dict[str, Session] | None = None,
+        placer: SessionPlacer | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -61,6 +68,13 @@ class AgentWorkerLoop:
         self._profiles_root = profiles_root
         self._proxy_pinner = proxy_pinner
         self._lease_ttl_seconds = lease_ttl_seconds
+        # Live-view plumbing: `sessions` is the same in-process dict
+        # `routes/live_view.py` looks a session up in; registering the run's
+        # session there lets the UI watch the agent drive (monolith path).
+        # `placer` (when present) additionally writes the redis route so a
+        # `gateway`-role process can proxy live-view to this worker.
+        self._sessions = sessions
+        self._placer = placer
         self._batch_size = batch_size
         self._max_concurrent = max_concurrent
         self._poll_interval_seconds = poll_interval_seconds
@@ -108,11 +122,12 @@ class AgentWorkerLoop:
                 await self._store.fail_run(run.run_id, run.lock, str(exc))
 
     async def _process_run(self, run: ClaimedAgentRun) -> None:
+        live_session_id = f"agent-run-{run.run_id}"
         session = await open_interactive_session(
-            session_id=f"agent-run-{run.run_id}",
+            session_id=live_session_id,
             tenant=run.tenant,
             domain=run.domain,
-            name=f"agent-run-{run.run_id}",
+            name=live_session_id,
             tier=run.tier,
             headful=False,
             block_popups=True,
@@ -125,12 +140,21 @@ class AgentWorkerLoop:
             lease_ttl_seconds=self._lease_ttl_seconds,
         )
 
+        # Publish the session for live-view (see __init__). Best-effort: a
+        # missing route only costs the watch-along UI, never the run itself.
+        if self._sessions is not None:
+            self._sessions[live_session_id] = session
+        await self._publish_live_route(live_session_id, session, run.tier)
+
         async def _on_step(step: AgentStepRecord) -> None:
             # Persist the step *and* renew the claim lock together -- this is
             # the "periodic renewal during processing" `reclaim_stale_runs`
             # depends on for a run that spans many minutes/steps.
             await self._store.append_step(run.run_id, step)
             await self._store.renew_lock(run.run_id, run.lock)
+            # Refresh the redis live-view route on the same cadence so it never
+            # expires mid-run for a run that outlives the route TTL.
+            await self._publish_live_route(live_session_id, session, run.tier)
 
         try:
             result = await run_agent_loop(
@@ -152,6 +176,12 @@ class AgentWorkerLoop:
                 on_step=_on_step,
             )
         finally:
+            # Unpublish before releasing: a live-view connection opened against
+            # a session that's mid-release would 404 cleanly rather than race
+            # a half-torn-down context. The redis route (if any) is left to
+            # expire on its TTL -- SessionPlacer has no explicit delete.
+            if self._sessions is not None:
+                self._sessions.pop(live_session_id, None)
             try:
                 await release_interactive_session(
                     session,
@@ -180,3 +210,20 @@ class AgentWorkerLoop:
                 "error": result.error,
             },
         )
+
+    async def _publish_live_route(self, session_id: str, session: Session, tier: str) -> None:
+        """Write/refresh the redis `session:{id}` route so a `gateway`-role
+        process can proxy live-view to this worker. Best-effort and no-op when
+        no placer is wired (monolith relies on the in-process `_sessions` dict
+        instead), so a redis hiccup never touches the run."""
+
+        if self._placer is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._placer.commit_route(
+                session_id,
+                session.ctx.node_id,
+                session.identity,
+                tier,
+                self._lease_ttl_seconds,
+            )

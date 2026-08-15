@@ -390,6 +390,11 @@ class Wiring:
             enable_judge=os.environ.get("AGENTPILOT_AGENT_ENABLE_JUDGE", "").lower()
             in ("1", "true", "yes"),
             rotation=rotation,
+            # Live-view: register each run's session in the same in-process dict
+            # routes/live_view.py resolves against, and (when this process has a
+            # placer) publish the redis route so a gateway can proxy to it.
+            sessions=self.sessions,
+            placer=getattr(self, "placer", None),
         )
         self.agent_worker_loop.start()
 

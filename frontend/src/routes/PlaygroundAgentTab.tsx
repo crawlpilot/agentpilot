@@ -20,6 +20,7 @@ import { EmptyState } from '@/components/app/EmptyState'
 import { JsonTextareaField } from '@/components/app/JsonTextareaField'
 import { RecentRunsList } from '@/components/app/RecentRunsList'
 import { AgentActionCard } from '@/components/app/AgentActionCard'
+import { AgentLiveView } from '@/components/app/AgentLiveView'
 import { useCreateAgentRun, useAgentRunStatus, useCancelAgentRun } from '@/hooks/useAgentRuns'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -271,29 +272,9 @@ export function PlaygroundAgentTab() {
         </div>
       )}
 
-      {run && (
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Result</p>
-          {run.status === 'failed' ? (
-            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
-              <Badge variant="destructive">failed</Badge>
-              <span className="text-muted-foreground">{run.error ?? 'the run failed without an error message'}</span>
-            </div>
-          ) : run.status === 'completed' ? (
-            run.result ? (
-              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border p-3 text-xs">
-                {JSON.stringify(run.result, null, 2)}
-              </pre>
-            ) : (
-              <EmptyState title="No result returned" description="The run completed without a structured result." />
-            )
-          ) : (
-            <EmptyState title="No result yet" description="The agent is still working." />
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        {/* LEFT -- step timeline */}
+        <div className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-2">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Steps</p>
           {stepList.length > 0 && (
@@ -403,6 +384,35 @@ export function PlaygroundAgentTab() {
             )}
           </div>
         )}
+        </div>
+
+        {/* RIGHT -- live browser while running, result once finished */}
+        <div className="flex flex-col gap-2 lg:sticky lg:top-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {isRunning ? 'Live browser' : 'Result'}
+          </p>
+          {isRunning && runId ? (
+            <AgentLiveView runId={runId} />
+          ) : run && run.status === 'failed' ? (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
+              <Badge variant="destructive">failed</Badge>
+              <span className="text-muted-foreground">{run.error ?? 'the run failed without an error message'}</span>
+            </div>
+          ) : run && run.status === 'completed' ? (
+            run.result ? (
+              <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-xs shadow-sm">
+                {JSON.stringify(run.result, null, 2)}
+              </pre>
+            ) : (
+              <EmptyState title="No result returned" description="The run completed without a structured result." />
+            )
+          ) : (
+            <EmptyState
+              title="Nothing to show yet"
+              description="Start a run to watch the agent's browser live, then see its result here."
+            />
+          )}
+        </div>
       </div>
 
       <RecentRunsList runs={runs} />
