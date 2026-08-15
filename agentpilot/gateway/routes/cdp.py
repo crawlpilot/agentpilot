@@ -4,8 +4,9 @@ sibling route) + `WS /{id}/cdp` (raw, full-duplex CDP relay -- Runtime
 included, opt-in only via `enable_cdp=True` at session-open time).
 
 No baked-in path prefix, same reasoning as `routes/sessions.py`: `app.py`
-mounts this router at both `/v1/sessions` (monolith, tenant-facing) and
-`/internal/sessions` (worker/monolith-internal).
+mounts this router only on the `worker` role, at `/internal/sessions`. A
+`gateway` serves the tenant-facing `/v1/sessions/.../cdp` via
+`routes/cdp_proxy.py` instead.
 
 Auth is split by transport, not copied wholesale from `live_view.py`: the
 discovery GET is a plain HTTP route, so it authenticates the same way every

@@ -1,28 +1,27 @@
 """The composition root -- the ONLY file in the repo that imports `agentpilot.driver`.
 
-Role-aware (see `agentpilot.gateway.role`): a `worker`/`monolith` process owns the
-shared Patchright singleton, the `PatchrightDriver`, the registry (Redis-
-backed when `AGENTPILOT_REDIS_URL` is set, in-memory otherwise -- see
+Role-aware (see `agentpilot.gateway.role`): a `worker` process owns the shared
+Patchright singleton, the `PatchrightDriver`, the registry (Redis-backed when
+`AGENTPILOT_REDIS_URL` is set, in-memory otherwise -- see
 `agentpilot.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
-layer (`Vault`/`ProxyPinner`, both optional). A `worker` (not `monolith` --
-see `_init_worker()`) additionally self-registers into the fleet via
+layer (`Vault`/`ProxyPinner`, both optional). A `worker` additionally
+self-registers into the fleet via
 `agentpilot.placement.node_registry.NodeRegistry`, so the gateway's
 `SessionPlacer`/`NodeReaper` can see it. A `gateway` process constructs none
 of the driver-side state -- just an httpx client, a Redis client, and the
 placement layer (`SessionPlacer`, `NodeReaper`, a `RedisRegistry` used only
 for the reaper's lease-eviction calls) -- and never touches `agentpilot.driver`.
 
-The `session_id -> Session` dict is worker/monolith-local: `Registry` is
-keyed by `IdentityKey`, not `session_id`, since one warm context can be
-reused across many session_ids over its lifetime (open, release, reopen
-mints a new session_id for the same underlying context).
+The `session_id -> Session` dict is worker-local: `Registry` is keyed by
+`IdentityKey`, not `session_id`, since one warm context can be reused across
+many session_ids over its lifetime (open, release, reopen mints a new
+session_id for the same underlying context).
 
-P4 adds `jobs_store` (a `PostgresJobStore`, connected for *every* role that
-has `AGENTPILOT_DATABASE_URL` set -- monolith/gateway need it to serve
-`/v1/crawl`/`/v1/batch/scrape`, worker/monolith also need it for
-`crawl_worker_loop`) and `crawl_worker_loop` (a `CrawlWorkerLoop`, only on
-worker/monolith, folded into the existing role rather than a separate one --
-see `agentpilot.jobs.worker_loop`'s module docstring for that decision).
+P4 adds `jobs_store` (a `PostgresJobStore`, connected for *either* role that
+has `AGENTPILOT_DATABASE_URL` set -- `gateway` needs it to serve
+`/v1/crawl`/`/v1/batch/scrape`, `worker` needs it for `crawl_worker_loop`) and
+`crawl_worker_loop` (a `CrawlWorkerLoop`, only on `worker` -- see
+`agentpilot.jobs.worker_loop`'s module docstring for that decision).
 The agent platform adds the exact same pair for `/v1/agent/runs`: `agent_store`
 (a `PostgresAgentStore`) and `agent_worker_loop` (an `AgentWorkerLoop`), same
 connect/role rules as their crawl counterparts.
@@ -80,7 +79,7 @@ class Wiring:
         self.redis: Redis | None = Redis.from_url(redis_url) if redis_url else None
 
         # Placeholder until `_connect_api_keys()` (awaited from `get_wiring()`
-        # below) replaces it for `monolith`/`gateway` when `AGENTPILOT_DATABASE_URL`
+        # below) replaces it for `gateway` when `AGENTPILOT_DATABASE_URL`
         # is set. `worker` never mounts an auth-gated route and never touches
         # `wiring.api_keys` at all -- leaving this as `InMemoryApiKeyStore`
         # for it is correct, not merely cheap, now that opening the real
@@ -92,8 +91,8 @@ class Wiring:
 
         # Populated by _connect_jobs_store() (awaited from get_wiring(), same
         # reason _connect_api_keys() is split out of this sync __init__) --
-        # every role can use it (monolith/gateway serve /v1/crawl directly;
-        # worker/monolith also run CrawlWorkerLoop against it), unlike
+        # either role can use it (gateway serves /v1/crawl directly; worker
+        # runs CrawlWorkerLoop against it), unlike
         # api_keys there is no in-memory fallback: a durable job queue with
         # no durability isn't a meaningful stand-in, so routes/crawl.py
         # checks `wiring.jobs_store is not None` itself and returns a clear
@@ -111,15 +110,15 @@ class Wiring:
             self._init_worker()
 
     async def _connect_api_keys(self) -> None:
-        """Only `monolith`/`gateway` mount tenant-facing auth-gated routes, so
-        only they ever get a real (Postgres-backed) store -- `worker` keeps
-        the `InMemoryApiKeyStore()` placeholder from `__init__` forever,
-        since it would never be queried anyway. Split out of `__init__`
-        because `AsyncConnectionPool.open()` must be awaited (unlike Redis's
-        lazy `from_url()`), which can only happen inside a coroutine -- see
+        """Only `gateway` mounts tenant-facing auth-gated routes, so only it
+        ever gets a real (Postgres-backed) store -- `worker` keeps the
+        `InMemoryApiKeyStore()` placeholder from `__init__` forever, since it
+        would never be queried anyway. Split out of `__init__` because
+        `AsyncConnectionPool.open()` must be awaited (unlike Redis's lazy
+        `from_url()`), which can only happen inside a coroutine -- see
         `get_wiring()`'s docstring for why that's where this gets called."""
 
-        if self.role not in ("monolith", "gateway"):
+        if self.role != "gateway":
             return
         if self._database_url:
             self.api_keys = await PostgresApiKeyStore.connect(self._database_url)
@@ -128,26 +127,26 @@ class Wiring:
         # restart or be visible to any other process).
 
     async def _connect_jobs_store(self) -> None:
-        """Unlike `_connect_api_keys()`, every role connects this if
-        `AGENTPILOT_DATABASE_URL` is set -- monolith/gateway need it to serve
-        `/v1/crawl`/`/v1/batch/scrape`, worker (and monolith again) needs it
-        for `_start_crawl_worker_loop()`. No role-check, no in-memory
-        fallback: see `jobs_store`'s own docstring in `__init__`."""
+        """Unlike `_connect_api_keys()`, both roles connect this if
+        `AGENTPILOT_DATABASE_URL` is set -- `gateway` needs it to serve
+        `/v1/crawl`/`/v1/batch/scrape`, `worker` needs it for
+        `_start_crawl_worker_loop()`. No role-check, no in-memory fallback:
+        see `jobs_store`'s own docstring in `__init__`."""
 
         if self._database_url:
             self.jobs_store = await PostgresJobStore.connect(self._database_url)
 
     async def _connect_agent_store(self) -> None:
-        """Same rules as `_connect_jobs_store()`: monolith/gateway serve
-        `/v1/agent/runs` directly, worker (and monolith again) needs it for
+        """Same rules as `_connect_jobs_store()`: `gateway` serves
+        `/v1/agent/runs` directly, `worker` needs it for
         `_start_agent_worker_loop()`."""
 
         if self._database_url:
             self.agent_store = await PostgresAgentStore.connect(self._database_url)
 
     async def _connect_recipe_store(self) -> None:
-        """Same rules as `_connect_agent_store()`: monolith/gateway serve
-        `/v1/recipes` directly, worker (and monolith again) needs it for
+        """Same rules as `_connect_agent_store()`: `gateway` serves
+        `/v1/recipes` directly, `worker` needs it for
         `_start_recipe_worker_loop()`/`_start_recipe_scheduler_loop()`."""
 
         if self._database_url:
@@ -255,9 +254,7 @@ class Wiring:
         )
         self.reaper.start()
 
-        # Fleet self-registration -- only a real `worker` (not `monolith`,
-        # which never goes through the gateway's placement/routing at all,
-        # serving `/v1/sessions/...` directly) and only when there's a
+        # Fleet self-registration -- only a `worker`, and only when there's a
         # shared Redis for the gateway to actually see it in.
         self.node_registry: NodeRegistry | None = None
         if self.role == "worker" and self.redis is not None:
@@ -340,14 +337,14 @@ class Wiring:
         """Same two-step placeholder-then-replace reason as `crawl_worker_loop`."""
 
     async def _start_crawl_worker_loop(self) -> None:
-        """Only worker/monolith have a real local driver+registry to run
-        ephemeral scrapes against -- gateway never constructs one at all
-        (see `_init_gateway()`). A no-op if `AGENTPILOT_DATABASE_URL` was
-        never set, matching `jobs_store`'s "no in-memory fallback" stance:
-        crawl processing simply doesn't run without a durable queue behind
-        it, rather than silently doing something wrong."""
+        """Only `worker` has a real local driver+registry to run ephemeral
+        scrapes against -- gateway never constructs one at all (see
+        `_init_gateway()`). A no-op if `AGENTPILOT_DATABASE_URL` was never set,
+        matching `jobs_store`'s "no in-memory fallback" stance: crawl
+        processing simply doesn't run without a durable queue behind it,
+        rather than silently doing something wrong."""
 
-        if self.role not in ("worker", "monolith") or self.jobs_store is None:
+        if self.role != "worker" or self.jobs_store is None:
             return
         from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 
@@ -365,19 +362,18 @@ class Wiring:
     async def _start_agent_worker_loop(self) -> None:
         """Same rules as `_start_crawl_worker_loop()`."""
 
-        if self.role not in ("worker", "monolith") or self.agent_store is None:
+        if self.role != "worker" or self.agent_store is None:
             return
         from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
         from agentpilot.placement.placer import SessionPlacer
         from agentpilot.session.rotation import RotationConfig, RotationPolicy
 
-        # Publish each run's live-view route so a `gateway`-role process can
-        # proxy to this worker. The gateway-only `self.placer` doesn't exist on
-        # a `worker`, but `SessionPlacer.commit_route` only needs Redis, and the
-        # worker already has it (its `node:{id}` addr is registered by
-        # `NodeRegistry`), so build one straight from `self.redis`. `None` on
-        # monolith (no Redis) -- there live-view is served in-process from the
-        # `self.sessions` dict, no route needed.
+        # Publish each run's live-view route so the `gateway` can proxy to this
+        # worker. `SessionPlacer.commit_route` only needs Redis, and the worker
+        # already has it (its `node:{id}` addr is registered by `NodeRegistry`),
+        # so build one straight from `self.redis`. `None` only if Redis is
+        # somehow unset -- then the route can't be published and live-view for
+        # this worker's runs degrades to unavailable (the run itself is fine).
         live_route_placer = SessionPlacer(self.redis) if self.redis is not None else None
 
         step_timeout_raw = os.environ.get("AGENTPILOT_AGENT_STEP_TIMEOUT_S")
@@ -411,7 +407,7 @@ class Wiring:
     async def _start_recipe_worker_loop(self) -> None:
         """Same rules as `_start_agent_worker_loop()`."""
 
-        if self.role not in ("worker", "monolith") or self.recipe_store is None:
+        if self.role != "worker" or self.recipe_store is None:
             return
         from agentpilot.jobs.recipe_worker_loop import RecipeWorkerLoop
 
@@ -427,11 +423,11 @@ class Wiring:
 
     async def _start_recipe_scheduler_loop(self) -> None:
         """The minimal internal per-recipe scheduler -- needs no driver at
-        all (it only enqueues `recipe_runs` rows), but stays folded into
-        worker/monolith same as the other loops, for one consistent "who
-        runs background loops" story."""
+        all (it only enqueues `recipe_runs` rows), but stays folded into the
+        `worker` same as the other loops, for one consistent "who runs
+        background loops" story."""
 
-        if self.role not in ("worker", "monolith") or self.recipe_store is None:
+        if self.role != "worker" or self.recipe_store is None:
             return
         from agentpilot.jobs.recipe_scheduler_loop import RecipeSchedulerLoop
 
@@ -483,7 +479,7 @@ _wiring: Wiring | None = None
 async def get_wiring() -> Wiring:
     """`async def`, not plain `def`: FastAPI/Starlette runs sync `Depends()`
     callables in a worker thread (`anyio.to_thread`), which has no running
-    asyncio event loop of its own. `Wiring.__init__` (worker/monolith roles)
+    asyncio event loop of its own. `Wiring.__init__` (the `worker` role)
     starts the reaper via `asyncio.create_task`, which needs one -- a
     plain-`def` version of this crashed every request with `RuntimeError: no
     running event loop` the first time it constructed a `Wiring` off-thread.

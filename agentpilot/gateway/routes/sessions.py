@@ -1,7 +1,6 @@
 """The real session-lifecycle implementation: open -> execute (batched) ->
-release. No baked-in path prefix -- `app.py` mounts this same router at
-`/v1/sessions` (`monolith`/`worker`-serving-itself-in-tests) and at
-`/internal/sessions` (`worker`'s VPC-internal surface), per
+release. No baked-in path prefix -- `app.py` mounts this router only on the
+`worker` role, at `/internal/sessions` (its VPC-internal surface), per
 `agentpilot.gateway.role`. A `gateway`-role process never mounts this router at
 all; it mounts `routes/gateway_proxy.py` at `/v1/sessions` instead, which
 proxies to a worker's `/internal/sessions` copy of these exact routes.

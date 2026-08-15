@@ -3,8 +3,9 @@ frames only; `mode=interact` also accepts inbound `InputEvent` JSON messages
 and dispatches them via the driver.
 
 No baked-in path prefix, same reasoning as `routes/sessions.py`: `app.py`
-mounts this router at both `/v1/sessions` (monolith, tenant-facing) and
-`/internal/sessions` (worker/monolith-internal). Browsers can't set custom
+mounts this router only on the `worker` role, at `/internal/sessions`; a
+`gateway` serves the tenant-facing `/v1/sessions/.../live-view` via
+`routes/live_view_proxy.py`. Browsers can't set custom
 headers on a WS handshake, so the tenant credential travels as `?api_key=...`
 instead of `Authorization: Bearer` -- checked here, unconditionally, on
 every mount, not gated per-mount like the HTTP routes. This means the
