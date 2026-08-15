@@ -1,6 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Bot } from 'lucide-react'
+import {
+  AlertTriangle,
+  Bot,
+  Brain,
+  CheckCircle2,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  Loader2,
+} from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -10,12 +19,48 @@ import { Textarea } from '@/components/ui/textarea'
 import { EmptyState } from '@/components/app/EmptyState'
 import { JsonTextareaField } from '@/components/app/JsonTextareaField'
 import { RecentRunsList } from '@/components/app/RecentRunsList'
+import { AgentActionCard } from '@/components/app/AgentActionCard'
 import { useCreateAgentRun, useAgentRunStatus, useCancelAgentRun } from '@/hooks/useAgentRuns'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useToast } from '@/components/ui/toast'
 import { getAgentRunStatus } from '@/lib/api/agentRuns'
+import { cn } from '@/lib/utils'
 import type { AgentStepOut, RunStatus, Tier } from '@/lib/api/types'
+
+type StepStatus = 'ok' | 'warn' | 'bad'
+
+// The persisted step carries no explicit status, so classify from its result
+// strings: an outright failure -> bad, a soft "blocked/skipped/retry" -> warn,
+// otherwise ok. Matches the phrasing the loop writes in agentpilot/agent/loop.py.
+function stepStatus(step: AgentStepOut): StepStatus {
+  const joined = step.action_results.join(' ').toLowerCase()
+  if (/\bfailed\b|\berror\b/.test(joined)) return 'bad'
+  if (/blocked|skipped|retry|not change/.test(joined)) return 'warn'
+  return 'ok'
+}
+
+// Unique, order-preserving action labels for the collapsed step summary chips.
+function toolChips(step: AgentStepOut): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const a of step.actions) {
+    const label = String(a.type ?? '')
+      .replace(/Action$/, '')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+    if (label && !seen.has(label)) {
+      seen.add(label)
+      out.push(label)
+    }
+  }
+  return out
+}
+
+function fmtTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour12: false })
+}
 
 function statusVariant(status: RunStatus): NonNullable<BadgeProps['variant']> {
   switch (status) {
@@ -135,6 +180,7 @@ export function PlaygroundAgentTab() {
   const run = status?.data
   const isRunning = run ? run.status === 'queued' || run.status === 'running' : false
   const pct = run && run.max_steps > 0 ? Math.round((run.current_step / run.max_steps) * 100) : 0
+  const activeSeq = stepList.length > 0 ? stepList[stepList.length - 1].seq : null
 
   return (
     <div className="flex flex-col gap-6">
@@ -248,53 +294,108 @@ export function PlaygroundAgentTab() {
       )}
 
       <div className="flex flex-col gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {stepList.length > 0 ? `${stepList.length} steps` : 'Steps'}
-        </p>
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Steps</p>
+          {stepList.length > 0 && (
+            <span className="rounded-full border border-border bg-muted px-2 text-[11px] text-muted-foreground">
+              {stepList.length} taken
+            </span>
+          )}
+        </div>
         {stepList.length === 0 ? (
           <EmptyState title="No steps yet" description="The agent's per-step history will appear here." />
         ) : (
-          <div className="flex flex-col gap-2">
-            {stepList.map((step) => (
-              <details key={step.seq} className="rounded-md border border-border p-3">
-                <summary className="flex cursor-pointer select-none items-center gap-2 text-sm">
-                  <Badge>step {step.step_number}</Badge>
-                  <span className="flex-1 truncate text-xs text-muted-foreground">{step.next_goal ?? ''}</span>
-                </summary>
-                <div className="mt-3 flex flex-col gap-2 text-sm">
-                  {step.evaluation_previous_goal && (
-                    <div>
-                      <span className="text-muted-foreground">Evaluation: </span>
-                      {step.evaluation_previous_goal}
-                    </div>
+          <div className="flex flex-col gap-2.5">
+            {stepList.map((step) => {
+              // The newest step is "active" only while the run is still going.
+              const isActive = isRunning && step.seq === activeSeq
+              const status = stepStatus(step)
+              const chips = toolChips(step)
+              return (
+                <details
+                  key={step.seq}
+                  open={isActive}
+                  className={cn(
+                    'group overflow-hidden rounded-lg border border-border bg-card shadow-sm',
+                    isActive && 'border-accent/50 ring-1 ring-accent/30',
                   )}
-                  {step.memory && (
-                    <div>
-                      <span className="text-muted-foreground">Memory: </span>
-                      {step.memory}
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-muted-foreground">Actions</span>
-                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-border p-2 text-xs">
-                      {JSON.stringify(step.actions, null, 2)}
-                    </pre>
-                  </div>
-                  {step.action_results.length > 0 && (
-                    <div>
-                      <span className="text-muted-foreground">Results</span>
-                      <ul className="mt-1 flex flex-col gap-0.5 text-xs">
-                        {step.action_results.map((r, i) => (
-                          <li key={i} className="font-mono">
-                            {r}
-                          </li>
+                >
+                  <summary className="flex cursor-pointer select-none items-center gap-3 px-3.5 py-3">
+                    <StepNode n={step.step_number} status={status} active={isActive} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {step.next_goal || step.evaluation_previous_goal || `Step ${step.step_number}`}
+                      </span>
+                      {chips.length > 0 && (
+                        <span className="mt-1 flex flex-wrap gap-1.5">
+                          {chips.map((c) => (
+                            <span
+                              key={c}
+                              className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+                            >
+                              {c}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-3 text-[11px] tabular-nums text-muted-foreground">
+                      {isActive ? (
+                        <span className="flex items-center gap-1">
+                          <Loader2 className="size-3 animate-spin" />
+                          running
+                        </span>
+                      ) : (
+                        <span>{fmtTime(step.created_at)}</span>
+                      )}
+                      <ChevronRight className="size-4 transition-transform group-open:rotate-90" />
+                    </span>
+                  </summary>
+
+                  <div className="flex flex-col gap-3 border-t border-border px-3.5 pb-4 pt-3.5 pl-[52px]">
+                    {step.thinking && (
+                      <Reason icon={<Brain className="size-3.5 text-accent" />} label="Thinking" tone="accent">
+                        {step.thinking}
+                      </Reason>
+                    )}
+                    {step.evaluation_previous_goal && (
+                      <Reason label="Evaluation">{step.evaluation_previous_goal}</Reason>
+                    )}
+                    {step.memory && <Reason label="Memory">{step.memory}</Reason>}
+                    {step.next_goal && <Reason label="Next goal">{step.next_goal}</Reason>}
+
+                    {step.actions.length > 0 && (
+                      <div className="flex flex-col gap-1.5">
+                        {step.actions.map((a, i) => (
+                          <AgentActionCard key={i} action={a} />
                         ))}
+                      </div>
+                    )}
+
+                    {step.action_results.length > 0 && (
+                      <ul className="flex flex-col gap-1">
+                        {step.action_results.map((r, i) => {
+                          const bad = /\bfailed\b|\berror\b/i.test(r)
+                          const warn = /blocked|skipped|retry|not change/i.test(r)
+                          return (
+                            <li key={i} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                              {bad ? (
+                                <CircleX className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+                              ) : warn ? (
+                                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                              ) : (
+                                <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                              )}
+                              <span>{r}</span>
+                            </li>
+                          )
+                        })}
                       </ul>
-                    </div>
-                  )}
-                </div>
-              </details>
-            ))}
+                    )}
+                  </div>
+                </details>
+              )
+            })}
             {nextCursor && (
               <Button variant="outline" size="sm" onClick={loadMore} disabled={loadingMore} className="w-fit">
                 {loadingMore ? 'Loading…' : 'Load more'}
@@ -305,6 +406,59 @@ export function PlaygroundAgentTab() {
       </div>
 
       <RecentRunsList runs={runs} />
+    </div>
+  )
+}
+
+function StepNode({ n, status, active }: { n: number; status: StepStatus; active: boolean }) {
+  if (active) {
+    return (
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent text-xs font-bold text-accent-foreground">
+        {n}
+      </span>
+    )
+  }
+  const tone =
+    status === 'bad'
+      ? 'border-destructive/50 bg-destructive/10 text-destructive'
+      : status === 'warn'
+        ? 'border-amber-500/50 bg-amber-500/10 text-amber-600'
+        : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600'
+  return (
+    <span
+      className={cn(
+        'flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold tabular-nums',
+        tone,
+      )}
+    >
+      {status === 'ok' ? <CheckCircle2 className="size-4" /> : n}
+    </span>
+  )
+}
+
+function Reason({
+  label,
+  icon,
+  tone,
+  children,
+}: {
+  label: string
+  icon?: React.ReactNode
+  tone?: 'accent'
+  children: React.ReactNode
+}) {
+  return (
+    <div className="grid grid-cols-[88px_1fr] items-start gap-2.5">
+      <span
+        className={cn(
+          'flex items-center gap-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wide',
+          tone === 'accent' ? 'text-accent' : 'text-muted-foreground',
+        )}
+      >
+        {icon}
+        {label}
+      </span>
+      <span className="text-[13px] text-foreground/90">{children}</span>
     </div>
   )
 }

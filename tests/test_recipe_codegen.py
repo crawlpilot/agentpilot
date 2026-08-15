@@ -28,7 +28,7 @@ JSON_ONLY_RECIPE = Recipe(
             group_id="g0",
             field_names=["title"],
             reveal_steps=[],
-            field_locators={"title": FieldLocator(source="json_ld", path="[0].name")},
+            field_locators={"title": [FieldLocator(source="json_ld", path="[0].name")]},
         )
     ],
 )
@@ -46,7 +46,7 @@ REPEAT_RECIPE = Recipe(
             group_id="g0",
             field_names=["size", "price"],
             reveal_steps=[],
-            field_locators={"price": FieldLocator(source="css", selector=".price")},
+            field_locators={"price": [FieldLocator(source="css", selector=".price")]},
             repeat=RepeatSpec(
                 option_locator=Locator(source="ax_role", role="button", name_in=["S", "M"]),
                 max_iterations=20,

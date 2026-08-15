@@ -1,10 +1,17 @@
-"""Per-field locator proposal + mechanical verify -- one LLM call proposes a
-`FieldLocator` per not-yet-satisfied field, each proposal is evaluated right
-away (no LLM), and a field that fails is retried once with the failure fed
-back to the model. Run interleaved, once per exploration step, by
-`build.py`'s `on_step` hook -- not as a single end-of-run pass -- so locator
-capture happens while the page state that revealed a field is still live and
-known.
+"""Per-field locator proposal + mechanical verify -- one LLM call proposes an
+ordered list of candidate `FieldLocator`s per not-yet-satisfied field, each
+candidate is evaluated right away (no LLM), verified-resolving candidates are
+merged with algorithmically-synthesized robust CSS alternatives
+(`selector_synthesis`), and a field that fails entirely is retried once with
+the failure fed back to the model. Run interleaved, once per exploration step,
+by `build.py`'s `on_step` hook -- not as a single end-of-run pass -- so
+locator capture happens while the page state that revealed a field is still
+live and known.
+
+Each field ends up with an ordered *candidate list* (Pulsar's comma-union /
+coalesce, resolved first-non-empty-wins at replay), ordered most-robust-first:
+json_ld/hydration/meta paths, then synthesized stable-attribute CSS, then the
+model's remaining css/ax_role proposals.
 """
 
 from __future__ import annotations
@@ -16,27 +23,46 @@ from agentpilot.llm.client import LLMConfig, chat_json_conversation
 from agentpilot.recipe.evaluate import evaluate_field_locator
 from agentpilot.recipe.models import FieldLocator
 from agentpilot.recipe.schema import FieldSpec
+from agentpilot.recipe.selector_synthesis import synthesize_css_candidates
 from agentpilot.session.interactive import InteractiveSession
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.snapshot import AXSnapshot
 
+# Preference order for the final candidate list: structured-data paths are the
+# most redesign-resilient, ax_role (accessibility) next, css last.
+_SOURCE_RANK = {"json_ld": 0, "hydration": 0, "meta": 0, "ax_role": 1, "css": 2}
+
 _SYSTEM_PROMPT = (
     "You are locating structured-data fields on a rendered web page in order "
     "to build a reusable scraping recipe. Given the page's accessibility "
-    "snapshot and any already-parsed JSON-LD/hydration/meta data, propose "
-    "ONE stable locator per requested field that is currently resolvable. "
-    "STRONGLY prefer a json_ld/hydration/meta source with a dotted/bracketed "
-    "`path` (e.g. 'offers.price' or '[0].name') whenever the field's value "
-    "is actually present in the provided JSON blob -- it is far more "
-    "resilient to a site redesign than a css selector. Only propose "
-    "source=css or source=ax_role when the value is not present in the JSON "
-    "blob. For ax_role, `role` must be one of the roles shown in brackets in "
-    "the snapshot (e.g. 'button', 'link', 'text') and `name_contains` a "
-    "short substring of that element's visible name. If a field cannot "
-    "currently be located, omit it from your response entirely -- do not "
-    "guess."
+    "snapshot and any already-parsed JSON-LD/hydration/meta data, propose an "
+    "ORDERED LIST of 1-3 candidate locators per requested field, best first, "
+    "each currently resolvable. Multiple candidates give the recipe resilient "
+    "fallbacks. STRONGLY prefer a json_ld/hydration/meta source with a "
+    "dotted/bracketed `path` (e.g. 'offers.price' or '[0].name') whenever the "
+    "field's value is present in the provided JSON blob -- far more resilient "
+    "to a redesign than a css selector. For css, prefer stable, "
+    "human-meaningful selectors: an id, a data-* / aria-* / itemprop "
+    "attribute, or a sibling/`:has()` relationship, over long positional "
+    "paths. For ax_role, `role` must be one of the roles shown in brackets in "
+    "the snapshot (e.g. 'button', 'link', 'text') and `name_contains` a short "
+    "substring of that element's visible name. If a field cannot currently be "
+    "located, omit it entirely -- do not guess."
 )
+
+_LOCATOR_ITEM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "enum": ["json_ld", "hydration", "meta", "css", "ax_role"]},
+        "path": {"type": ["string", "null"]},
+        "selector": {"type": ["string", "null"]},
+        "attribute": {"type": ["string", "null"]},
+        "role": {"type": ["string", "null"]},
+        "name_contains": {"type": ["string", "null"]},
+    },
+    "required": ["source"],
+}
 
 _JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -47,17 +73,9 @@ _JSON_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "field": {"type": "string"},
-                    "source": {
-                        "type": "string",
-                        "enum": ["json_ld", "hydration", "meta", "css", "ax_role"],
-                    },
-                    "path": {"type": ["string", "null"]},
-                    "selector": {"type": ["string", "null"]},
-                    "attribute": {"type": ["string", "null"]},
-                    "role": {"type": ["string", "null"]},
-                    "name_contains": {"type": ["string", "null"]},
+                    "candidates": {"type": "array", "items": _LOCATOR_ITEM_SCHEMA},
                 },
-                "required": ["field", "source"],
+                "required": ["field", "candidates"],
             },
         }
     },
@@ -88,7 +106,7 @@ def _build_user_message(
     return "\n".join(parts)
 
 
-def _parse_locator(item: dict[str, Any]) -> FieldLocator:
+def _parse_candidate(item: dict[str, Any]) -> FieldLocator:
     return FieldLocator(
         source=item["source"],
         path=item.get("path"),
@@ -99,6 +117,20 @@ def _parse_locator(item: dict[str, Any]) -> FieldLocator:
     )
 
 
+def _parse_field_candidates(item: dict[str, Any]) -> list[FieldLocator]:
+    # Accept the candidate-list shape; tolerate an older single-locator item.
+    raw_candidates = item.get("candidates")
+    if not isinstance(raw_candidates, list):
+        raw_candidates = [item] if item.get("source") else []
+    out: list[FieldLocator] = []
+    for cand in raw_candidates:
+        try:
+            out.append(_parse_candidate(cand))
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
 async def propose_field_locators(
     fields: dict[str, FieldSpec],
     *,
@@ -106,24 +138,100 @@ async def propose_field_locators(
     structured_data: dict[str, Any],
     llm_config: LLMConfig,
     failures: dict[str, str] | None = None,
-) -> dict[str, FieldLocator]:
+) -> dict[str, list[FieldLocator]]:
+    from agentpilot.agent.reliability import RetryStrategy
+
     user = _build_user_message(
         fields, snapshot_text=snapshot_text, structured_data=structured_data, failures=failures
     )
-    raw = await chat_json_conversation(
-        [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
-        config=llm_config,
-        json_schema=_JSON_SCHEMA,
+    # Wrap the network call in RetryStrategy so a transient 429/5xx/timeout is
+    # retried with backoff (a bad-JSON/shape ValueError is classified
+    # non-retryable, so it fails fast) -- mirrors the agent loop's own LLM
+    # retry, which the recipe's direct calls previously lacked.
+    raw = await RetryStrategy().execute(
+        lambda: chat_json_conversation(
+            [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
+            config=llm_config,
+            json_schema=_JSON_SCHEMA,
+        )
     )
-    proposals: dict[str, FieldLocator] = {}
+    proposals: dict[str, list[FieldLocator]] = {}
     for item in raw.get("locators", []):
         name = item.get("field")
         if name in fields:
-            try:
-                proposals[name] = _parse_locator(item)
-            except (KeyError, TypeError):
-                continue
+            candidates = _parse_field_candidates(item)
+            if candidates:
+                proposals[name] = candidates
     return proposals
+
+
+async def _verify_and_enrich(
+    candidates: list[FieldLocator],
+    *,
+    structured_data: dict[str, Any],
+    snapshot: AXSnapshot,
+    session: InteractiveSession,
+    registry: RegistryProtocol,
+    driver: BrowserDriver,
+) -> list[FieldLocator]:
+    """Keep the candidates that actually resolve, augment with synthesized
+    robust CSS alternatives (from the first resolving css candidate), and
+    return them ordered most-robust-first. Empty if none resolve."""
+
+    resolving: list[FieldLocator] = []
+    for locator in candidates:
+        value = await evaluate_field_locator(
+            locator,
+            structured_data=structured_data,
+            session=session,
+            registry=registry,
+            driver=driver,
+            snapshot=snapshot,
+        )
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            resolving.append(locator)
+
+    if not resolving:
+        return []
+
+    seed = next((loc for loc in resolving if loc.source == "css" and loc.selector), None)
+    if seed is not None:
+        synthesized = await synthesize_css_candidates(
+            seed.selector or "",
+            seed.attribute or "text",
+            session=session,
+            registry=registry,
+            driver=driver,
+        )
+        for cand in synthesized:
+            value = await evaluate_field_locator(
+                cand,
+                structured_data=structured_data,
+                session=session,
+                registry=registry,
+                driver=driver,
+                snapshot=snapshot,
+            )
+            if value is not None and not (isinstance(value, str) and not value.strip()):
+                resolving.append(cand)
+
+    # Stable sort by source rank keeps within-source order (the model's own
+    # ranking, and synthesized-before-LLM css since synthesized are appended
+    # after the seed but we want stable-attribute css ahead -- rank handles
+    # source tiers; css order is preserved as discovered).
+    deduped = _dedupe(resolving)
+    return sorted(deduped, key=lambda loc: _SOURCE_RANK.get(loc.source, 3))
+
+
+def _dedupe(locators: list[FieldLocator]) -> list[FieldLocator]:
+    seen: set[tuple[Any, ...]] = set()
+    out: list[FieldLocator] = []
+    for loc in locators:
+        key = (loc.source, loc.path, loc.selector, loc.attribute, loc.role, loc.name_contains)
+        if key not in seen:
+            seen.add(key)
+            out.append(loc)
+    return out
 
 
 async def propose_and_verify_fields(
@@ -137,13 +245,14 @@ async def propose_and_verify_fields(
     driver: BrowserDriver,
     llm_config: LLMConfig,
     max_retries: int = 1,
-) -> dict[str, FieldLocator]:
-    """Propose -> mechanically verify -> (on failure) retry with the failure
-    fed back, up to `max_retries` times. Returns only fields that verified
-    successfully; unresolved fields are simply absent (not an error) -- the
-    caller keeps them in its own unfound-fields set for a later step."""
+) -> dict[str, list[FieldLocator]]:
+    """Propose -> mechanically verify each candidate -> synthesize robust CSS
+    alternatives -> (on total failure) retry with the failure fed back, up to
+    `max_retries` times. Returns, per verified field, an ordered candidate
+    list (most-robust-first); unresolved fields are simply absent (not an
+    error) -- the caller keeps them for a later step."""
 
-    verified: dict[str, FieldLocator] = {}
+    verified: dict[str, list[FieldLocator]] = {}
     remaining = dict(fields)
     failures: dict[str, str] | None = None
 
@@ -159,24 +268,22 @@ async def propose_and_verify_fields(
         )
         next_failures: dict[str, str] = {}
         for name in list(remaining):
-            locator = proposals.get(name)
-            if locator is None:
+            candidates = proposals.get(name)
+            if not candidates:
                 next_failures[name] = "model did not propose a locator for this field"
                 continue
-            value = await evaluate_field_locator(
-                locator,
+            resolved = await _verify_and_enrich(
+                candidates,
                 structured_data=structured_data,
+                snapshot=snapshot,
                 session=session,
                 registry=registry,
                 driver=driver,
-                snapshot=snapshot,
             )
-            if value is None or (isinstance(value, str) and not value.strip()):
-                next_failures[name] = (
-                    f"proposed locator (source={locator.source}) resolved to no value"
-                )
+            if not resolved:
+                next_failures[name] = "no proposed candidate resolved to a value"
                 continue
-            verified[name] = locator
+            verified[name] = resolved
             del remaining[name]
         failures = next_failures
         if not failures:

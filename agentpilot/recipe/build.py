@@ -157,16 +157,20 @@ class ExplorationState:
             del self._unfound[name]
 
     def _freeze_groups(
-        self, verified: dict[str, FieldLocator], *, snapshot: AXSnapshot, last_click_ref: str | None
+        self,
+        verified: dict[str, list[FieldLocator]],
+        *,
+        snapshot: AXSnapshot,
+        last_click_ref: str | None,
     ) -> None:
-        by_array: dict[str, dict[str, FieldLocator]] = {}
-        scalar: dict[str, FieldLocator] = {}
-        for name, locator in verified.items():
+        by_array: dict[str, dict[str, list[FieldLocator]]] = {}
+        scalar: dict[str, list[FieldLocator]] = {}
+        for name, locators in verified.items():
             array_name = self._leaf_to_array.get(name)
             if array_name:
-                by_array.setdefault(array_name, {})[name] = locator
+                by_array.setdefault(array_name, {})[name] = locators
             else:
-                scalar[name] = locator
+                scalar[name] = locators
 
         # If an array field is satisfied THIS call, the batch's trailing
         # click is the representative-option click -- superseded by that

@@ -63,6 +63,7 @@ def _step_out(step: AgentStepRow) -> AgentStepOut:
         next_goal=step.next_goal,
         actions=step.actions,
         action_results=step.action_results,
+        thinking=step.thinking,
         created_at=step.created_at.isoformat(),
     )
 

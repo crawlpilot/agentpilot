@@ -173,7 +173,7 @@ async def test_build_and_replay_accordion_json_ld_case(
         assert len(recipe.field_groups) == 1
         group = recipe.field_groups[0]
         assert group.field_names == ["price"]
-        assert group.field_locators["price"].source == "json_ld"
+        assert group.field_locators["price"][0].source == "json_ld"
         assert len(recipe.global_setup) == 1  # the "Show details" click
         assert calls["propose"] >= 1  # at least one successful proposal; earlier
         # steps may have tried (and failed to verify) before the click revealed it
@@ -386,7 +386,7 @@ async def test_heal_repairs_a_group_whose_css_locator_stops_resolving(
             max_steps=5,
         )
         assert result.success is True
-        assert recipe.field_groups[0].field_locators["price"].selector == "#price"
+        assert recipe.field_groups[0].field_locators["price"][0].selector == "#price"
 
         current_html["value"] = redesigned_html
 
@@ -411,4 +411,4 @@ async def test_heal_repairs_a_group_whose_css_locator_stops_resolving(
     assert healed.health_status == "healthy"
     assert heal_result.success is True
     assert heal_result.data["price"] == "24.99"
-    assert healed.field_groups[0].field_locators["price"].selector == "#price-v2"
+    assert healed.field_groups[0].field_locators["price"][0].selector == "#price-v2"

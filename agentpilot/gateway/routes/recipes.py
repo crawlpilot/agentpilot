@@ -35,6 +35,7 @@ from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.recipe_store import RecipeOut as RecipeRow
 from agentpilot.jobs.recipe_store import RecipeRunOut as RecipeRunRow
 from agentpilot.observability.metrics import requests_total
+from agentpilot.recipe.config import RecipeConfig
 
 router = APIRouter(tags=["recipes"])
 
@@ -93,6 +94,17 @@ async def create_recipe(
         req = req.model_copy(update={"tenant": authed.tenant})
     requests_total.labels(tenant=req.tenant, route="create_recipe").inc()
     store = _require_recipe_store(wiring)
+
+    # Enforce the schedule-interval floor: without it a caller could set a
+    # 1-second interval and the scheduler would hammer the target site every
+    # tick (a DoS/abuse vector). This is the only ingress -- there is no
+    # update endpoint -- so validating here covers every scheduled recipe.
+    floor = RecipeConfig.from_env().min_schedule_interval_s
+    if req.schedule_interval_seconds is not None and req.schedule_interval_seconds < floor:
+        raise HTTPException(
+            status_code=400,
+            detail=f"schedule_interval_seconds must be >= {floor} (minimum schedule interval)",
+        )
 
     recipe = await store.create_recipe(
         tenant=req.tenant,

@@ -66,7 +66,8 @@ def _is_pure_json_recipe(recipe: Recipe) -> bool:
     return all(
         locator.source in ("json_ld", "hydration", "meta")
         for group in recipe.field_groups
-        for locator in group.field_locators.values()
+        for candidates in group.field_locators.values()
+        for locator in candidates
     )
 
 
@@ -91,17 +92,23 @@ async def generate_scraper_code(recipe: Recipe, *, language: str, llm_config: LL
             "json_ld/hydration/meta -- this recipe has at least one css/ax_role locator"
         )
 
+    from agentpilot.agent.reliability import RetryStrategy
+
     user = (
         f"Language/framework: {language}\n{_LANGUAGE_PACKS[language]}\n\n"
         f"Recipe:\n{_json.dumps(_recipe_to_prompt_dict(recipe), indent=2)}"
     )
-    raw = await chat_json_conversation(
-        [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
-        config=llm_config,
-        json_schema={
-            "type": "object",
-            "properties": {"code": {"type": "string"}, "notes": {"type": "string"}},
-            "required": ["code"],
-        },
+    # Retry a transient 429/5xx/timeout with backoff (a bad-shape ValueError is
+    # non-retryable); the recipe's direct LLM calls previously had none.
+    raw = await RetryStrategy().execute(
+        lambda: chat_json_conversation(
+            [{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
+            config=llm_config,
+            json_schema={
+                "type": "object",
+                "properties": {"code": {"type": "string"}, "notes": {"type": "string"}},
+                "required": ["code"],
+            },
+        )
     )
     return str(raw["code"])

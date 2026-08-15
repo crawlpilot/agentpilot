@@ -89,7 +89,10 @@ async def chat_json_conversation(
     else:
         response_format = {"type": "json_object"}
 
-    async with httpx.AsyncClient(timeout=config.timeout_s) as client:
+    # Split connect vs read: a hung TCP/TLS connect gets its own short budget
+    # so it can't silently consume the full (long) generation read timeout.
+    timeout = httpx.Timeout(config.timeout_s, connect=min(10.0, config.timeout_s))
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f"{config.base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {config.api_key}"},

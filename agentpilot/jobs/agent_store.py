@@ -64,6 +64,7 @@ class AgentStepOut:
     next_goal: str | None
     actions: list[dict[str, Any]]
     action_results: list[str]
+    thinking: str | None
     created_at: datetime
 
 
@@ -318,7 +319,7 @@ class PostgresAgentStore:
                 await cur.execute(
                     f"""
                     SELECT s.seq, s.step_number, s.evaluation_previous_goal, s.memory,
-                           s.next_goal, s.actions, s.action_results, s.created_at
+                           s.next_goal, s.actions, s.action_results, s.thinking, s.created_at
                     FROM agent_steps s JOIN agent_runs r ON r.run_id = s.run_id
                     WHERE s.run_id = %s AND r.tenant = %s {cursor_clause}
                     ORDER BY s.seq LIMIT %s
@@ -335,6 +336,7 @@ class PostgresAgentStore:
                 next_goal=r["next_goal"],
                 actions=r["actions"] or [],
                 action_results=r["action_results"] or [],
+                thinking=r["thinking"],
                 created_at=r["created_at"],
             )
             for r in rows

@@ -43,7 +43,7 @@ def test_field_group_round_trips_with_repeat() -> None:
         group_id="g1",
         field_names=["size", "price"],
         reveal_steps=[RevealStep(action="click", locator=Locator(source="ax_role", role="tab"))],
-        field_locators={"price": FieldLocator(source="json_ld", path="offers.price")},
+        field_locators={"price": [FieldLocator(source="json_ld", path="offers.price")]},
         repeat=RepeatSpec(
             option_locator=Locator(source="ax_role", role="button", name_in=["S", "M"]),
             max_iterations=5,
@@ -59,9 +59,25 @@ def test_field_group_round_trips_without_repeat() -> None:
         group_id="g0",
         field_names=["title"],
         reveal_steps=[],
-        field_locators={"title": FieldLocator(source="css", selector="h1", attribute="text")},
+        field_locators={"title": [FieldLocator(source="css", selector="h1", attribute="text")]},
     )
     assert FieldGroup.from_dict(group.to_dict()) == group
+
+
+def test_field_group_from_dict_accepts_legacy_single_locator() -> None:
+    # Recipes persisted before multi-selector stored one locator dict per
+    # field (not a list); from_dict must still hydrate them.
+    legacy = {
+        "group_id": "g0",
+        "field_names": ["title"],
+        "reveal_steps": [],
+        "field_locators": {"title": {"source": "css", "selector": "h1", "attribute": "text"}},
+        "repeat": None,
+    }
+    restored = FieldGroup.from_dict(legacy)
+    assert restored.field_locators["title"] == [
+        FieldLocator(source="css", selector="h1", attribute="text")
+    ]
 
 
 def test_recipe_groups_from_dict_reconstructs_global_setup_and_groups() -> None:
@@ -80,7 +96,7 @@ def test_recipe_groups_from_dict_reconstructs_global_setup_and_groups() -> None:
                 group_id="g0",
                 field_names=["title"],
                 reveal_steps=[],
-                field_locators={"title": FieldLocator(source="css", selector="h1")},
+                field_locators={"title": [FieldLocator(source="css", selector="h1")]},
             )
         ],
     )

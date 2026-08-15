@@ -21,6 +21,7 @@ from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore, RecipeOut
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.build import DEFAULT_BUILD_MAX_STEPS, build_recipe
+from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.codegen import generate_scraper_code
 from agentpilot.recipe.heal import check_and_heal
 from agentpilot.recipe.models import Recipe, RecipeRunResult
@@ -118,16 +119,51 @@ class RecipeWorkerLoop:
 
     async def _process(self, run: ClaimedRecipeRun, semaphore: asyncio.Semaphore) -> None:
         async with semaphore:
+            # Keep this run's lease fresh for its whole (potentially long)
+            # duration so `reclaim_stale_runs` can't hand it to a second worker
+            # -- a build is up to 15 agent steps, well past `stale_after`.
+            heartbeat = asyncio.create_task(self._heartbeat(run))
             try:
                 await self._process_run(run)
             except Exception as exc:
                 log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
                 await self._store.fail_run(run.run_id, run.lock, str(exc))
+            finally:
+                heartbeat.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat
+
+    async def _heartbeat(self, run: ClaimedRecipeRun) -> None:
+        interval = max(self._stale_after_seconds / 3.0, 1.0)
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._store.renew_lock(run.run_id, run.lock)
+            except Exception:
+                log.warning("recipe_worker_loop.renew_failed", run_id=run.run_id)
 
     async def _process_run(self, run: ClaimedRecipeRun) -> None:
         if run.kind == "codegen":
             await self._process_codegen(run)
             return
+
+        if run.kind == "heal":
+            cfg = RecipeConfig.from_env()
+            if run.recipe.heal_attempts >= cfg.max_heal_attempts:
+                # Exhausted the heal budget -- stop burning LLM/browser cycles;
+                # only a fresh build (which resets the streak) recovers it.
+                await self._store.mark_recipe_broken(run.recipe_id)
+                await self._store.complete_run(
+                    run.run_id,
+                    run.lock,
+                    data=None,
+                    field_failures=None,
+                    error=(
+                        f"max heal attempts ({cfg.max_heal_attempts}) exhausted; "
+                        "recipe marked broken, rebuild required"
+                    ),
+                )
+                return
 
         session = await open_interactive_session(
             session_id=f"recipe-run-{run.run_id}",
@@ -182,6 +218,7 @@ class RecipeWorkerLoop:
             field_groups=[g.to_dict() for g in recipe.field_groups],
             health_status=recipe.health_status,
             diff_summary="initial build",
+            heal_attempts="reset",  # a fresh build clears any prior failed-heal streak
         )
         await self._complete_from_result(run, result)
 
@@ -212,6 +249,9 @@ class RecipeWorkerLoop:
             field_groups=[g.to_dict() for g in healed.field_groups],
             health_status=healed.health_status,
             diff_summary=f"heal cycle (fields: {sorted(result.field_failures)})",
+            # Reset the streak on a healthy heal; otherwise count it toward the
+            # max_heal_attempts cutoff.
+            heal_attempts="reset" if healed.health_status == "healthy" else "increment",
         )
         await self._complete_from_result(run, result)
 

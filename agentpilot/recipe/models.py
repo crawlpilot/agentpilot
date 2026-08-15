@@ -161,12 +161,23 @@ class FieldLocator:
         )
 
 
+def _locators_from_dict(value: Any) -> list[FieldLocator]:
+    """A field's stored locators are an ordered *candidate list* (tried in
+    order, first non-empty wins -- Pulsar's comma-union/coalesce idiom). Older
+    recipes stored a single locator dict per field; accept both so existing
+    `field_groups` JSONB deserializes unchanged."""
+
+    if isinstance(value, list):
+        return [FieldLocator.from_dict(v) for v in value]
+    return [FieldLocator.from_dict(value)]
+
+
 @dataclass
 class FieldGroup:
     group_id: str
     field_names: list[str]
     reveal_steps: list[RevealStep]
-    field_locators: dict[str, FieldLocator]
+    field_locators: dict[str, list[FieldLocator]]
     repeat: RepeatSpec | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -174,7 +185,9 @@ class FieldGroup:
             "group_id": self.group_id,
             "field_names": self.field_names,
             "reveal_steps": [s.to_dict() for s in self.reveal_steps],
-            "field_locators": {k: v.to_dict() for k, v in self.field_locators.items()},
+            "field_locators": {
+                k: [loc.to_dict() for loc in v] for k, v in self.field_locators.items()
+            },
             "repeat": self.repeat.to_dict() if self.repeat else None,
         }
 
@@ -184,7 +197,9 @@ class FieldGroup:
             group_id=d["group_id"],
             field_names=list(d["field_names"]),
             reveal_steps=[RevealStep.from_dict(s) for s in d["reveal_steps"]],
-            field_locators={k: FieldLocator.from_dict(v) for k, v in d["field_locators"].items()},
+            field_locators={
+                k: _locators_from_dict(v) for k, v in d["field_locators"].items()
+            },
             repeat=RepeatSpec.from_dict(d["repeat"]) if d.get("repeat") else None,
         )
 

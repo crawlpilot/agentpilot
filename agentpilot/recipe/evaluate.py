@@ -106,3 +106,37 @@ async def evaluate_field_locator(
         return matches[0].name if matches else None
 
     return None
+
+
+def _is_empty(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+async def evaluate_field_locators(
+    candidates: list[FieldLocator],
+    *,
+    structured_data: dict[str, Any] | None,
+    session: InteractiveSession,
+    registry: RegistryProtocol,
+    driver: BrowserDriver,
+    snapshot: AXSnapshot | None = None,
+) -> Any:
+    """Try each candidate in order, returning the first non-empty resolution
+    -- Pulsar's coalesce/comma-union idiom (`array_first_not_blank(make_array(
+    a, b))`). Candidates are stored most-preferred-first (json_ld/hydration/
+    meta ahead of css/ax_role, stable-attribute CSS ahead of positional), so a
+    broken primary selector transparently falls back to the next without an
+    LLM. Returns `None` only if every candidate resolves empty."""
+
+    for locator in candidates:
+        value = await evaluate_field_locator(
+            locator,
+            structured_data=structured_data,
+            session=session,
+            registry=registry,
+            driver=driver,
+            snapshot=snapshot,
+        )
+        if not _is_empty(value):
+            return value
+    return None

@@ -472,6 +472,7 @@ export interface AgentStepOut {
   next_goal: string | null
   actions: Record<string, unknown>[]
   action_results: string[]
+  thinking: string | null
   created_at: string
 }
 

@@ -34,6 +34,7 @@ class RecipeOut:
     schedule_interval_seconds: float | None
     created_at: datetime
     updated_at: datetime
+    heal_attempts: int = 0
 
 
 @dataclass
@@ -78,6 +79,7 @@ def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
         schedule_interval_seconds=row["schedule_interval_seconds"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        heal_attempts=row.get("heal_attempts", 0),
     )
 
 
@@ -100,7 +102,7 @@ def _run_from_row(row: dict[str, Any]) -> RecipeRunOut:
 _RECIPE_COLUMNS = (
     "recipe_id, tenant, name, url_pattern, field_schema, version, global_setup, "
     "field_groups, health_status, last_verified_at, last_run_at, "
-    "schedule_interval_seconds, created_at, updated_at"
+    "schedule_interval_seconds, created_at, updated_at, heal_attempts"
 )
 
 _RUN_COLUMNS = (
@@ -418,19 +420,38 @@ class PostgresRecipeStore:
         field_groups: list[dict[str, Any]],
         health_status: str,
         diff_summary: str | None = None,
+        heal_attempts: str = "keep",
     ) -> None:
         """Called by the worker after a `build`/`heal` run completes --
         updates the current recipe row and appends an audit entry to
-        `recipe_versions`, in one transaction."""
+        `recipe_versions`, in one transaction.
+
+        `last_verified_at` advances ONLY when the result is `healthy` (a
+        degraded heal must not overstate freshness). `heal_attempts` is
+        `reset` (0), `increment` (+1), or `keep` -- the worker resets on build
+        / healthy heal and increments on a heal that didn't restore health, so
+        the streak drives the `max_heal_attempts` cutoff."""
 
         from psycopg.types.json import Jsonb
 
         async with self._pool.connection() as conn, conn.transaction():
             await conn.execute(
                 "UPDATE recipes SET version = %s, global_setup = %s, field_groups = %s, "
-                "health_status = %s, last_verified_at = now(), updated_at = now() "
+                "health_status = %s, updated_at = now(), "
+                "last_verified_at = CASE WHEN %s = 'healthy' THEN now() ELSE last_verified_at END, "
+                "heal_attempts = CASE WHEN %s = 'reset' THEN 0 "
+                "WHEN %s = 'increment' THEN heal_attempts + 1 ELSE heal_attempts END "
                 "WHERE recipe_id = %s",
-                (version, Jsonb(global_setup), Jsonb(field_groups), health_status, recipe_id),
+                (
+                    version,
+                    Jsonb(global_setup),
+                    Jsonb(field_groups),
+                    health_status,
+                    health_status,
+                    heal_attempts,
+                    heal_attempts,
+                    recipe_id,
+                ),
             )
             await conn.execute(
                 "INSERT INTO recipe_versions "
@@ -444,8 +465,23 @@ class PostgresRecipeStore:
             await conn.execute(
                 "UPDATE recipes SET health_status = %s, last_run_at = now(), "
                 "last_verified_at = CASE WHEN %s = 'healthy' THEN now() ELSE last_verified_at END, "
+                # A healthy scheduled replay clears the failed-heal streak.
+                "heal_attempts = CASE WHEN %s = 'healthy' THEN 0 ELSE heal_attempts END, "
                 "updated_at = now() WHERE recipe_id = %s",
-                (health_status, health_status, recipe_id),
+                (health_status, health_status, health_status, recipe_id),
+            )
+
+    async def mark_recipe_broken(self, recipe_id: str) -> None:
+        """Give up auto-healing: flip health to `broken` without a version
+        bump or reveal-step change -- used when a recipe exhausts
+        `max_heal_attempts`. Only a fresh `build` (which resets heal_attempts)
+        gets it out of this state."""
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE recipes SET health_status = 'broken', updated_at = now() "
+                "WHERE recipe_id = %s",
+                (recipe_id,),
             )
 
     async def due_recipes(self, limit: int) -> list[tuple[str, str, float]]:

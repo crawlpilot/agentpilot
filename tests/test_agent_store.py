@@ -145,6 +145,7 @@ async def test_append_step_persists_and_bumps_current_step(store: PostgresAgentS
         next_goal="click button",
         actions=[{"type": "click", "ref": "e1"}],
         action_results=["clicked"],
+        thinking="the button is the obvious next control",
     )
     await store.append_step(run.run_id, step)
 
@@ -156,6 +157,7 @@ async def test_append_step_persists_and_bumps_current_step(store: PostgresAgentS
     assert len(steps) == 1
     assert steps[0].next_goal == "click button"
     assert steps[0].actions == [{"type": "click", "ref": "e1"}]
+    assert steps[0].thinking == "the button is the obvious next control"
     assert next_cursor is None
 
 

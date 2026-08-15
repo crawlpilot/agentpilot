@@ -31,11 +31,17 @@ def _mock_llm(monkeypatch: pytest.MonkeyPatch, handler) -> None:
     )
 
 
-async def test_propose_field_locators_parses_one_locator_per_field(monkeypatch) -> None:
+async def test_propose_field_locators_parses_candidate_list_per_field(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = {
             "locators": [
-                {"field": "price", "source": "json_ld", "path": "[0].offers.price"},
+                {
+                    "field": "price",
+                    "candidates": [
+                        {"source": "json_ld", "path": "[0].offers.price"},
+                        {"source": "css", "selector": "#price", "attribute": "text"},
+                    ],
+                },
             ]
         }
         return httpx.Response(
@@ -46,8 +52,22 @@ async def test_propose_field_locators_parses_one_locator_per_field(monkeypatch) 
     proposals = await propose_field_locators(
         FIELDS, snapshot_text="(empty page)", structured_data=STRUCTURED_DATA, llm_config=CONFIG
     )
-    assert proposals["price"].source == "json_ld"
-    assert proposals["price"].path == "[0].offers.price"
+    assert [loc.source for loc in proposals["price"]] == ["json_ld", "css"]
+    assert proposals["price"][0].path == "[0].offers.price"
+
+
+async def test_propose_field_locators_accepts_legacy_single_locator_item(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = {"locators": [{"field": "price", "source": "json_ld", "path": "[0].offers.price"}]}
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(payload)}}]}
+        )
+
+    _mock_llm(monkeypatch, handler)
+    proposals = await propose_field_locators(
+        FIELDS, snapshot_text="(empty page)", structured_data=STRUCTURED_DATA, llm_config=CONFIG
+    )
+    assert [loc.path for loc in proposals["price"]] == ["[0].offers.price"]
 
 
 async def test_propose_field_locators_ignores_a_field_not_in_the_request(monkeypatch) -> None:
@@ -86,7 +106,7 @@ async def test_propose_and_verify_returns_only_fields_that_resolve_to_a_value(mo
         driver=None,
         llm_config=CONFIG,
     )
-    assert verified["price"].path == "[0].offers.price"
+    assert verified["price"][0].path == "[0].offers.price"
 
 
 async def test_propose_and_verify_retries_once_on_a_bad_proposal(monkeypatch) -> None:
@@ -119,7 +139,7 @@ async def test_propose_and_verify_retries_once_on_a_bad_proposal(monkeypatch) ->
         max_retries=1,
     )
     assert calls["n"] == 2
-    assert verified["price"].path == "[0].offers.price"
+    assert verified["price"][0].path == "[0].offers.price"
 
 
 async def test_propose_and_verify_gives_up_after_max_retries(monkeypatch) -> None:

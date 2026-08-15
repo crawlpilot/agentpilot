@@ -437,6 +437,7 @@ class AgentStepOut(BaseModel):
     next_goal: str | None
     actions: list[dict[str, Any]]
     action_results: list[str]
+    thinking: str | None
     created_at: str
 
 
