@@ -368,7 +368,17 @@ class Wiring:
         if self.role not in ("worker", "monolith") or self.agent_store is None:
             return
         from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
+        from agentpilot.placement.placer import SessionPlacer
         from agentpilot.session.rotation import RotationConfig, RotationPolicy
+
+        # Publish each run's live-view route so a `gateway`-role process can
+        # proxy to this worker. The gateway-only `self.placer` doesn't exist on
+        # a `worker`, but `SessionPlacer.commit_route` only needs Redis, and the
+        # worker already has it (its `node:{id}` addr is registered by
+        # `NodeRegistry`), so build one straight from `self.redis`. `None` on
+        # monolith (no Redis) -- there live-view is served in-process from the
+        # `self.sessions` dict, no route needed.
+        live_route_placer = SessionPlacer(self.redis) if self.redis is not None else None
 
         step_timeout_raw = os.environ.get("AGENTPILOT_AGENT_STEP_TIMEOUT_S")
         rotation = RotationConfig(
@@ -391,10 +401,10 @@ class Wiring:
             in ("1", "true", "yes"),
             rotation=rotation,
             # Live-view: register each run's session in the same in-process dict
-            # routes/live_view.py resolves against, and (when this process has a
-            # placer) publish the redis route so a gateway can proxy to it.
+            # routes/live_view.py resolves against, and (when Redis is present)
+            # publish the redis route so a gateway can proxy to it.
             sessions=self.sessions,
-            placer=getattr(self, "placer", None),
+            placer=live_route_placer,
         )
         self.agent_worker_loop.start()
 
