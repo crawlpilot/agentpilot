@@ -43,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, keywords: ['home', 'overview'] },
       { to: '/sessions', label: 'Sessions', icon: Globe, keywords: ['browser', 'context', 'pool'] },
       { to: '/recipes', label: 'Recipes', icon: BookOpen, keywords: ['extract', 'template', 'saved'] },
+      { to: '/agent-runs', label: 'Agent runs', icon: Bot, keywords: ['ai', 'autonomous', 'task', 'history'] },
     ],
   },
   {
@@ -74,6 +75,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   playground: 'Playground',
   sessions: 'Sessions',
   recipes: 'Recipes',
+  'agent-runs': 'Agent runs',
   'api-keys': 'API Keys',
   nodes: 'Nodes',
   scrape: 'Scrape',

@@ -11,6 +11,8 @@ import { PlaygroundMapTab } from '@/routes/PlaygroundMapTab'
 import { PlaygroundCrawlTab } from '@/routes/PlaygroundCrawlTab'
 import { PlaygroundInteractTab } from '@/routes/PlaygroundInteractTab'
 import { PlaygroundAgentTab } from '@/routes/PlaygroundAgentTab'
+import { AgentRunsListPage } from '@/routes/AgentRunsListPage'
+import { AgentRunDetailPage } from '@/routes/AgentRunDetailPage'
 import { RecipesListPage } from '@/routes/RecipesListPage'
 import { RecipeDetailPage } from '@/routes/RecipeDetailPage'
 import { ApiKeysPage } from '@/routes/ApiKeysPage'
@@ -45,6 +47,10 @@ export const router = createBrowserRouter([
       // one-shot Playground tools -- top-level list+detail, not a tab.
       { path: 'recipes', element: <RecipesListPage /> },
       { path: 'recipes/:recipeId', element: <RecipeDetailPage /> },
+      // Agent runs are persistent, revisitable entities (like Recipes/Sessions):
+      // a top-level list + shareable detail, not just the one-shot Playground tab.
+      { path: 'agent-runs', element: <AgentRunsListPage /> },
+      { path: 'agent-runs/:runId', element: <AgentRunDetailPage /> },
       { path: 'api-keys', element: <ApiKeysPage /> },
       { path: 'nodes', element: <NodesPage /> },
     ],

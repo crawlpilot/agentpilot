@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { agentRunEventsUrl, cancelAgentRun, createAgentRun, getAgentRunStatus } from '@/lib/api/agentRuns'
+import { agentRunEventsUrl, cancelAgentRun, createAgentRun, getAgentRunStatus, listAgentRuns } from '@/lib/api/agentRuns'
 import { queryKeys } from '@/lib/query/queryClient'
 import { useAuth } from '@/lib/auth/AuthContext'
 import type { AgentRunCreateRequest, AgentRunOut, AgentRunStatusResponse, AgentStepOut, RunStatus } from '@/lib/api/types'
@@ -70,6 +70,15 @@ export function useAgentRunStatus(runId: string | null) {
       const status = query.state.data?.data.status
       return status && TERMINAL_STATUSES.includes(status) ? false : 5_000
     },
+  })
+}
+
+export function useAgentRunsList() {
+  const { apiKey } = useAuth()
+  return useQuery({
+    queryKey: queryKeys.agentRuns,
+    queryFn: () => listAgentRuns(apiKey!),
+    enabled: !!apiKey,
   })
 }
 

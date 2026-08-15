@@ -157,6 +157,37 @@ class PostgresAgentStore:
             finished_at=None,
         )
 
+    async def list_runs(
+        self, tenant: str, after: str | None, limit: int = 50
+    ) -> tuple[list[AgentRun], str | None]:
+        """Keyset-paginated by `created_at DESC` over `idx_agent_runs_tenant
+        (tenant, created_at DESC)` -- same shape as `recipe_store.list_recipes`.
+        `after` is the previous page's last row's `created_at.isoformat()`."""
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                params: tuple[Any, ...] = (tenant,)
+                cursor_clause = ""
+                if after is not None:
+                    cursor_clause = "AND created_at < %s"
+                    params += (after,)
+                await cur.execute(
+                    f"""
+                    SELECT run_id, tenant, task, status, current_step, max_steps, result,
+                           error, created_at, started_at, finished_at
+                    FROM agent_runs
+                    WHERE tenant = %s {cursor_clause}
+                    ORDER BY created_at DESC LIMIT %s
+                    """,
+                    (*params, limit),
+                )
+                rows = await cur.fetchall()
+        runs = [_run_from_row(r) for r in rows]
+        next_cursor = runs[-1].created_at.isoformat() if len(runs) == limit else None
+        return runs, next_cursor
+
     async def get_run(self, run_id: str, tenant: str) -> AgentRun | None:
         from psycopg.rows import dict_row
 

@@ -468,6 +468,13 @@ class AgentRunStatusResponse(BaseModel):
     next: str | None
 
 
+class AgentRunListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    runs: list[AgentRunOut]
+    next: str | None
+
+
 # --- recipes (Phase 2: selector-generation & self-healing data collection --
 # routes/recipes.py) ---
 

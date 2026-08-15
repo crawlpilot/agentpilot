@@ -1,9 +1,21 @@
 import { apiRequest } from './client'
 import { API_BASE_URL } from '@/lib/config'
-import type { AgentRunCreateRequest, AgentRunCreateResponse, AgentRunStatusResponse } from './types'
+import type {
+  AgentRunCreateRequest,
+  AgentRunCreateResponse,
+  AgentRunListResponse,
+  AgentRunStatusResponse,
+} from './types'
 
 export function createAgentRun(token: string, req: AgentRunCreateRequest) {
   return apiRequest<AgentRunCreateResponse>('/v1/agent/runs', { method: 'POST', body: req, token })
+}
+
+export function listAgentRuns(token: string, after?: string, limit?: number) {
+  return apiRequest<AgentRunListResponse>('/v1/agent/runs', {
+    token,
+    query: { after, limit: limit?.toString() },
+  })
 }
 
 export function getAgentRunStatus(token: string, runId: string, after?: string, limit?: number) {

@@ -146,6 +146,10 @@ async def test_append_step_persists_and_bumps_current_step(store: PostgresAgentS
         actions=[{"type": "click", "ref": "e1"}],
         action_results=["clicked"],
         thinking="the button is the obvious next control",
+        duration_ms=1234,
+        input_tokens=900,
+        output_tokens=42,
+        screenshot=b"\x89PNG\r\n\x1a\nfake",
     )
     await store.append_step(run.run_id, step)
 
@@ -158,7 +162,17 @@ async def test_append_step_persists_and_bumps_current_step(store: PostgresAgentS
     assert steps[0].next_goal == "click button"
     assert steps[0].actions == [{"type": "click", "ref": "e1"}]
     assert steps[0].thinking == "the button is the obvious next control"
+    assert steps[0].duration_ms == 1234
+    assert steps[0].input_tokens == 900
+    assert steps[0].output_tokens == 42
+    # The list payload only reports presence, not the bytes ...
+    assert steps[0].has_screenshot is True
     assert next_cursor is None
+
+    # ... the bytes come back through the dedicated, tenant-scoped fetch.
+    png = await store.get_step_screenshot(run.run_id, tenant, steps[0].seq)
+    assert png == b"\x89PNG\r\n\x1a\nfake"
+    assert await store.get_step_screenshot(run.run_id, "other-tenant", steps[0].seq) is None
 
 
 async def test_complete_run_sets_status_and_result(store: PostgresAgentStore) -> None:

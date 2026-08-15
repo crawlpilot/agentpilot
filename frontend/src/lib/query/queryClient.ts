@@ -17,6 +17,7 @@ export const queryKeys = {
   cdpInfo: (sessionId: string) => ['cdp-info', sessionId] as const,
   crawlStatus: (jobId: string) => ['crawl-status', jobId] as const,
   agentRunStatus: (runId: string) => ['agent-run-status', runId] as const,
+  agentRuns: ['agent-runs'] as const,
   recipes: ['recipes'] as const,
   recipe: (id: string) => ['recipe', id] as const,
   recipeVersions: (id: string) => ['recipe-versions', id] as const,

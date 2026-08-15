@@ -501,6 +501,12 @@ export interface AgentRunStatusResponse {
   next: string | null
 }
 
+export interface AgentRunListResponse {
+  success: boolean
+  runs: AgentRunOut[]
+  next: string | null
+}
+
 // --- recipes (routes/recipes.py) ---
 
 export type RecipeHealthStatus = 'healthy' | 'degraded' | 'broken'

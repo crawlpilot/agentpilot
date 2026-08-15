@@ -22,6 +22,7 @@ from agentpilot.gateway.auth_deps import require_tenant_auth, resolve_query_api_
 from agentpilot.gateway.schemas import (
     AgentRunCreateRequest,
     AgentRunCreateResponse,
+    AgentRunListResponse,
     AgentRunOut,
     AgentRunStatusResponse,
     AgentStepOut,
@@ -101,6 +102,18 @@ async def create_agent_run(
         max_steps=req.max_steps,
     )
     return AgentRunCreateResponse(success=True, run_id=run.run_id)
+
+
+@router.get("", response_model=AgentRunListResponse)
+async def list_agent_runs(
+    after: str | None = None,
+    limit: int = 50,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> AgentRunListResponse:
+    store = _require_agent_store(wiring)
+    runs, next_cursor = await store.list_runs(authed.tenant, after, limit)
+    return AgentRunListResponse(success=True, runs=[_run_out(r) for r in runs], next=next_cursor)
 
 
 @router.get("/{run_id}", response_model=AgentRunStatusResponse)
