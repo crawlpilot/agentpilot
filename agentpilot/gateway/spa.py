@@ -2,7 +2,7 @@
 
 The SPA is normally deployed separately (Vite dev server locally, a static
 host in production). But for a self-contained deployment the built bundle can
-be served straight from the tenant-facing process (`monolith`/`gateway`), so
+be served straight from the tenant-facing `gateway` process, so
 no reverse proxy is needed to put the UI and the API under one origin (the
 model `frontend/src/lib/config.ts` already assumes for production).
 

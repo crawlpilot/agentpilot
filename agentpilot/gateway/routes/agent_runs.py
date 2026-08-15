@@ -1,11 +1,11 @@
 """`/v1/agent/runs` -- async, Postgres-queue-backed web-agent runs. `POST`
 creates and queues a run, `GET /{id}` polls status + paginated per-step
-history, `DELETE /{id}` cancels. Mounted identically on both `monolith` and
-`gateway` (no `_proxy` variant): run CRUD never touches `agentpilot.driver`,
-exactly like `routes/crawl.py` needs none either. The actual run
-*processing* happens in `agentpilot.jobs.agent_worker_loop.AgentWorkerLoop`,
-running independently on every worker/monolith process -- this route only
-creates/reads/cancels rows in `agentpilot.jobs.agent_store.PostgresAgentStore`.
+history, `DELETE /{id}` cancels. Mounted on the `gateway` (no `_proxy`
+variant): run CRUD never touches `agentpilot.driver`, exactly like
+`routes/crawl.py` needs none either. The actual run *processing* happens in
+`agentpilot.jobs.agent_worker_loop.AgentWorkerLoop`, running independently on
+every `worker` process -- this route only creates/reads/cancels rows in
+`agentpilot.jobs.agent_store.PostgresAgentStore`.
 """
 
 from __future__ import annotations
@@ -172,8 +172,9 @@ async def stream_agent_run(
     """Server-Sent Events for one run: an initial `status` snapshot, a `step`
     event per new step as it's persisted, `status` on every status change, and
     a terminal `done`. Cross-process safe -- it reads the shared Postgres queue
-    the worker writes to, so it works whether the worker is in this process
-    (monolith) or another (distributed). Auth travels as `?api_key=` because
+    the worker writes to, so the gateway serving this stream and the worker
+    running the agent can be (and are) separate processes. Auth travels as
+    `?api_key=` because
     `EventSource` can't set headers, exactly like `routes/live_view.py`. The
     client keeps its plain-poll `GET /{id}` as a fallback if this stream drops.
     """

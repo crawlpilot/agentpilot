@@ -31,8 +31,8 @@ from agentpilot.spi.webhook import WebhookConfig
 
 if TYPE_CHECKING:
     # Deferred at runtime for the same reason `agentpilot.auth.store` defers
-    # its psycopg_pool import: `agentpilot.jobs` is on the import path of
-    # `monolith`/`gateway`/crawl-worker roles regardless of whether the
+    # its psycopg_pool import: `agentpilot.jobs` is on the import path of both
+    # the `gateway` and `worker` roles regardless of whether the
     # `postgres` extra happens to be installed in a given image, and a
     # module-level import here would crash boot on ModuleNotFoundError
     # before any role/config check runs.

@@ -70,7 +70,7 @@ class AgentWorkerLoop:
         self._lease_ttl_seconds = lease_ttl_seconds
         # Live-view plumbing: `sessions` is the same in-process dict
         # `routes/live_view.py` looks a session up in; registering the run's
-        # session there lets the UI watch the agent drive (monolith path).
+        # session there lets the worker's own /internal live-view find it.
         # `placer` (when present) additionally writes the redis route so a
         # `gateway`-role process can proxy live-view to this worker.
         self._sessions = sessions
@@ -214,8 +214,8 @@ class AgentWorkerLoop:
     async def _publish_live_route(self, session_id: str, session: Session, tier: str) -> None:
         """Write/refresh the redis `session:{id}` route so a `gateway`-role
         process can proxy live-view to this worker. Best-effort and no-op when
-        no placer is wired (monolith relies on the in-process `_sessions` dict
-        instead), so a redis hiccup never touches the run."""
+        no placer is wired (Redis unset), so a redis hiccup never touches the
+        run."""
 
         if self._placer is None:
             return

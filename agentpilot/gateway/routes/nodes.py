@@ -4,8 +4,8 @@ nodes dashboard. Pure read-only projection of the same Redis keys
 (`live_nodes`, `node:{id}`, `capacity:{id}`) -- no new state written here.
 
 Gateway-role only: fleet visibility (`live_nodes`) is a `_init_gateway()`
-concept (see `wiring.py`) -- `monolith`/`worker` never construct it, so this
-router is only mounted for `AGENTPILOT_ROLE=gateway` in `app.py`.
+concept (see `wiring.py`) -- a `worker` never constructs it, so this router is
+only mounted for `AGENTPILOT_ROLE=gateway` in `app.py`.
 """
 
 from __future__ import annotations

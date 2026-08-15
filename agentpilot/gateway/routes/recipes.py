@@ -4,11 +4,11 @@ data-collection recipes. `POST` creates a recipe and queues its initial
 `POST /{id}/run` queues a deterministic (no-LLM) `replay`; `POST /{id}/heal`
 forces a heal cycle; `GET /{id}/versions` lists build/heal history;
 `POST /{id}/codegen` queues LLM-authored scraper-code generation for a
-target language. Mounted identically on `monolith` and `gateway` (no
-`_proxy` variant) -- run CRUD never touches `agentpilot.driver`; the actual
-processing happens in `agentpilot.jobs.recipe_worker_loop.RecipeWorkerLoop`
-and `agentpilot.jobs.recipe_scheduler_loop.RecipeSchedulerLoop`, running
-independently on every worker/monolith process.
+target language. Mounted on the `gateway` (no `_proxy` variant) -- run CRUD
+never touches `agentpilot.driver`; the actual processing happens in
+`agentpilot.jobs.recipe_worker_loop.RecipeWorkerLoop` and
+`agentpilot.jobs.recipe_scheduler_loop.RecipeSchedulerLoop`, running
+independently on every `worker` process.
 """
 
 from __future__ import annotations

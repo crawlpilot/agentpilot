@@ -5,8 +5,8 @@ Closes the gap `routes/gateway_proxy.py` used to document: a `gateway`-role
 process previously had no live-view route at all.
 
 Auth: the browser can't set headers on a WS handshake, so it sends
-`?api_key=...` exactly as it would against `monolith` directly (see
-`routes/live_view.py`'s docstring). This proxy validates that key itself
+`?api_key=...` on the handshake (see `routes/live_view.py`'s docstring). This
+proxy validates that key itself
 *and* forwards it unchanged to the worker, since `live_view.py`'s
 unconditional (not per-mount) check expects one on every mount, including
 `/internal/sessions`.

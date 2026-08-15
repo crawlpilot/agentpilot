@@ -1,5 +1,5 @@
 """API-key storage for tenant-facing auth: Postgres-backed (persists across
-restarts, shared across gateway/monolith processes) when `AGENTPILOT_DATABASE_URL`
+restarts, shared across gateway processes) when `AGENTPILOT_DATABASE_URL`
 is set, in-memory otherwise (dev/test only) -- the same dual-backend shape as
 `agentpilot.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
 persisted (`keygen.hash_key`); the plaintext is returned once, at creation,

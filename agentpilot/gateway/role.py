@@ -1,6 +1,6 @@
-"""P2's role split: `AGENTPILOT_ROLE=gateway|worker`, same codebase (`plan.md`).
-The single-process `monolith` role was removed -- the only deployment topology
-is gateway+worker (`docker-compose.yml`), each with a purpose-built image.
+"""Role split: `AGENTPILOT_ROLE=gateway|worker`, same codebase (`plan.md`).
+The only deployment topology is gateway+worker (`docker-compose.yml`), each
+with a purpose-built image.
 
 - `worker`: owns the driver/registry/reaper; serves only
   `/internal/sessions/...`, never `/v1/...` -- internal-only, VPC-bound,
