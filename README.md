@@ -24,15 +24,13 @@ HTTP call per verb) that the rest of the system programs against, so a different
 implementation could be swapped in without touching `agentpilot.gateway`. `agentpilot/driver/patchright_driver.py`
 is the one concrete implementation today.
 
-The process itself runs in one of three roles (`AGENTPILOT_ROLE`), same codebase:
+The process itself runs in one of two roles (`AGENTPILOT_ROLE`), same codebase:
 
-- **`monolith`** — everything in one process (owns the driver, session registry, reaper); the
-  default, and what this repo's own test suite runs against. Not a Docker Compose target.
 - **`worker`** — owns the driver/registry/reaper, serves only `/internal/sessions/...`; internal-only,
-  never tenant-facing. Built from `docker/worker.Dockerfile`.
-- **`gateway`** — stateless HTTP/WebSocket proxy in front of a worker, serves the real tenant-facing
-  `/v1/sessions/...` surface. Never imports/constructs a driver — built from `docker/gateway.Dockerfile`,
-  a genuinely Chrome-free image.
+  never tenant-facing. Runs the crawl/agent/recipe queue loops. Built from `docker/worker.Dockerfile`.
+- **`gateway`** (the default) — stateless HTTP/WebSocket proxy in front of a worker, serves the real
+  tenant-facing `/v1/...` surface. Never imports/constructs a driver — built from
+  `docker/gateway.Dockerfile`, a genuinely Chrome-free image.
 
 See `plan.md` for the full design rationale and phased build history.
 
@@ -63,10 +61,10 @@ in-code defaults in `agentpilot/gateway/wiring.py` and don't need to be set for 
 docker compose up --build
 ```
 
-This starts Redis, Postgres, two `worker` instances (Chrome/Patchright, internal-only, each
-self-registering into the fleet), and a `gateway` (publishes `8000:8000`) — the real two-tier
-topology, not the single-process `monolith` role. `--build` forces a rebuild after pulling or
-editing a Dockerfile; plain `docker compose up` reuses images already built. First build pulls
+This starts Redis, Postgres, a one-shot `migrate` job (`alembic upgrade head`), two `worker`
+instances (Chrome/Patchright, internal-only, each self-registering into the fleet), and a
+`gateway` (publishes `8000:8000`) — the two-tier topology. `--build` forces a rebuild after pulling
+or editing a Dockerfile; plain `docker compose up` reuses images already built. First build pulls
 and installs Chrome inside the `worker` images, so expect it to take a few minutes.
 
 Redis (`6379`) and Postgres (`5432`) are also published, but loopback-only
@@ -218,8 +216,8 @@ reputation-blocked at the edge *regardless of fingerprint quality*, so `stealth`
 ### Configuring proxies
 
 Proxy pinning, per-proxy health, and burn accounting are Redis-backed, so this needs
-`AGENTPILOT_REDIS_URL`. Set the proxy vars on the **worker** (or `monolith`) process — that's where
-the driver runs; the `gateway` never scrapes.
+`AGENTPILOT_REDIS_URL`. Set the proxy vars on the **worker** process — that's where the driver
+runs; the `gateway` never scrapes.
 
 - **`AGENTPILOT_PROXY_POOL`** — a flat, comma-separated list; the default pool for every tenant and
   tier:
@@ -258,7 +256,7 @@ getting walled so its next visit is a clean, cookie-less browser.
 
 > **Example — scrape a Zara product through a residential IN exit:**
 > ```bash
-> # on the worker/monolith:
+> # on the worker:
 > export AGENTPILOT_REDIS_URL=redis://localhost:6379/0
 > export AGENTPILOT_PROXY_POOLS='{"*":{"residential":["http://user:pass@res-gw:8000?country=in"]}}'
 > # then scrape with tier=enhanced (or auto, which escalates into it)
@@ -279,18 +277,36 @@ docker compose up -d --force-recreate worker worker-2
 
 ## Local development (no Docker)
 
+Install the toolchain and run the unit tests (most never stand up the app, so they need neither a
+role nor a browser):
+
 ```bash
 uv sync --group dev --extra driver          # add --extra postgres too if you need AGENTPILOT_DATABASE_URL
 uv run patchright install chrome            # one-time, only needed for tests/local runs that launch a browser
-uv run uvicorn agentpilot.gateway.app:app --reload
+uv run pytest -q
 ```
 
-`AGENTPILOT_ROLE` defaults to `monolith` when unset, which serves the full `/v1/sessions/...` API
-directly in one process — the path this repo's own tests exercise. For end-to-end UI work the
-monolith is the simplest backend to point the frontend at (one origin, no worker/gateway hop):
+There is no single-process backend: the app runs as a `gateway` (tenant-facing `/v1/...`) in front of
+one or more `worker`s (driver + queue loops). `AGENTPILOT_ROLE` defaults to `gateway`, so a bare
+`uvicorn agentpilot.gateway.app:app` is a gateway and needs a worker to serve driver-backed routes.
+
+For a live backend, the Docker Compose stack is the intended path (it wires Redis, Postgres, the
+`migrate` job, workers, and the gateway together) — run only the frontend on the host against it. To
+run the two roles as host processes instead, you need a shared Redis and Postgres, then, in separate
+terminals:
 
 ```bash
-AGENTPILOT_ADMIN_TOKEN=dev-admin-token uv run uvicorn agentpilot.gateway.app:app --reload --port 8000
+# worker (owns Chrome; self-registers into the fleet)
+AGENTPILOT_ROLE=worker AGENTPILOT_REDIS_URL=redis://localhost:6379/0 \
+  AGENTPILOT_NODE_ADDR=http://localhost:8001 \
+  AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot \
+  uv run uvicorn agentpilot.gateway.app:app --port 8001
+
+# gateway (tenant-facing; discovers the worker via Redis)
+AGENTPILOT_ROLE=gateway AGENTPILOT_REDIS_URL=redis://localhost:6379/0 \
+  AGENTPILOT_ADMIN_TOKEN=dev-admin-token \
+  AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot \
+  uv run uvicorn agentpilot.gateway.app:app --port 8000
 ```
 
 ## Frontend (dashboard & Playground)
@@ -305,7 +321,7 @@ backend — there is no `/ui` mount and no Node/npm in any backend image (see
 ### Prerequisites
 
 - Node.js 20+ and npm
-- A running backend (Docker Compose stack, or a `monolith` on `:8000` — see above)
+- A running backend (the Docker Compose stack, or a host `gateway` on `:8000` with a worker — see above)
 
 ### Local dev
 
@@ -317,7 +333,7 @@ npm run dev          # Vite dev server on http://localhost:5173
 
 The dev server proxies `/v1`, `/healthz`, and `/readyz` (including the live-view WebSocket upgrade)
 to `VITE_API_BASE_URL`, which defaults to `http://localhost:8000` and is set in
-[`frontend/.env.development`](frontend/.env.development). Point it elsewhere if your gateway/monolith
+[`frontend/.env.development`](frontend/.env.development). Point it elsewhere if your gateway
 isn't on `:8000`. Because the browser talks to the API through this same-origin proxy, there's no
 CORS to configure in dev.
 
@@ -337,7 +353,7 @@ npm run build        # tsc -b && vite build -> frontend/dist/
 The built SPA must be served **same-origin** with the API (the gateway has no CORS middleware).
 There are two ways to do that:
 
-**Option A — let the backend serve it (no proxy).** The `monolith`/`gateway` process serves the
+**Option A — let the backend serve it (no proxy).** The `gateway` process serves the
 built bundle same-origin when a build is present, so the whole product runs from one port. Leave
 `VITE_API_BASE_URL` unset for the build (the app uses `window.location.origin`), then point
 `AGENTPILOT_UI_DIR` at the output — or just have the default `frontend/dist` exist:
@@ -378,34 +394,40 @@ caddy run           # then open http://localhost:8080
 
 ## Run both locally, end to end
 
-Two complete paths. **Path A** is the fastest inner loop for UI/app work (no Docker Chrome
-emulation); **Path B** is the production-like two-tier fleet. Both end with the frontend talking to
-the backend on one machine.
+Two complete paths. **Path A** runs the two roles as native host processes (no Docker Chrome
+emulation, instant reloads) against compose datastores; **Path B** is the production-like two-tier
+fleet fully in Docker. Both end with the frontend talking to the backend on one machine.
 
-### Path A — fast local dev (host monolith + compose Postgres/Redis + frontend)
+### Path A — host gateway + host worker + compose Postgres/Redis + frontend
 
-The `monolith` role serves the whole API in one native process — no amd64 Chrome emulation, instant
-reloads. Reuse compose only for the datastores.
+Both roles run natively (the worker uses your host's native Chrome — no amd64 emulation), sharing the
+compose datastores. Four terminals, but the fastest inner loop.
 
 ```bash
 # 0. one-time: Python + browser + Node deps
 uv sync --extra driver --extra postgres --group dev   # app + psycopg/alembic + test tooling
-uv run patchright install chrome                       # native Chrome for the monolith's driver
+uv run patchright install chrome                       # native Chrome for the worker's driver
 cp .env.example .env                                   # set AGENTPILOT_ADMIN_TOKEN=dev-admin-token
 
 # 1. datastores only (loopback-published; no worker/gateway containers)
 docker compose up -d postgres redis
-
-# 2. migrate the DB (see "Run database migrations" for details)
 export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
+export AGENTPILOT_REDIS_URL=redis://localhost:6379/0
+
+# 2. migrate the DB (see "Database migrations" for details)
 uv run alembic upgrade head
 
-# 3. Terminal 1 — backend (monolith on :8000; Redis optional, omit for in-memory registry)
-AGENTPILOT_ADMIN_TOKEN=dev-admin-token \
-AGENTPILOT_DATABASE_URL=$AGENTPILOT_DATABASE_URL \
+# 3. Terminal 1 — worker (native Chrome; self-registers into the fleet)
+AGENTPILOT_ROLE=worker AGENTPILOT_REDIS_URL=$AGENTPILOT_REDIS_URL \
+AGENTPILOT_DATABASE_URL=$AGENTPILOT_DATABASE_URL AGENTPILOT_NODE_ADDR=http://localhost:8001 \
+  uv run uvicorn agentpilot.gateway.app:app --reload --port 8001
+
+# 4. Terminal 2 — gateway (tenant-facing on :8000; discovers the worker via Redis)
+AGENTPILOT_ROLE=gateway AGENTPILOT_ADMIN_TOKEN=dev-admin-token \
+AGENTPILOT_REDIS_URL=$AGENTPILOT_REDIS_URL AGENTPILOT_DATABASE_URL=$AGENTPILOT_DATABASE_URL \
   uv run uvicorn agentpilot.gateway.app:app --reload --port 8000
 
-# 4. Terminal 2 — frontend (Vite dev server on :5173, proxies to :8000)
+# 5. Terminal 3 — frontend (Vite dev server on :5173, proxies to :8000)
 cd frontend && npm install && npm run dev
 ```
 
@@ -414,13 +436,12 @@ Open http://localhost:5173, mint a key (below), sign in, and you're running the 
 ### Path B — full two-tier fleet (Docker Compose + frontend)
 
 The real gateway + 2 workers topology. Slower on arm64 (emulated Chrome), but exercises placement,
-the worker job loops, and live-view relay.
+the worker job loops, and live-view relay. The compose `migrate` job applies migrations automatically
+before the app starts.
 
 ```bash
 cp .env.example .env                       # AGENTPILOT_ADMIN_TOKEN at minimum
-docker compose up --build -d               # redis, postgres, worker, worker-2, gateway
-export AGENTPILOT_DATABASE_URL=postgresql://agentpilot:agentpilot@localhost:5432/agentpilot
-uv sync --extra postgres && uv run alembic upgrade head
+docker compose up --build -d               # redis, postgres, migrate, worker, worker-2, gateway
 cd frontend && npm install && npm run dev  # or the Caddy same-origin deploy above
 ```
 

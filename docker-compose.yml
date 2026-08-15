@@ -12,13 +12,11 @@ services:
       - "8090:8090"
 
   # gateway+worker (each with a purpose-built image) is the only process
-  # topology this file offers -- `monolith` (one process, no HTTP hop to
-  # itself) is still a valid `AGENTPILOT_ROLE` for non-Docker use (this repo's own
-  # test suite), just no longer a compose service. Two worker services
-  # (worker, worker-2) so multi-worker placement is actually demonstrable
-  # locally, not just unit-tested -- each self-registers into the fleet
-  # under its own AGENTPILOT_NODE_ADDR; the gateway discovers both via Redis,
-  # not via any compose-level service name, so this isn't relying on
+  # topology -- `AGENTPILOT_ROLE` is `gateway` or `worker`, nothing else. Two
+  # worker services (worker, worker-2) so multi-worker placement is actually
+  # demonstrable locally, not just unit-tested -- each self-registers into the
+  # fleet under its own AGENTPILOT_NODE_ADDR; the gateway discovers both via
+  # Redis, not via any compose-level service name, so this isn't relying on
   # Compose's (unreliable) DNS round-robin for scaling.
   #
   # Redis and Postgres run as compose services too (below), each on its own
@@ -113,6 +111,17 @@ services:
       # `gateway` had it), so queued crawl/agent/recipe runs sat `queued`
       # forever, never claimed.
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
+      # LLM config for the agent loop (agent_worker_loop -> run_agent_loop ->
+      # LLMConfig.from_env()). Passed through from your shell/.env -- the app
+      # never dotenv-loads, and Compose only injects vars the `environment`
+      # block names, so these MUST be listed here to reach the container.
+      # For a host Ollama, point BASE_URL at `http://host.docker.internal:11434/v1`
+      # (NOT localhost -- that's the container itself), API_KEY any non-empty
+      # string (Ollama ignores it; LLMConfig just requires it set).
+      AGENTPILOT_LLM_API_KEY: ${AGENTPILOT_LLM_API_KEY:-}
+      AGENTPILOT_LLM_BASE_URL: ${AGENTPILOT_LLM_BASE_URL:-}
+      AGENTPILOT_LLM_MODEL: ${AGENTPILOT_LLM_MODEL:-}
+      AGENTPILOT_LLM_TIMEOUT_S: ${AGENTPILOT_LLM_TIMEOUT_S:-}
       # Proxy pools for the anti-detection tiers (see README "Anti-detection,
       # tiers & proxies"). Passed through from your shell/.env; empty by default
       # -> egress uses the container IP and tier=stealth|enhanced fail closed.

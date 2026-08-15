@@ -34,9 +34,8 @@ Issues = "https://github.com/crawlpilot/agentpilot/issues"
 [project.optional-dependencies]
 # Chrome-adjacent packages -- only ever imported by agentpilot.driver,
 # agentpilot.extraction, and agentpilot.identity.vault's Fernet encryption. Needed by
-# `AGENTPILOT_ROLE=worker` (and `monolith`, run outside Docker) -- never installed
-# in docker/gateway.Dockerfile's image, which is the whole point of the
-# split (a genuinely Chrome-free gateway image).
+# `AGENTPILOT_ROLE=worker` -- never installed in docker/gateway.Dockerfile's
+# image, which is the whole point of the split (a Chrome-free gateway image).
 driver = [
     "patchright>=1.61.2",
     "re-cdp-patches>=0.9.1",
@@ -45,9 +44,9 @@ driver = [
     "cryptography>=43.0",
 ]
 # Postgres driver (runtime pool) + Alembic (migrations) for agentpilot.auth
-# .store.PostgresApiKeyStore. Needed by `monolith`/`gateway` (both mount
-# tenant-facing auth-gated routes) -- not `worker`, which never touches
-# wiring.api_keys.
+# .store.PostgresApiKeyStore. Needed by `gateway` (mounts tenant-facing
+# auth-gated routes) and `worker` (runs the queue loops) -- both connect a
+# Postgres store; `worker` just never touches wiring.api_keys.
 postgres = [
     "psycopg[binary,pool]>=3.2",
     "alembic>=1.13",

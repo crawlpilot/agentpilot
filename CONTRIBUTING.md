@@ -4,7 +4,7 @@
 
 ```bash
 uv sync --group dev --extra driver          # --extra postgres too if you're touching agentpilot.auth.store.PostgresApiKeyStore
-uv run patchright install chrome            # needed to run tests/driver_contract/ or a local monolith/worker
+uv run patchright install chrome            # needed to run tests/driver_contract/ or a local worker
 ```
 
 The `driver` extra (Patchright, `re-cdp-patches`, `lxml`, `cssselect`, `cryptography`) is only ever
