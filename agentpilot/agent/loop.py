@@ -15,8 +15,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
+
 from agentpilot.agent.actions import (
     DEFAULT_ALLOWED_ACTIONS,
+    AgentOutput,
     DoneAction,
     build_action_schema,
     parse_agent_output,
@@ -48,7 +51,10 @@ from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.snapshot import AXSnapshot
+from agentpilot.spi.errors import StaleRefError
+from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+
+logger = structlog.get_logger(__name__)
 
 
 async def _with_timeout[T](coro: Awaitable[T], timeout: float | None) -> T:
@@ -147,6 +153,7 @@ async def run_agent_loop(
         except Exception as exc:
             agent_steps_total.labels(outcome="observe_error").inc()
             last_error = f"failed to observe page state: {exc}"
+            logger.warning("agent.observe_failed", step=step_number, error=last_error)
             history.add(_error_step(step_number, last_error))
             try:
                 breaker.record_failure(FailureKind.EXECUTION)
@@ -158,6 +165,11 @@ async def run_agent_loop(
         tabs = observe_result.tabs[0] if observe_result.tabs else []
         active_url = next((t.url for t in tabs if t.active), "")
 
+        # The set of refs the model is actually shown this step, used to
+        # pre-validate its chosen actions before dispatch (ported from
+        # browser-use's `index not in selector_map` guard). Empty => unknown,
+        # so validation is skipped and dispatch behaves as before.
+        valid_refs: set[str] = set()
         if use_fusion:
             tree = observe_result.fused_trees[0] if observe_result.fused_trees else None
             if tree is not None:
@@ -167,6 +179,9 @@ async def run_agent_loop(
                     tree, previous_tree, max_length=max_observation_chars
                 )
                 snapshot_text = observation.text
+                # `selector_map` is keyed by int `backend_node_id`; the model
+                # refers to elements as `e<backend_node_id>`.
+                valid_refs = {f"e{backend_id}" for backend_id in observation.selector_map}
                 page_fingerprint = identity_fingerprint(tree)
             else:
                 snapshot_text, page_fingerprint = "(no snapshot)", None
@@ -178,6 +193,8 @@ async def run_agent_loop(
                 if snapshot
                 else "(no snapshot)"
             )
+            if snapshot is not None:
+                valid_refs = _collect_snapshot_refs(snapshot.root)
             previous_snapshot = snapshot
             page_fingerprint = snapshot.fingerprint() if snapshot is not None else None
 
@@ -228,6 +245,17 @@ async def run_agent_loop(
         except Exception as exc:
             agent_steps_total.labels(outcome="llm_error").inc()
             last_error = f"LLM call or output parsing failed: {exc}"
+            # Surface to the process log (docker logs) -- otherwise this only
+            # ever appeared in the run's in-memory history / final API error,
+            # making a broken LLM endpoint or missing model invisible to a
+            # `docker compose logs -f worker`.
+            logger.warning(
+                "agent.llm_failed",
+                step=step_number,
+                error=last_error,
+                model=llm_config.model,
+                base_url=llm_config.base_url,
+            )
             history.add(_error_step(step_number, last_error))
             kind = (
                 FailureKind.VALIDATION
@@ -242,6 +270,7 @@ async def run_agent_loop(
             continue
         step_duration_ms = int((time.monotonic() - llm_started) * 1000)
         agent_step_llm_latency_seconds.observe(step_duration_ms / 1000)
+        _log_step_response(step_number, output)
 
         done = next((a for a in output.actions if isinstance(a, DoneAction)), None)
         driver_actions = [a for a in output.actions if not isinstance(a, DoneAction)]
@@ -253,9 +282,28 @@ async def run_agent_loop(
             for action in driver_actions:
                 loop_detector.record(type(action).__name__, _action_key(action))
 
+            # Ref pre-validation (ported from browser-use `tools/service.py`'s
+            # `index not in selector_map` guard): a ref the current page state
+            # never issued -- a hallucinated ref, a stale one, or a URL passed
+            # as `ref` -- becomes actionable feedback the model reads next step,
+            # not an action dispatched blindly to fail opaquely inside the
+            # driver. Skipped entirely when `valid_refs` is unknown (empty).
+            valid_actions: list[spi_actions.Action] = []
+            for action in driver_actions:
+                ref = _action_ref(action)
+                if ref is not None and valid_refs and ref not in valid_refs:
+                    step_outcome = "invalid_ref"
+                    action_results.append(
+                        f"Element with ref {ref!r} does not exist on the current page. "
+                        "Only use a ref shown in the current page state (e.g. 'e12'). "
+                        "To open a URL, use the navigate action, not click."
+                    )
+                else:
+                    valid_actions.append(action)
+
             blocked = [
                 a
-                for a in driver_actions
+                for a in valid_actions
                 if isinstance(a, spi_actions.NavigateAction)
                 and not is_url_allowed(a.url, allowed_domains)
             ]
@@ -267,12 +315,12 @@ async def run_agent_loop(
                     f"navigation to {a.url} was blocked: outside the allowed domains for this run"
                     for a in blocked
                 )
-            else:
+            elif valid_actions:
                 # Substitute secrets into the *dispatched copy* only; the
                 # recorded `driver_actions` keep their placeholder form, so
                 # secrets never enter the persisted step. Action dispatch is
                 # not retried -- a half-applied batch is not safely repeatable.
-                dispatch_actions = [_apply_secrets(a, sensitive_data) for a in driver_actions]
+                dispatch_actions = [_apply_secrets(a, sensitive_data) for a in valid_actions]
                 try:
                     dispatch_result = await _with_timeout(
                         execute_on_session(
@@ -280,18 +328,35 @@ async def run_agent_loop(
                         ),
                         step_timeout_s,
                     )
-                    action_results.extend(
+                    verifications = [
                         redact_secrets(v, sensitive_data) for v in dispatch_result.verifications
-                    )
+                    ]
+                    action_results.extend(verifications)
                     if dispatch_result.sequence_aborted:
                         step_outcome = "sequence_aborted"
                         action_results.append(
                             "one or more actions in this step were skipped: an earlier action "
                             "unexpectedly changed the page -- re-observe before continuing"
                         )
-                    if not action_results:
+                    elif not verifications:
                         action_results.append("actions dispatched successfully")
                     breaker.reset()  # progress -> clear consecutive-failure history
+                except StaleRefError as exc:
+                    # A ref that passed pre-validation but no longer resolves at
+                    # dispatch time: the DOM mutated between snapshot and action.
+                    # Reword to actionable re-observe guidance (browser-use:
+                    # "page may have changed. Try refreshing browser state.")
+                    # instead of surfacing the raw driver error.
+                    step_outcome = "action_failed"
+                    last_error = (
+                        f"could not act on ref {exc.ref!r}: the page changed since it was "
+                        "captured. Re-observe the current page state before retrying."
+                    )
+                    action_results.append(last_error)
+                    try:
+                        breaker.record_failure(FailureKind.EXECUTION)
+                    except CircuitBreakerTripped:
+                        tripped = True
                 except Exception as exc:
                     step_outcome = "action_failed"
                     last_error = redact_secrets(f"action failed: {exc}", sensitive_data)
@@ -300,6 +365,11 @@ async def run_agent_loop(
                         breaker.record_failure(FailureKind.EXECUTION)
                     except CircuitBreakerTripped:
                         tripped = True
+            # else: every action had an invalid ref -- nothing dispatched. That
+            # is model-correctable feedback, not an execution failure, so the
+            # breaker is left untouched (mirrors browser-use returning an
+            # ActionResult error rather than raising); the model re-plans from
+            # the `invalid_ref` results next step.
         agent_steps_total.labels(outcome=step_outcome).inc()
 
         step_record = AgentStepRecord(
@@ -316,6 +386,7 @@ async def run_agent_loop(
             screenshot=screenshot,
         )
         history.add(step_record)
+        _log_step_completion(step_record, step_outcome)
         if on_step is not None:
             await on_step(step_record)
 
@@ -360,6 +431,7 @@ async def run_agent_loop(
         if last_error:
             result += f": {last_error}"
         error = "circuit_breaker_tripped"
+        logger.error("agent.run_aborted", reason=result)
     else:
         result = f"agent ran out of steps ({max_steps}) without calling done"
         if last_error:
@@ -372,6 +444,74 @@ async def run_agent_loop(
         steps=history,
         error=error,
     )
+
+
+def _eval_emoji(evaluation: str) -> str:
+    """browser-use's `_log_response` heuristic: colour the eval by whether the
+    model judged its own last action a success/failure/neither."""
+
+    lowered = evaluation.lower()
+    if "success" in lowered:
+        return "👍"
+    if "failure" in lowered:
+        return "⚠️"
+    return "❔"
+
+
+def _log_step_response(step_number: int, output: AgentOutput) -> None:
+    """Per-step flow logging ported from browser-use's `_log_response`: the
+    model's evaluation / memory / next goal, so `docker compose logs -f worker`
+    shows what the agent is doing -- not just failures."""
+
+    if output.thinking:
+        logger.debug("💡 Thinking", step=step_number, thinking=output.thinking)
+    if output.evaluation_previous_goal:
+        logger.info(
+            f"{_eval_emoji(output.evaluation_previous_goal)} Eval: {output.evaluation_previous_goal}",
+            step=step_number,
+        )
+    if output.memory:
+        logger.info(f"🧠 Memory: {output.memory}", step=step_number)
+    if output.next_goal:
+        logger.info(f"🎯 Next goal: {output.next_goal}", step=step_number)
+
+
+def _log_step_completion(step: AgentStepRecord, outcome: str) -> None:
+    """browser-use's `_log_step_completion_summary`: action count, timing, and
+    outcome for the step just executed."""
+
+    logger.info(
+        f"📍 Step {step.step_number}: {len(step.actions)} "
+        f"action{'' if len(step.actions) == 1 else 's'} -> {outcome}",
+        step=step.step_number,
+        actions=len(step.actions),
+        outcome=outcome,
+        duration_ms=step.duration_ms,
+        input_tokens=step.input_tokens,
+        output_tokens=step.output_tokens,
+    )
+
+
+def _collect_snapshot_refs(root: SnapshotNode) -> set[str]:
+    """Every ref the aria-path snapshot issued this step (fusion has its own
+    `selector_map`). Used to pre-validate the model's chosen refs."""
+
+    refs: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.ref:
+            refs.add(node.ref)
+        stack.extend(node.children)
+    return refs
+
+
+def _action_ref(action: spi_actions.Action) -> str | None:
+    """The element ref an action targets, or `None` for ref-less actions
+    (navigate, press, wait, scroll-without-ref, ...)."""
+
+    ref = getattr(action, "ref", None)
+    return ref if isinstance(ref, str) and ref else None
 
 
 def _error_step(step_number: int, message: str) -> AgentStepRecord:

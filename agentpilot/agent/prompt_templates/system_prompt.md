@@ -22,6 +22,12 @@ their bounding box on the page, for visual reference only.
 - A ref is only valid for the page state it came from. If a page navigates
   or its content changes, you'll see a fresh `<browser_state>` next step --
   never reuse a ref from an earlier step.
+- Only ever act on a ref that appears verbatim in the current
+  `<browser_state>` (e.g. `e12`). Never invent, guess, or shorten a ref, and
+  never use a human-readable name (like `add-to-cart-btn`) as a ref -- if an
+  element isn't shown with a `[ref]`, you cannot act on it. To open a web
+  address, use the `navigate` action with the URL; never pass a URL as a
+  `click` ref.
 - Some actions (navigate, go_back) always end the rest of that step's action
   list -- the page changed, so any remaining queued actions in the same step
   are skipped rather than risk acting on stale content. Put such actions

@@ -37,6 +37,7 @@ from fastapi import Depends, FastAPI
 from agentpilot.gateway.auth_deps import require_admin, require_tenant_auth
 from agentpilot.gateway.errors import register_exception_handlers
 from agentpilot.gateway.role import get_role
+from agentpilot.observability.logging import configure_logging
 from agentpilot.gateway.routes import (
     agent_runs,
     api_keys,
@@ -73,6 +74,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await reset_wiring()
 
+
+# Install the colored, leveled root logger before anything logs -- this module
+# is the single import both roles boot through (see worker-entrypoint.sh and
+# gateway.Dockerfile's CMD), so configuring here covers worker and gateway.
+configure_logging()
 
 app = FastAPI(title="agentpilot", version="0.1.0", lifespan=_lifespan)
 register_exception_handlers(app)

@@ -29,12 +29,24 @@ they must reach their own Redis/registry on it, while still being denied
 *other* private ranges (e.g. a peered VPC, or a different tenant's network).
 Metadata (169.254.0.0/16) is never exempted this way -- a container's
 connected subnet should never legitimately be link-local.
+
+Two further allow-list sources are inserted ahead of the private block the
+same way: the policy's `allow_hosts` (operator-supplied), and the worker's
+own LLM endpoint resolved from `AGENTPILOT_LLM_BASE_URL`. The latter is what
+keeps a local Ollama (reached via `host.docker.internal`, i.e. the Docker
+Desktop host gateway inside the blocked `192.168.0.0/16`) usable -- without
+it the container-wide baseline severs the *worker's* own LLM call the moment
+a browser session installs the rules, not just the browser's egress.
 """
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import shutil
+import socket
 import subprocess
+from urllib.parse import urlparse
 
 import structlog
 
@@ -49,6 +61,66 @@ _PRIVATE_RANGES = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 def _hex_to_ip(hex_str: str) -> str:
     value = int(hex_str, 16)
     return ".".join(str((value >> (8 * i)) & 0xFF) for i in range(4))
+
+
+def _resolve_host_to_cidrs(host: str) -> list[str]:
+    """Resolve a host (bare name or literal IP) to IPv4 `/32` CIDRs suitable
+    for an ACCEPT exemption. The baseline is IPv4-`iptables` only, so IPv6
+    results (and IPv6 literals) are dropped -- they aren't blocked in the
+    first place. An unresolvable name yields `[]`."""
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return [f"{ip}/32"] if ip.version == 4 else []
+
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    except OSError:
+        return []
+    return sorted({f"{info[4][0]}/32" for info in infos})
+
+
+def _llm_endpoint_host() -> str | None:
+    """Host of `AGENTPILOT_LLM_BASE_URL`, or `None` when unset/unparseable.
+
+    The worker's own LLM call shares the container's netns with the browser,
+    so the container-wide baseline (see module docstring) would sever it too
+    whenever the LLM lives on an RFC1918 address -- e.g. a local Ollama reached
+    via `host.docker.internal` (the Docker Desktop host gateway sits in the
+    blocked `192.168.0.0/16`). Exempting the configured endpoint keeps that
+    control-plane egress alive while the browser stays fenced off the rest of
+    the private ranges."""
+
+    base = os.environ.get("AGENTPILOT_LLM_BASE_URL")
+    if not base:
+        return None
+    return urlparse(base).hostname
+
+
+def _allow_cidrs(policy: EgressPolicy) -> list[str]:
+    """IPv4 CIDRs to ACCEPT ahead of the private-range REJECT: the container's
+    own connected subnet(s), the operator-supplied `allow_hosts`, and the
+    worker's own LLM endpoint. De-duplicated, order preserved."""
+
+    hosts = [*policy.allow_hosts]
+    llm_host = _llm_endpoint_host()
+    if llm_host:
+        hosts.append(llm_host)
+
+    cidrs = list(_own_connected_subnets())
+    for host in hosts:
+        cidrs.extend(_resolve_host_to_cidrs(host))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for cidr in cidrs:
+        if cidr not in seen:
+            seen.add(cidr)
+            unique.append(cidr)
+    return unique
 
 
 def _own_connected_subnets() -> list[str]:
@@ -132,7 +204,7 @@ def apply_baseline(policy: EgressPolicy) -> None:
         return
 
     if policy.block_private:
-        for cidr in _own_connected_subnets():
+        for cidr in _allow_cidrs(policy):
             _insert_accept(cidr)
 
     for cidr in _deny_ranges(policy):
