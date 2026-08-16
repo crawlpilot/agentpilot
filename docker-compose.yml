@@ -72,10 +72,38 @@ services:
       postgres:
         condition: service_healthy
 
+  # Build-only base image (Debian + Chrome + Python deps) -- the heavy,
+  # slow-changing half of the worker image. Gated behind the `base` profile so
+  # `docker compose up` never starts it as a container; it's built on demand as
+  # the `base` build-context for `worker`/`worker-2` (see their
+  # `build.additional_contexts` below), so a code change rebuilds only the thin
+  # worker code layer, never Chrome. Rebuild explicitly after a dependency
+  # change with: `docker compose build worker-base`.
+  worker-base:
+    build:
+      context: .
+      dockerfile: docker/worker-base.Dockerfile
+      # Explicit build platform: Chrome (channel=chrome) is amd64-only, so the
+      # base MUST build for linux/amd64 even on an arm64 host (emulated via
+      # QEMU). Set here under `build:` -- not just the service-level `platform`
+      # -- so `docker compose build worker-base` targets amd64 regardless.
+      platforms:
+        - linux/amd64
+    image: crawlpilot/worker-base:latest
+    platform: linux/amd64
+    profiles: ["base"]
+
   worker:
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
+      # Wires the prebuilt base image in as the `FROM base` context. Build the
+      # base first (once, and after any dependency change):
+      #   docker compose build worker-base      # or: make base
+      # then a normal `docker compose up -d --build` rebuilds only the worker
+      # code layer on top -- Chrome never rebuilds for a code change.
+      additional_contexts:
+        base: "docker-image://crawlpilot/worker-base:latest"
     # Google ships official Chrome (`channel="chrome"`) for linux/amd64 only --
     # `patchright install chrome` hard-fails on linux/arm64 ("not supported").
     # The fleet targets amd64 cloud nodes anyway (locked-in decision: real

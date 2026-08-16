@@ -110,6 +110,12 @@ async def run_agent_loop(
         execution_threshold=max_failures,
     )
     retry = RetryStrategy()
+    # Diagnostics for the exhausted/tripped exit: the most recent error message
+    # and whether we stopped because the circuit breaker tripped (repeated
+    # failures) vs. simply running out of steps without a `done`. Without this,
+    # both cases collapse to the same opaque "max_steps_or_failures_exceeded".
+    last_error: str | None = None
+    circuit_broken = False
 
     # A viewport screenshot is added to the observation only under vision, so
     # the model can cross-reference pixels with the coordinate-tagged tree. The
@@ -140,10 +146,12 @@ async def run_agent_loop(
             observe_result = await retry.execute(_observe)
         except Exception as exc:
             agent_steps_total.labels(outcome="observe_error").inc()
-            history.add(_error_step(step_number, f"failed to observe page state: {exc}"))
+            last_error = f"failed to observe page state: {exc}"
+            history.add(_error_step(step_number, last_error))
             try:
                 breaker.record_failure(FailureKind.EXECUTION)
             except CircuitBreakerTripped:
+                circuit_broken = True
                 break
             continue
 
@@ -219,7 +227,8 @@ async def run_agent_loop(
             output = parse_agent_output(raw)
         except Exception as exc:
             agent_steps_total.labels(outcome="llm_error").inc()
-            history.add(_error_step(step_number, f"LLM call or output parsing failed: {exc}"))
+            last_error = f"LLM call or output parsing failed: {exc}"
+            history.add(_error_step(step_number, last_error))
             kind = (
                 FailureKind.VALIDATION
                 if classify_error(exc) is ErrorClass.VALIDATION
@@ -228,6 +237,7 @@ async def run_agent_loop(
             try:
                 breaker.record_failure(kind)
             except CircuitBreakerTripped:
+                circuit_broken = True
                 break
             continue
         step_duration_ms = int((time.monotonic() - llm_started) * 1000)
@@ -284,7 +294,8 @@ async def run_agent_loop(
                     breaker.reset()  # progress -> clear consecutive-failure history
                 except Exception as exc:
                     step_outcome = "action_failed"
-                    action_results.append(redact_secrets(f"action failed: {exc}", sensitive_data))
+                    last_error = redact_secrets(f"action failed: {exc}", sensitive_data)
+                    action_results.append(last_error)
                     try:
                         breaker.record_failure(FailureKind.EXECUTION)
                     except CircuitBreakerTripped:
@@ -338,15 +349,28 @@ async def run_agent_loop(
                 steps=history,
             )
         if tripped:
+            circuit_broken = True
             break
 
     agent_runs_total.labels(outcome="exhausted").inc()
+    if circuit_broken:
+        # Stopped early on repeated failures -- the last error is almost always
+        # the actionable one (bad model output, an unreachable page, etc.).
+        result = "agent stopped after repeated failures"
+        if last_error:
+            result += f": {last_error}"
+        error = "circuit_breaker_tripped"
+    else:
+        result = f"agent ran out of steps ({max_steps}) without calling done"
+        if last_error:
+            result += f" -- last error: {last_error}"
+        error = "max_steps_exceeded"
     return AgentRunResult(
         success=False,
-        result="agent did not call done within the step/failure budget",
+        result=result,
         extracted_data=None,
         steps=history,
-        error="max_steps_or_failures_exceeded",
+        error=error,
     )
 
 

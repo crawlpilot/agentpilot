@@ -1,7 +1,36 @@
+# Python
 .venv
-__pycache__
+**/__pycache__
 *.pyc
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.import_linter_cache
+
+# VCS
 .git
+.gitignore
+
+# Secrets / local env -- the app never dotenv-loads (compose passes env via
+# `environment:`), so these are both unused in the image AND a secret leak if
+# baked in. NOTE: keeps `.env.example` out too, which is fine.
+.env
+*.env
+
+# Frontend -- backend images (worker/gateway/migrate/detection-page) never use
+# it. node_modules alone is ~180MB of build context; excluding the whole tree
+# keeps context small and stops frontend edits from busting the code layer.
+frontend
+
+# Docs, local data, editor/tool caches
+docs
+.localdata
+.code-review-graph
+.claude
+.cursor
+.gemini
+.qoder
+.codebuddy
+.vscode
+.idea
+scripts/node_modules

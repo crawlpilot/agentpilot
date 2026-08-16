@@ -58,14 +58,32 @@ in-code defaults in `agentpilot/gateway/wiring.py` and don't need to be set for 
 ### 2. Build and start the stack
 
 ```bash
-docker compose up --build
+make base          # first time (and after a dependency change): builds the worker BASE
+                   #   image — Debian + Chrome + Python deps. Slow (pulls Chrome).
+make up-build      # build the thin code layers on top and start everything. Fast.
+# equivalently, first time: `make rebuild`
 ```
 
 This starts Redis, Postgres, a one-shot `migrate` job (`alembic upgrade head`), two `worker`
 instances (Chrome/Patchright, internal-only, each self-registering into the fleet), and a
-`gateway` (publishes `8000:8000`) — the two-tier topology. `--build` forces a rebuild after pulling
-or editing a Dockerfile; plain `docker compose up` reuses images already built. First build pulls
-and installs Chrome inside the `worker` images, so expect it to take a few minutes.
+`gateway` (publishes `8000:8000`) — the two-tier topology.
+
+#### Docker build performance
+
+The worker image is split in two so a **code change never re-downloads Chrome**:
+
+- **`docker/worker-base.Dockerfile`** → `crawlpilot/worker-base:latest` — the heavy, slow-changing
+  half (Debian + Xvfb/X11/iptables + Python deps + Chrome). Built by `make base` (or
+  `docker compose build worker-base`); it's gated behind the `base` compose profile, so it never runs
+  as a container. Rebuild it **only** when `pyproject.toml`/`uv.lock` change.
+- **`docker/worker.Dockerfile`** → a thin `FROM base` + `COPY . .` + project install. A code change
+  rebuilds only this (seconds).
+
+So the everyday loop is just `make up-build` (or `docker compose up -d --build`); reach for
+`make base` again only after changing dependencies. Both Dockerfiles also use BuildKit cache mounts
+for `uv`/`apt`, and `.dockerignore` excludes `frontend/`, `.env`, and tooling caches from the build
+context. (If a `worker` build errors with a missing `crawlpilot/worker-base:latest`, you haven't run
+`make base` yet.)
 
 Redis (`6379`) and Postgres (`5432`) are also published, but loopback-only
 (`127.0.0.1:...`), so you can `redis-cli`/`psql` into them from the host for debugging or to run
@@ -78,29 +96,31 @@ code, dependencies, or a Dockerfile do not take effect until you rebuild.** Pick
 that covers what changed:
 
 ```bash
-# Usual case after editing code: rebuild changed layers + recreate containers.
-docker compose up --build -d
+# Usual case after editing code: rebuild the thin code layers + recreate. Fast --
+# Chrome/deps live in the prebuilt worker-base image and are NOT rebuilt here.
+docker compose up --build -d          # or: make up-build
 
-# Only the driver/worker changed — rebuild just the (slow, amd64-emulated) workers.
-docker compose up --build -d worker worker-2
+# Changed dependencies (pyproject.toml / uv.lock): rebuild the base first, then the rest.
+docker compose build worker-base      # or: make base   (slow -- Chrome + deps)
+docker compose up --build -d
 
 # Picked up new .env / environment values but the image itself didn't change.
 # (.env is read at container-creation time, not live — a plain restart won't see it.)
 docker compose up -d --force-recreate
 
-# Force a clean rebuild ignoring the layer cache — use when a cached layer is stale
-# (e.g. a dependency/apt change Docker didn't detect, or a full Chrome reinstall). Slow.
-docker compose build --no-cache worker worker-2
-docker compose up -d --force-recreate
+# Force a clean rebuild ignoring the layer cache — e.g. an apt/dep change Docker
+# didn't detect, or to force a full Chrome reinstall. Slow. Base first if deps moved.
+docker compose build --no-cache worker-base
+docker compose up -d --build --force-recreate
 
 # Nuclear: drop containers AND volumes (empty DB/Redis/profiles), then rebuild from scratch.
 docker compose down -v
-docker compose up --build
+make rebuild                          # base + up-build
 ```
 
-> Rule of thumb: **code/Dockerfile change → `--build`; `.env` change → `--force-recreate`; stale
-> cached layer → `--no-cache`.** When in doubt, `docker compose up --build -d --force-recreate`
-> does both a rebuild and a fresh recreate.
+> Rule of thumb: **code change → `--build` (fast); dependency change → `make base` first; `.env`
+> change → `--force-recreate`.** The base image is rebuilt only on dependency changes, so day-to-day
+> code edits never pay the Chrome-download cost.
 
 ### 3. Database migrations (automatic)
 
@@ -441,15 +461,16 @@ before the app starts.
 
 ```bash
 cp .env.example .env                       # AGENTPILOT_ADMIN_TOKEN at minimum
+make base                                  # first time / after a deps change: worker base + Chrome
 docker compose up --build -d               # redis, postgres, migrate, worker, worker-2, gateway
 cd frontend && npm install && npm run dev  # or the Caddy same-origin deploy above
 ```
 
 > **Note (worker DB dependency):** the compose workers are given `AGENTPILOT_DATABASE_URL` so they
 > run the crawl/agent/recipe job loops, which means the worker image must include the `postgres`
-> extra (`psycopg[pool]`). `docker/worker.Dockerfile` installs it; if you see a worker crash-loop
-> with `ModuleNotFoundError: No module named 'psycopg_pool'`, rebuild the worker image
-> (`docker compose up --build -d worker worker-2`).
+> extra (`psycopg[pool]`). `docker/worker-base.Dockerfile` installs it; if you see a worker crash-loop
+> with `ModuleNotFoundError: No module named 'psycopg_pool'`, rebuild the base image
+> (`make base`) then `docker compose up --build -d worker worker-2`.
 
 ### Mint a tenant API key (both paths)
 
