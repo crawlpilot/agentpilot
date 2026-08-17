@@ -466,10 +466,8 @@ def _log_step_response(step_number: int, output: AgentOutput) -> None:
     if output.thinking:
         logger.debug("💡 Thinking", step=step_number, thinking=output.thinking)
     if output.evaluation_previous_goal:
-        logger.info(
-            f"{_eval_emoji(output.evaluation_previous_goal)} Eval: {output.evaluation_previous_goal}",
-            step=step_number,
-        )
+        evaluation = output.evaluation_previous_goal
+        logger.info(f"{_eval_emoji(evaluation)} Eval: {evaluation}", step=step_number)
     if output.memory:
         logger.info(f"🧠 Memory: {output.memory}", step=step_number)
     if output.next_goal:
