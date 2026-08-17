@@ -8,7 +8,7 @@ from __future__ import annotations
 from agentpilot.driver.dom_fusion import LayoutInfo
 from agentpilot.driver.dom_fusion_engine import build_ax_lookup, build_enhanced_tree
 from agentpilot.spi.dom_tree import NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 
 def _rect(x: float, y: float, w: float, h: float) -> BoundingBox:

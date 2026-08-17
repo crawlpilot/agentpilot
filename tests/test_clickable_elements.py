@@ -6,7 +6,7 @@ from __future__ import annotations
 from agentpilot.dom.clickable_elements import is_interactive
 from agentpilot.driver.dom_fusion import LayoutInfo
 from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 
 def _node(

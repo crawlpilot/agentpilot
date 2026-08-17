@@ -9,7 +9,7 @@ from agentpilot.dom.paint_order import PaintEntry, Rect, RectUnionPure, compute_
 from agentpilot.dom.serializer import serialize
 from agentpilot.driver.dom_fusion import LayoutInfo
 from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 # --------------------------------------------------------------------- paint order
 

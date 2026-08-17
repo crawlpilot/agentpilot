@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from agentpilot.agent.observation import build_observation
 from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 
 def _body(*names_ids: tuple[str, int]) -> EnhancedDOMTreeNode:
