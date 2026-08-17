@@ -7,12 +7,12 @@ uses a stored `ref` (see `stabilize.py`'s docstring for why).
 from __future__ import annotations
 
 from agentpilot.recipe.models import Locator, RevealStep
-from agentpilot.recipe.tree import find_matches
+from agentpilot.recipe.tree import find_matches, node_ref
 from agentpilot.session.interactive import InteractiveSession, execute_on_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.snapshot import AXSnapshot
 
 
 class LocatorResolutionError(Exception):
@@ -23,13 +23,13 @@ class LocatorResolutionError(Exception):
 
 async def _fresh_snapshot(
     *, session: InteractiveSession, registry: RegistryProtocol, driver: BrowserDriver
-) -> AXSnapshot:
+) -> EnhancedDOMTreeNode:
     result = await execute_on_session(
         session, [spi_actions.SnapshotAction()], registry=registry, driver=driver
     )
-    if not result.snapshots:
+    if not result.fused_trees:
         raise LocatorResolutionError("no snapshot available")
-    return result.snapshots[0]
+    return result.fused_trees[0]
 
 
 async def resolve_ax_role_refs(
@@ -38,7 +38,7 @@ async def resolve_ax_role_refs(
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,
-    snapshot: AXSnapshot | None = None,
+    snapshot: EnhancedDOMTreeNode | None = None,
 ) -> list[str]:
     """Every CURRENT ref matching `locator` (ax_role source only), in
     document order."""
@@ -47,11 +47,9 @@ async def resolve_ax_role_refs(
     return find_matches_to_refs(locator, snap)
 
 
-def find_matches_to_refs(locator: Locator, snapshot: AXSnapshot) -> list[str]:
-    matches = find_matches(
-        snapshot.root, locator.role or "", locator.name_contains, locator.name_in
-    )
-    return [n.ref for n in matches]
+def find_matches_to_refs(locator: Locator, snapshot: EnhancedDOMTreeNode) -> list[str]:
+    matches = find_matches(snapshot, locator.role or "", locator.name_contains, locator.name_in)
+    return [node_ref(n) for n in matches]
 
 
 async def dispatch_reveal_step(

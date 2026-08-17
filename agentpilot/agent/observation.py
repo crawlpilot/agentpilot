@@ -1,7 +1,7 @@
 """Assemble the per-step observation the agent model reads from a fused DOM tree
 -- the integration point between the change-diff (`agent.dom_diff`) and the
-serializer (`dom.serializer`). This is the fusion-path counterpart to the
-aria-path `dom_view.render_snapshot_for_llm`.
+serializer (`dom.serializer`). This is the sole perception path: a fused
+`EnhancedDOMTreeNode` rendered to the model's indexed-element text.
 
 Delta-first (checklist L): the compact "changes since last step" block leads the
 observation so the model reads a *delta* rather than re-deriving changes from the
@@ -54,8 +54,7 @@ def build_observation(
 def identity_fingerprint(tree: EnhancedDOMTreeNode) -> str:
     """A stagnation fingerprint over the *stable identities* of the interactive
     elements (not the raw text), so trivial text churn doesn't reset the loop
-    detector but a real interactive-set change does. The fusion-path counterpart
-    to `AXSnapshot.fingerprint`."""
+    detector but a real interactive-set change does."""
 
     hashes = sorted(node.stable_hash() for node in iter_interactive(tree))
     digest = hashlib.sha256()

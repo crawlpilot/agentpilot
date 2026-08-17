@@ -759,9 +759,9 @@ class PatchrightDriver:
             # the new page -- bump the epoch and reset the ref cache the
             # same way SnapshotAction does, rather than relying on every
             # caller to always re-snapshot before reusing a ref. Without
-            # this, RefCache's AX_NAME fallback tier could spuriously
-            # resolve a stale ref against an unrelated element on the new
-            # page instead of correctly raising StaleRefError.
+            # this, a stale `e<backendNodeId>` ref left in the fused index
+            # could resolve against an unrelated element on the new page
+            # instead of correctly raising StaleRefError.
             live.epoch += 1
             live.ref_cache.reset(live.epoch)
             result.verifications.append(f"navigated to {live.page.url}")

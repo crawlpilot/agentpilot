@@ -26,8 +26,8 @@ from agentpilot.recipe.schema import FieldSpec
 from agentpilot.recipe.selector_synthesis import synthesize_css_candidates
 from agentpilot.session.interactive import InteractiveSession
 from agentpilot.session.registry import RegistryProtocol
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.snapshot import AXSnapshot
 
 # Preference order for the final candidate list: structured-data paths are the
 # most redesign-resilient, ax_role (accessibility) next, css last.
@@ -169,7 +169,7 @@ async def _verify_and_enrich(
     candidates: list[FieldLocator],
     *,
     structured_data: dict[str, Any],
-    snapshot: AXSnapshot,
+    snapshot: EnhancedDOMTreeNode,
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,
@@ -239,7 +239,7 @@ async def propose_and_verify_fields(
     *,
     snapshot_text: str,
     structured_data: dict[str, Any],
-    snapshot: AXSnapshot,
+    snapshot: EnhancedDOMTreeNode,
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,

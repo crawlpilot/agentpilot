@@ -16,7 +16,7 @@ from typing import Any
 from agentpilot.recipe.models import Locator, RevealStep
 from agentpilot.recipe.tree import find_node
 from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.snapshot import AXSnapshot
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _DICT_ACTION_BUILDERS: dict[str, Any] = {
     "ClickAction": lambda d: spi_actions.ClickAction(ref=d["ref"]),
@@ -31,21 +31,21 @@ _DICT_ACTION_BUILDERS: dict[str, Any] = {
 }
 
 
-def stabilize_action(action: spi_actions.Action, snapshot: AXSnapshot) -> RevealStep | None:
+def stabilize_action(action: spi_actions.Action, snapshot: EnhancedDOMTreeNode) -> RevealStep | None:
     """Returns `None` for actions that aren't reveal steps at all (navigate,
     go_back, extract, screenshot, tab management -- replay issues its own
     navigate and never needs the rest) or whose `ref` can't be resolved into
     a stable descriptor (not found in `snapshot`, or no accessible name to
     build an `ax_role` locator from -- rare for a genuinely interactive
-    element, per `agent.dom_view.INTERACTIVE_ROLES`)."""
+    element)."""
 
     ref = getattr(action, "ref", None)
     locator: Locator | None = None
     if ref is not None:
-        node = find_node(snapshot.root, ref)
-        if node is None or not node.name:
+        node = find_node(snapshot, ref)
+        if node is None or not node.ax_name:
             return None
-        locator = Locator(source="ax_role", role=node.role, name_contains=node.name)
+        locator = Locator(source="ax_role", role=node.ax_role, name_contains=node.ax_name)
 
     if isinstance(action, spi_actions.ClickAction):
         return RevealStep(action="click", locator=locator)
@@ -64,7 +64,9 @@ def stabilize_action(action: spi_actions.Action, snapshot: AXSnapshot) -> Reveal
     return None
 
 
-def stabilize_action_dict(action_dict: dict[str, Any], snapshot: AXSnapshot) -> RevealStep | None:
+def stabilize_action_dict(
+    action_dict: dict[str, Any], snapshot: EnhancedDOMTreeNode
+) -> RevealStep | None:
     """`agent.state.AgentStepRecord.actions` stores dispatched actions as
     plain `{"type": <ClassName>, **fields}` dicts (`agent/loop.py`'s
     `_action_to_dict`), not the original dataclass instances -- this is the

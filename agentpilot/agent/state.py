@@ -131,8 +131,9 @@ class LoopDetector:
         self._recent.append((action_type, key))
 
     def record_page_state(self, fingerprint: str) -> None:
-        """Feed the current page fingerprint (see `AXSnapshot.fingerprint`).
-        Consecutive identical fingerprints accumulate a stall count."""
+        """Feed the current page fingerprint (see
+        `agent.observation.identity_fingerprint`). Consecutive identical
+        fingerprints accumulate a stall count."""
 
         if self._last_page_fp is not None and fingerprint == self._last_page_fp:
             self._page_stall += 1

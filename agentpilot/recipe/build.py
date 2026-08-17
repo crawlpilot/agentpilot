@@ -29,9 +29,9 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from agentpilot.agent.dom_view import render_snapshot_for_llm
 from agentpilot.agent.loop import run_agent_loop
 from agentpilot.agent.state import AgentStepRecord
+from agentpilot.dom.serializer import serialize
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.evaluate import fetch_structured_data
@@ -49,8 +49,8 @@ from agentpilot.recipe.stabilize import stabilize_action_dict
 from agentpilot.session.interactive import InteractiveSession, execute_on_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.snapshot import AXSnapshot
 
 DEFAULT_BUILD_MAX_STEPS = 15
 
@@ -99,7 +99,7 @@ class ExplorationState:
         self._llm_config = llm_config
         self._config = config
 
-        self._last_snapshot: AXSnapshot | None = None
+        self._last_snapshot: EnhancedDOMTreeNode | None = None
         self._pending_reveal_steps: list[RevealStep] = []
         self._global_setup_captured = False
 
@@ -128,7 +128,7 @@ class ExplorationState:
             registry=self._registry,
             driver=self._driver,
         )
-        snapshot = result.snapshots[0] if result.snapshots else None
+        snapshot = result.fused_trees[0] if result.fused_trees else None
         if snapshot is None:
             return
         self._last_snapshot = snapshot
@@ -136,7 +136,7 @@ class ExplorationState:
         structured_data = await fetch_structured_data(
             self._session, registry=self._registry, driver=self._driver
         )
-        snapshot_text = render_snapshot_for_llm(snapshot)
+        snapshot_text = serialize(snapshot).llm_text
 
         verified = await propose_and_verify_fields(
             self._unfound,
@@ -160,7 +160,7 @@ class ExplorationState:
         self,
         verified: dict[str, list[FieldLocator]],
         *,
-        snapshot: AXSnapshot,
+        snapshot: EnhancedDOMTreeNode,
         last_click_ref: str | None,
     ) -> None:
         by_array: dict[str, dict[str, list[FieldLocator]]] = {}

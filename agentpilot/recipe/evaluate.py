@@ -10,12 +10,12 @@ from typing import Any
 
 from agentpilot.recipe.jsonpath import resolve_path
 from agentpilot.recipe.models import FieldLocator
-from agentpilot.recipe.tree import find_matches
+from agentpilot.recipe.tree import find_matches, node_ref
 from agentpilot.session.interactive import InteractiveSession, execute_on_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.snapshot import AXSnapshot
 
 _SOURCE_TO_CONTAINER = {"json_ld": "json_ld", "hydration": "hydration", "meta": "metadata"}
 
@@ -41,7 +41,7 @@ async def fetch_structured_data(
 
 
 def find_ax_role_refs(
-    snapshot: AXSnapshot,
+    snapshot: EnhancedDOMTreeNode,
     role: str,
     name_contains: str | None = None,
     name_in: list[str] | None = None,
@@ -51,7 +51,7 @@ def find_ax_role_refs(
     `generalize.py`, to discover a `RepeatSpec.option_locator`'s full match
     set."""
 
-    return [n.ref for n in find_matches(snapshot.root, role, name_contains, name_in)]
+    return [node_ref(n) for n in find_matches(snapshot, role, name_contains, name_in)]
 
 
 def _css_read_script(selector: str, attribute: str) -> str:
@@ -74,7 +74,7 @@ async def evaluate_field_locator(
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,
-    snapshot: AXSnapshot | None = None,
+    snapshot: EnhancedDOMTreeNode | None = None,
 ) -> Any:
     """Returns the resolved value, or `None` if it can't currently be
     resolved -- callers (verify/replay/heal) decide whether that's a
@@ -99,11 +99,11 @@ async def evaluate_field_locator(
             result = await execute_on_session(
                 session, [spi_actions.SnapshotAction()], registry=registry, driver=driver
             )
-            snap = result.snapshots[0] if result.snapshots else None
+            snap = result.fused_trees[0] if result.fused_trees else None
         if snap is None:
             return None
-        matches = find_matches(snap.root, locator.role or "", locator.name_contains)
-        return matches[0].name if matches else None
+        matches = find_matches(snap, locator.role or "", locator.name_contains)
+        return matches[0].ax_name if matches else None
 
     return None
 
@@ -119,7 +119,7 @@ async def evaluate_field_locators(
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,
-    snapshot: AXSnapshot | None = None,
+    snapshot: EnhancedDOMTreeNode | None = None,
 ) -> Any:
     """Try each candidate in order, returning the first non-empty resolution
     -- Pulsar's coalesce/comma-union idiom (`array_first_not_blank(make_array(
