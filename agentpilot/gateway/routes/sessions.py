@@ -24,15 +24,15 @@ from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
     ActionResultOut,
     ArtifactRefOut,
-    AXSnapshotOut,
     BoundingBoxOut,
     ExecuteRequest,
+    FusedTreeOut,
+    RefInfoOut,
     SessionListOut,
     SessionMetadata,
     SessionOpenRequest,
     SessionOpenResponse,
     SessionOut,
-    SnapshotNodeOut,
     TabInfoOut,
 )
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
@@ -47,34 +47,36 @@ from agentpilot.session.interactive import (
     release_interactive_session,
 )
 from agentpilot.session.reaper import _read_pid_rss_mb
+from agentpilot.dom.serializer import serialize
 from agentpilot.spi import actions as spi_actions
+from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.snapshot import SnapshotNode
 
 router = APIRouter(tags=["sessions"])
 
 
-def _snapshot_node_out(node: SnapshotNode) -> SnapshotNodeOut:
-    bbox = (
-        BoundingBoxOut(x=node.bbox.x, y=node.bbox.y, width=node.bbox.width, height=node.bbox.height)
-        if node.bbox
-        else None
-    )
-    return SnapshotNodeOut(
-        epoch=node.epoch,
-        ref=node.ref,
-        role=node.role,
-        name=node.name,
-        children=[_snapshot_node_out(c) for c in node.children],
-        bbox=bbox,
-    )
+def _fused_tree_out(tree: EnhancedDOMTreeNode) -> FusedTreeOut:
+    """Serialize a fused tree to the model-facing indexed-element text plus a
+    per-ref role/name/bbox map (interactive `e<backendNodeId>` refs only)."""
+
+    serialized = serialize(tree)
+    refs: dict[str, RefInfoOut] = {}
+    for backend_node_id, node in serialized.selector_map.items():
+        pos = node.absolute_position
+        bbox = (
+            BoundingBoxOut(x=pos.x, y=pos.y, width=pos.width, height=pos.height)
+            if pos is not None
+            else None
+        )
+        refs[f"e{backend_node_id}"] = RefInfoOut(
+            role=node.ax_role, name=node.ax_name, bbox=bbox
+        )
+    return FusedTreeOut(llm_text=serialized.llm_text, refs=refs)
 
 
 def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
     return ActionResultOut(
-        snapshots=[
-            AXSnapshotOut(epoch=s.epoch, root=_snapshot_node_out(s.root)) for s in result.snapshots
-        ],
+        fused_trees=[_fused_tree_out(t) for t in result.fused_trees],
         screenshots=[base64.b64encode(b).decode("ascii") for b in result.screenshots],
         extracts=result.extracts,
         js_returns=result.js_returns,

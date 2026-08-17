@@ -37,12 +37,11 @@ class Locator:
 
     `name_in` (as opposed to `name_contains`) is how a `RepeatSpec.option_locator`
     scopes to a specific option set (e.g. size labels `["S","M","L","XL"]`)
-    discovered once at generalization time: `AXSnapshot` carries no DOM
-    class/id/parent-selector info, so an exact enumerated name set is the
-    stable, resolvable substitute for "these N sibling elements" -- matched
-    against the whole tree, not scoped to a parent container. A same-named
-    element unrelated to the option set elsewhere on the page is a known,
-    accepted v1 false-positive risk (documented, not silently ignored)."""
+    discovered once at generalization time: an exact enumerated accessible-name
+    set is the stable, resolvable descriptor for "these N sibling elements" --
+    matched against the whole tree, not scoped to a parent container. A
+    same-named element unrelated to the option set elsewhere on the page is a
+    known, accepted v1 false-positive risk (documented, not silently ignored)."""
 
     source: LocatorSource
     role: str | None = None

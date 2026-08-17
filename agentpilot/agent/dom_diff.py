@@ -1,7 +1,7 @@
 """Cross-step DOM change identification -- the headline of the fusion port.
 
 Instead of re-sending the whole page and making the model re-derive what changed
-(the old `dom_view.py` `*`-only, `role:name`-path approach), `diff_snapshots`
+(a `*`-only, `role:name`-path marking of new elements), `diff_snapshots`
 compares the interactive elements of two fused trees and produces a typed change
 report: **NEW / REMOVED / MOVED / MODIFIED**. Rendered as a compact "changes
 since last step" block, this is both the clearest signal for the agent and the

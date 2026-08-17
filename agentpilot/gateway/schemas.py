@@ -63,7 +63,6 @@ class SnapshotActionIn(BaseModel):
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: list[str] | None = None
-    with_bbox: bool = False
 
 
 class ExtractActionIn(BaseModel):
@@ -586,20 +585,21 @@ class BoundingBoxOut(BaseModel):
     height: float
 
 
-class SnapshotNodeOut(BaseModel):
+class RefInfoOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    epoch: int
-    ref: str
     role: str
     name: str
-    children: list[SnapshotNodeOut] = Field(default_factory=list)
     bbox: BoundingBoxOut | None = None
 
 
-class AXSnapshotOut(BaseModel):
+class FusedTreeOut(BaseModel):
+    """The fusion perception output for one `SnapshotAction`: the model-facing
+    indexed-element text (`llm_text`) plus, per interactive `e<backendNodeId>`
+    ref shown in it, its accessible role/name and bounding box."""
+
     model_config = ConfigDict(extra="forbid")
-    epoch: int
-    root: SnapshotNodeOut
+    llm_text: str
+    refs: dict[str, RefInfoOut] = Field(default_factory=dict)
 
 
 class ArtifactRefOut(BaseModel):
@@ -621,7 +621,7 @@ class TabInfoOut(BaseModel):
 
 class ActionResultOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    snapshots: list[AXSnapshotOut] = Field(default_factory=list)
+    fused_trees: list[FusedTreeOut] = Field(default_factory=list)
     screenshots: list[str] = Field(default_factory=list)
     """Base64-encoded PNG bytes."""
     extracts: list[str] = Field(default_factory=list)
