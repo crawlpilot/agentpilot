@@ -1,27 +1,19 @@
 """Pure unit tests for `agentpilot.recipe.stabilize` -- turning a
 session-scoped dispatched action into a re-resolvable `RevealStep`, given a
-static `AXSnapshot` fixture. No browser, no epoch/ref system involved."""
+static fused-tree fixture. No browser, no epoch/ref system involved."""
 
 from __future__ import annotations
 
 from agentpilot.recipe.stabilize import stabilize_action, stabilize_action_dict
 from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from tests.fusion_fixtures import fnode
 
-
-def _node(role: str, name: str = "", ref: str = "", children=None) -> SnapshotNode:
-    return SnapshotNode(epoch=1, ref=ref, role=role, name=name, children=children or [])
-
-
-SNAPSHOT = AXSnapshot(
-    epoch=1,
-    root=_node(
-        "root",
-        children=[
-            _node("button", "Accept cookies", ref="e1"),
-            _node("button", "", ref="e2"),  # no accessible name -- can't stabilize
-        ],
-    ),
+SNAPSHOT = fnode(
+    "root",
+    children=[
+        fnode("button", "Accept cookies", ref="e1"),
+        fnode("button", "", ref="e2"),  # no accessible name -- can't stabilize
+    ],
 )
 
 

@@ -3,7 +3,7 @@ browser-use's `index not in selector_map` guard). No browser, no LLM."""
 
 from __future__ import annotations
 
-from agentpilot.agent.loop import _action_ref, _collect_snapshot_refs, _eval_emoji
+from agentpilot.agent.loop import _action_ref, _eval_emoji
 from agentpilot.spi.actions import (
     ClickAction,
     FillAction,
@@ -11,7 +11,6 @@ from agentpilot.spi.actions import (
     PressAction,
     ScrollAction,
 )
-from agentpilot.spi.snapshot import SnapshotNode
 
 
 def test_action_ref_reads_ref_bearing_actions() -> None:
@@ -39,15 +38,6 @@ def test_hallucinated_and_url_refs_are_not_in_a_valid_set() -> None:
     assert "https://www.amazon.com/Kindle-Books/dp/B00K0H3J74" not in valid_refs
     assert "e1141" not in valid_refs  # stale numeric ref
     assert "e10" in valid_refs
-
-
-def _node(ref: str, *children: SnapshotNode) -> SnapshotNode:
-    return SnapshotNode(epoch=0, ref=ref, role="button", name="x", children=list(children))
-
-
-def test_collect_snapshot_refs_walks_the_tree() -> None:
-    root = _node("", _node("e1"), _node("e2", _node("e3")))
-    assert _collect_snapshot_refs(root) == {"e1", "e2", "e3"}
 
 
 def test_eval_emoji_success_failure_neutral() -> None:

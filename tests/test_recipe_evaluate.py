@@ -9,17 +9,13 @@ from __future__ import annotations
 
 from agentpilot.recipe.evaluate import evaluate_field_locator, find_ax_role_refs
 from agentpilot.recipe.models import FieldLocator
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from tests.fusion_fixtures import fnode
 
 STRUCTURED_DATA = {
     "json_ld": [{"@type": "Product", "offers": {"price": "19.99"}}],
     "hydration": {"__NEXT_DATA__": {"props": {"pageProps": {"title": "Widget"}}}},
     "metadata": {"og:title": "Widget Page"},
 }
-
-
-def _node(role: str, name: str = "", ref: str = "", children=None) -> SnapshotNode:
-    return SnapshotNode(epoch=1, ref=ref, role=role, name=name, children=children or [])
 
 
 async def test_json_ld_field_locator_resolves_via_dotted_path() -> None:
@@ -55,8 +51,7 @@ async def test_json_ld_field_locator_missing_path_resolves_to_none() -> None:
 
 
 async def test_ax_role_field_locator_resolves_to_the_matched_nodes_name() -> None:
-    root = _node("root", children=[_node("button", "Add to cart", ref="e1")])
-    snapshot = AXSnapshot(epoch=1, root=root)
+    snapshot = fnode("root", children=[fnode("button", "Add to cart", ref="e1")])
     locator = FieldLocator(source="ax_role", role="button", name_contains="Add")
     value = await evaluate_field_locator(
         locator, structured_data=None, session=None, registry=None, driver=None, snapshot=snapshot
@@ -65,8 +60,7 @@ async def test_ax_role_field_locator_resolves_to_the_matched_nodes_name() -> Non
 
 
 async def test_ax_role_field_locator_no_match_resolves_to_none() -> None:
-    root = _node("root", children=[_node("button", "Add to cart", ref="e1")])
-    snapshot = AXSnapshot(epoch=1, root=root)
+    snapshot = fnode("root", children=[fnode("button", "Add to cart", ref="e1")])
     locator = FieldLocator(source="ax_role", role="button", name_contains="Checkout")
     value = await evaluate_field_locator(
         locator, structured_data=None, session=None, registry=None, driver=None, snapshot=snapshot
@@ -75,14 +69,13 @@ async def test_ax_role_field_locator_no_match_resolves_to_none() -> None:
 
 
 def test_find_ax_role_refs_matches_by_role_and_name_in_set() -> None:
-    root = _node(
+    snapshot = fnode(
         "root",
         children=[
-            _node("button", "S", ref="e1"),
-            _node("button", "M", ref="e2"),
-            _node("link", "M", ref="e3"),  # different role -- must not match
+            fnode("button", "S", ref="e1"),
+            fnode("button", "M", ref="e2"),
+            fnode("link", "M", ref="e3"),  # different role -- must not match
         ],
     )
-    snapshot = AXSnapshot(epoch=1, root=root)
     refs = find_ax_role_refs(snapshot, "button", name_in=["S", "M"])
     assert refs == ["e1", "e2"]

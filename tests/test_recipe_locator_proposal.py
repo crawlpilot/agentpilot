@@ -13,13 +13,13 @@ import pytest
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.locator_proposal import propose_and_verify_fields, propose_field_locators
 from agentpilot.recipe.schema import FieldSpec
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
+from tests.fusion_fixtures import fnode
 
 CONFIG = LLMConfig(api_key="test-key", base_url="https://llm.test/v1", model="m", timeout_s=5.0)
 
 FIELDS = {"price": FieldSpec(name="price", type="scalar", description="the price")}
 STRUCTURED_DATA = {"json_ld": [{"offers": {"price": "9.99"}}], "hydration": {}, "metadata": {}}
-SNAPSHOT = AXSnapshot(epoch=1, root=SnapshotNode(epoch=1, ref="", role="root", name=""))
+SNAPSHOT = fnode("root")
 
 
 def _mock_llm(monkeypatch: pytest.MonkeyPatch, handler) -> None:
