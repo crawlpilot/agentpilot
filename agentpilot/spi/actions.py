@@ -19,12 +19,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from agentpilot.spi.artifact import ArtifactRef
-from agentpilot.spi.snapshot import AXSnapshot
 
 if TYPE_CHECKING:
     from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
-
-SnapshotEngine = Literal["aria", "fusion"]
 
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
@@ -75,20 +72,10 @@ class SnapshotAction:
     viewport_only: bool = False
     max_nodes: int | None = None
     roles: tuple[str, ...] | None = None
-    with_bbox: bool = False
-    """Populate `SnapshotNode.bbox` for leaf refs in the resulting tree --
-    extra CDP round trips per call, so opt-in (used by `agentpilot.agent`'s
-    step loop; not requested by ordinary interactive-session/crawl callers)."""
     settle: bool = False
     """Wait (best-effort, bounded) for the page to reach network-idle before
     capturing the snapshot -- opt-in so only the agent's step loop pays for it
     (stable perception across steps); ordinary snapshot callers don't."""
-    engine: SnapshotEngine = "aria"
-    """Which perception pipeline to use. `"aria"` (default) is the battle-tested
-    Playwright aria-snapshot path producing `AXSnapshot`. `"fusion"` uses the
-    CDP DOM/Snapshot/Accessibility fusion engine producing an
-    `EnhancedDOMTreeNode` (in `ActionResult.fused_trees`) with stable
-    backendNodeId identity, element hashing, and cross-step change detection."""
     no_runtime: bool = False
     """UI-driven stealth flag (from `tier`). When set, the fusion engine skips
     every CDP `Runtime` call (`getEventListeners`), keeping Patchright's
@@ -246,10 +233,9 @@ class TabInfo:
 class ActionResult:
     """Per-type correlated output lists, mirroring Firecrawl's response shape."""
 
-    snapshots: list[AXSnapshot] = field(default_factory=list)
     fused_trees: list[EnhancedDOMTreeNode] = field(default_factory=list)
-    """One fused `EnhancedDOMTreeNode` per `SnapshotAction(engine="fusion")` in
-    the batch, index-correlated like `snapshots`. Empty on the aria path."""
+    """One fused `EnhancedDOMTreeNode` per `SnapshotAction` in the batch,
+    index-correlated with the other per-type output lists."""
     screenshots: list[bytes] = field(default_factory=list)
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)

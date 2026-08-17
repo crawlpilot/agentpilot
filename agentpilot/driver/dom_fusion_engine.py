@@ -32,7 +32,7 @@ from agentpilot.driver.dom_fusion import (
     build_snapshot_lookup,
 )
 from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 if TYPE_CHECKING:
     from patchright.async_api import CDPSession

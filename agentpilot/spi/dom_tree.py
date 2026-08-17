@@ -28,7 +28,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from agentpilot.spi import hashing
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 if TYPE_CHECKING:
     from agentpilot.driver.dom_fusion import LayoutInfo

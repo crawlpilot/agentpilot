@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 # The only computed styles the fusion pipeline consumes (visibility, occlusion,
 # scrollability, interactivity). Kept minimal -- requesting every style makes

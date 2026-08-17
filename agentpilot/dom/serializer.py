@@ -26,7 +26,7 @@ from agentpilot.dom import render
 from agentpilot.dom.clickable_elements import is_interactive
 from agentpilot.dom.paint_order import PaintEntry, compute_occluded
 from agentpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.snapshot import BoundingBox
+from agentpilot.spi.geometry import BoundingBox
 
 # Tags with no useful content for the agent -- pruned entirely.
 _DISABLED_TAGS = frozenset(

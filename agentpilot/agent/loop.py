@@ -2,7 +2,7 @@
 (structured output) -> dispatch chosen actions -> record history -> repeat
 until `done`, `max_steps`, or too many consecutive failures. Mirrors
 browser-use's `Agent.step()` three-phase cycle, adapted to crawlpilot's
-`InteractiveSession`/`AXSnapshot`/`RefCache` primitives.
+`InteractiveSession`/`EnhancedDOMTreeNode`/`RefCache` primitives.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from agentpilot.agent.actions import (
     build_action_schema,
     parse_agent_output,
 )
-from agentpilot.agent.dom_view import render_snapshot_for_llm
 from agentpilot.agent.judge import judge_completion
 from agentpilot.agent.observation import build_observation, identity_fingerprint
 from agentpilot.agent.prompts import build_system_prompt, build_user_message
@@ -52,7 +51,6 @@ from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.errors import StaleRefError
-from agentpilot.spi.snapshot import AXSnapshot, SnapshotNode
 
 logger = structlog.get_logger(__name__)
 
@@ -92,7 +90,6 @@ async def run_agent_loop(
     sensitive_data: dict[str, str] | None = None,
     enable_vision: bool = False,
     enable_judge: bool = False,
-    snapshot_engine: spi_actions.SnapshotEngine = "fusion",
     no_runtime: bool = False,
     max_observation_chars: int | None = 40_000,
     on_step: Callable[[AgentStepRecord], Awaitable[None]] | None = None,
@@ -100,12 +97,9 @@ async def run_agent_loop(
     system_prompt = build_system_prompt(allowed_actions=allowed_actions, max_steps=max_steps)
     history = AgentHistory()
     loop_detector = LoopDetector()
-    # Aria path keeps `AXSnapshot`; fusion path keeps the fused tree. Only one
-    # is populated per run (per `snapshot_engine`), both threaded as "previous"
-    # so the diff / new-element marking is relative to the prior step.
-    previous_snapshot: AXSnapshot | None = None
+    # The previous step's fused tree, threaded as "previous" so the diff /
+    # new-element marking is relative to the prior step.
     previous_tree: EnhancedDOMTreeNode | None = None
-    use_fusion = snapshot_engine == "fusion"
     # Typed consecutive-failure counters replacing the old single counter --
     # LLM/validation/execution each get their own budget (Browser4's shape).
     # `max_failures` stays the LLM/execution budget; validation gets a little
@@ -125,13 +119,10 @@ async def run_agent_loop(
 
     # A viewport screenshot is added to the observation only under vision, so
     # the model can cross-reference pixels with the coordinate-tagged tree. The
-    # aria path needs `with_bbox` for coordinate grounding; the fusion tree
-    # already carries `absolute_position` per node, so it doesn't.
+    # fusion tree already carries `absolute_position` per node for grounding.
     observe_actions: list[spi_actions.Action] = [
         spi_actions.SnapshotAction(
-            engine=snapshot_engine,
             no_runtime=no_runtime,
-            with_bbox=not use_fusion,
             settle=True,
         ),
         spi_actions.ListTabsAction(),
@@ -170,33 +161,19 @@ async def run_agent_loop(
         # browser-use's `index not in selector_map` guard). Empty => unknown,
         # so validation is skipped and dispatch behaves as before.
         valid_refs: set[str] = set()
-        if use_fusion:
-            tree = observe_result.fused_trees[0] if observe_result.fused_trees else None
-            if tree is not None:
-                # Delta-first: change block + compressed tree, `*`-marking the
-                # elements new since `previous_tree`.
-                observation = build_observation(
-                    tree, previous_tree, max_length=max_observation_chars
-                )
-                snapshot_text = observation.text
-                # `selector_map` is keyed by int `backend_node_id`; the model
-                # refers to elements as `e<backend_node_id>`.
-                valid_refs = {f"e{backend_id}" for backend_id in observation.selector_map}
-                page_fingerprint = identity_fingerprint(tree)
-            else:
-                snapshot_text, page_fingerprint = "(no snapshot)", None
-            previous_tree = tree
+        tree = observe_result.fused_trees[0] if observe_result.fused_trees else None
+        if tree is not None:
+            # Delta-first: change block + compressed tree, `*`-marking the
+            # elements new since `previous_tree`.
+            observation = build_observation(tree, previous_tree, max_length=max_observation_chars)
+            snapshot_text = observation.text
+            # `selector_map` is keyed by int `backend_node_id`; the model
+            # refers to elements as `e<backend_node_id>`.
+            valid_refs = {f"e{backend_id}" for backend_id in observation.selector_map}
+            page_fingerprint = identity_fingerprint(tree)
         else:
-            snapshot = observe_result.snapshots[0] if observe_result.snapshots else None
-            snapshot_text = (
-                render_snapshot_for_llm(snapshot, previous_snapshot)
-                if snapshot
-                else "(no snapshot)"
-            )
-            if snapshot is not None:
-                valid_refs = _collect_snapshot_refs(snapshot.root)
-            previous_snapshot = snapshot
-            page_fingerprint = snapshot.fingerprint() if snapshot is not None else None
+            snapshot_text, page_fingerprint = "(no snapshot)", None
+        previous_tree = tree
 
         # Feed a page fingerprint (active URL + stable identity) to the loop
         # detector so "page not changing despite actions" becomes a nudge.
@@ -488,20 +465,6 @@ def _log_step_completion(step: AgentStepRecord, outcome: str) -> None:
         input_tokens=step.input_tokens,
         output_tokens=step.output_tokens,
     )
-
-
-def _collect_snapshot_refs(root: SnapshotNode) -> set[str]:
-    """Every ref the aria-path snapshot issued this step (fusion has its own
-    `selector_map`). Used to pre-validate the model's chosen refs."""
-
-    refs: set[str] = set()
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        if node.ref:
-            refs.add(node.ref)
-        stack.extend(node.children)
-    return refs
 
 
 def _action_ref(action: spi_actions.Action) -> str | None:

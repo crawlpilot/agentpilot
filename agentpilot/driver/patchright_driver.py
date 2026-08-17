@@ -40,7 +40,6 @@ from patchright._impl._errors import TargetClosedError
 from patchright.async_api import (
     BrowserContext,
     CDPSession,
-    FloatRect,
     Locator,
     Page,
     ProxySettings,
@@ -49,12 +48,6 @@ from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from agentpilot.driver import humanize, warmup
-from agentpilot.driver.aria_parse import (
-    collect_leaf_refs,
-    filter_snapshot,
-    parse_aria_snapshot,
-    prune_to_refs,
-)
 from agentpilot.driver.dom_fusion_engine import capture_fused_tree
 from agentpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
@@ -106,7 +99,6 @@ from agentpilot.spi.health import ContextHealth, HealthStatus
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.snapshot import AXSnapshot, BoundingBox, SnapshotNode
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 from agentpilot.spi.streaming import InputEvent, LiveViewFrame
 
@@ -130,9 +122,9 @@ _GAP_BEFORE = (
 )
 
 _BOUNDING_BOX_TIMEOUT_MS = 3_000
-"""Bounded well below Playwright's 30s default -- see `_resolve_ref`'s and
-`_apply_viewport_filter`'s docstrings for why an unbounded wait here is a
-real observed hang, not a hypothetical one."""
+"""Bounded well below Playwright's 30s default -- see `_resolve_ref`'s
+docstring for why an unbounded wait here is a real observed hang, not a
+hypothetical one."""
 
 _LIVENESS_TIMEOUT_S = 2.0
 """Upper bound on the CDP liveness/keepalive ping. A responsive context answers
@@ -365,12 +357,6 @@ def _to_playwright_storage_state(state: StorageState) -> PlaywrightStorageState:
             ],
         },
     )
-
-
-def _record_ref_metadata(cache: RefCache, node: SnapshotNode) -> None:
-    cache.record(node.ref, role=node.role, name=node.name)
-    for child in node.children:
-        _record_ref_metadata(cache, child)
 
 
 def _from_playwright_storage_state(raw: Mapping[str, Any]) -> StorageState:
@@ -638,7 +624,7 @@ class PatchrightDriver:
 
     async def _cdp_ping(self, cctx: _Context) -> bool:
         """A cheap CDP round trip (`Page.getLayoutMetrics` -- Page domain, never
-        Runtime, same stealth constraint as `_apply_viewport_filter`) proving
+        Runtime, the same stealth constraint the fusion capture honors) proving
         Chrome is *responsive*, not merely present. Bounded so a wedged renderer
         reports 'not alive' in ~2s instead of hanging the caller. Reuses the
         page's live CDP session when one exists, else a short-lived one."""
@@ -788,27 +774,13 @@ class PatchrightDriver:
             if action.settle:
                 await self._settle(live)
             live.epoch += 1
-            if action.engine == "fusion":
-                # CDP DOM/Snapshot/AX fusion -> EnhancedDOMTreeNode with stable
-                # backendNodeId identity and cross-step change detection. Refs
-                # are `e<backendNodeId>`, resolved by RefCache's backend-id tier.
-                tree = await self._capture_fused(live, no_runtime=action.no_runtime)
-                live.ref_cache.reset(live.epoch)
-                live.ref_cache.record_fused(tree)
-                result.fused_trees.append(tree)
-            else:
-                text = await live.page.aria_snapshot(mode="ai")
-                root = parse_aria_snapshot(text, epoch=live.epoch)
-                live.ref_cache.reset(live.epoch)
-                _record_ref_metadata(live.ref_cache, root)
-                if action.viewport_only:
-                    root = await self._apply_viewport_filter(live, root)
-                root = filter_snapshot(root, roles=action.roles, max_nodes=action.max_nodes)
-                if action.with_bbox:
-                    # After filtering, not before: only pays for refs that
-                    # actually survived viewport/role/max_nodes pruning.
-                    await self._annotate_bounding_boxes(live, root)
-                result.snapshots.append(AXSnapshot(epoch=live.epoch, root=root))
+            # CDP DOM/Snapshot/AX fusion -> EnhancedDOMTreeNode with stable
+            # backendNodeId identity and cross-step change detection. Refs
+            # are `e<backendNodeId>`, resolved by RefCache's backend-id tier.
+            tree = await self._capture_fused(live, no_runtime=action.no_runtime)
+            live.ref_cache.reset(live.epoch)
+            live.ref_cache.record_fused(tree)
+            result.fused_trees.append(tree)
         elif isinstance(action, ExtractAction):
             # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
             # full page.content() fetch -- doesn't add a round trip to
@@ -1144,9 +1116,9 @@ class PatchrightDriver:
     async def _capture_fused(self, live: _Page, *, no_runtime: bool):
         """Capture a fused `EnhancedDOMTreeNode` via the CDP fusion engine,
         reusing the page's live CDP session when one exists (the live-view
-        screencast session) or creating a short-lived one otherwise -- same
-        acquisition pattern as `_apply_viewport_filter`. `no_runtime` (from the
-        UI stealth tier) forbids the engine's only Runtime call."""
+        screencast session) or creating a short-lived one otherwise.
+        `no_runtime` (from the UI stealth tier) forbids the engine's only
+        Runtime call."""
 
         cdp = live.cdp_session
         owns_session = cdp is None
@@ -1158,103 +1130,6 @@ class PatchrightDriver:
             if owns_session:
                 with contextlib.suppress(Exception):
                     await cdp.detach()
-
-    async def _apply_viewport_filter(self, live: _Page, root: SnapshotNode) -> SnapshotNode:
-        """Best-effort viewport clipping via CDP `Page.getLayoutMetrics`
-        (Page domain -- never Runtime, same constraint as live-view) rather
-        than Playwright's own `viewport_size()`, since `open()` launches with
-        `no_viewport=True` and would report `None` otherwise. Leaf-ref
-        bounding boxes are resolved concurrently (`asyncio.gather`) so CDP
-        pipelines the round trips instead of paying N sequential ones --
-        the whole reason `viewport_only` exists is to shrink an otherwise
-        enormous snapshot, so serializing this would defeat the point.
-        Each `bounding_box()` gets `_BOUNDING_BOX_TIMEOUT_MS`, not
-        Playwright's 30s default -- observed directly during testing:
-        `aria-ref=` locators occasionally hang the full default timeout
-        rather than failing fast, which would otherwise make a single
-        snapshot call take 30s per unresolvable ref."""
-
-        leaf_refs = collect_leaf_refs(root)
-        if not leaf_refs:
-            return root
-        cdp = live.cdp_session
-        owns_session = cdp is None
-        if cdp is None:
-            cdp = await live.page.context.new_cdp_session(live.page)
-        try:
-            metrics = await cdp.send("Page.getLayoutMetrics")
-            viewport = metrics["cssVisualViewport"]
-            vw, vh = viewport["clientWidth"], viewport["clientHeight"]
-            boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
-        finally:
-            if owns_session:
-                with contextlib.suppress(Exception):
-                    await cdp.detach()
-
-        def _in_viewport(box: FloatRect) -> bool:
-            return (
-                box["x"] + box["width"] > 0
-                and box["x"] < vw
-                and box["y"] + box["height"] > 0
-                and box["y"] < vh
-            )
-
-        # Three distinct outcomes from `bounding_box()`, not two: a `dict` is
-        # checked against the viewport; `None` is Playwright's own "confirmed
-        # not visible/detached" signal, so that's a real prune; an
-        # *exception* means resolution failed for some transient reason
-        # (slow layout, momentary CDP hiccup) -- unrelated to whether the
-        # element is actually on-screen, so it fails open (kept) rather than
-        # silently discarding real content because one lookup was flaky.
-        visible = {
-            ref
-            for ref, box in boxes_by_ref.items()
-            if (isinstance(box, dict) and _in_viewport(box)) or isinstance(box, Exception)
-        }
-        return prune_to_refs(root, visible)
-
-    async def _resolve_bounding_boxes(
-        self, live: _Page, refs: list[str]
-    ) -> dict[str, FloatRect | None | BaseException]:
-        """Concurrently resolves bounding boxes for `refs` via CDP-backed
-        Playwright locators, so callers pipeline the round trips instead of
-        paying N sequential ones -- shared by `_apply_viewport_filter` (which
-        interprets `None`/exception itself) and `_annotate_bounding_boxes`
-        (which only cares about the successful `dict` case)."""
-
-        if not refs:
-            return {}
-        boxes = await asyncio.gather(
-            *(
-                live.page.locator(f"aria-ref={ref}").bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
-                for ref in refs
-            ),
-            return_exceptions=True,
-        )
-        return dict(zip(refs, boxes, strict=True))
-
-    async def _annotate_bounding_boxes(self, live: _Page, root: SnapshotNode) -> None:
-        """Populates `SnapshotNode.bbox` in place for every leaf ref in the
-        (already-filtered) tree -- `agentpilot.agent`'s step loop uses this to
-        give the LLM coordinate grounding alongside a screenshot. Best
-        effort: a ref whose box can't be resolved (detached, transient CDP
-        hiccup) is simply left with `bbox=None`, the same fail-open posture
-        `_apply_viewport_filter` uses for lookup failures."""
-
-        leaf_refs = collect_leaf_refs(root)
-        boxes_by_ref = await self._resolve_bounding_boxes(live, leaf_refs)
-
-        def walk(node: SnapshotNode) -> None:
-            if not node.children and node.ref:
-                box = boxes_by_ref.get(node.ref)
-                if isinstance(box, dict):
-                    node.bbox = BoundingBox(
-                        x=box["x"], y=box["y"], width=box["width"], height=box["height"]
-                    )
-            for child in node.children:
-                walk(child)
-
-        walk(root)
 
     async def export_state(self, ctx: ContextRef) -> StorageState:
         cctx = self._require_context(ctx)
