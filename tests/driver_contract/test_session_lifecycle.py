@@ -73,7 +73,7 @@ async def test_open_execute_twice_release_reuses_same_live_session(
     result2 = await execute_session(
         session_id, ExecuteRequest(actions=[SnapshotActionIn(type="snapshot")]), wiring
     )
-    assert len(result2.snapshots) == 1
+    assert len(result2.fused_trees) == 1
 
     release_resp = await release_session(session_id, wiring)
     assert release_resp == {"success": True, "state": "idle"}

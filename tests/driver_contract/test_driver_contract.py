@@ -49,10 +49,17 @@ Click me</button>
 </body></html>"""
 
 
+def _ref(node) -> str:
+    return f"e{node.backend_node_id}"
+
+
 def _find_role(node, role: str):
-    if node.role == role:
+    """Walk a fused `EnhancedDOMTreeNode` tree for the first node with the
+    given accessibility role."""
+
+    if node.ax_role == role:
         return node
-    for child in node.children:
+    for child in node.children_and_shadow_roots:
         found = _find_role(child, role)
         if found is not None:
             return found
@@ -68,18 +75,14 @@ async def test_navigate_snapshot_yields_refs_with_epoch(
         open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
     )
 
-    assert len(result.snapshots) == 1
-    snapshot = result.snapshots[0]
-    # NavigateAction and SnapshotAction each bump the epoch (invalidating
-    # refs across a navigation, not just across snapshots) -- assert it
-    # advanced past the initial 0, not a specific count that's an
-    # implementation detail of how many internal events happened to fire.
-    assert snapshot.epoch > 0
+    assert len(result.fused_trees) == 1
+    tree = result.fused_trees[0]
 
-    button = _find_role(snapshot.root, "button")
+    button = _find_role(tree, "button")
     assert button is not None
-    assert button.ref
-    assert button.epoch == snapshot.epoch
+    # Refs are `e<backendNodeId>` tokens, resolvable by the ref cache.
+    assert _ref(button).startswith("e")
+    assert button.backend_node_id > 0
 
 
 async def test_navigate_then_snapshot_does_not_abort_batch(
@@ -102,7 +105,7 @@ async def test_navigate_then_snapshot_does_not_abort_batch(
     )
 
     assert result.sequence_aborted is False
-    assert len(result.snapshots) == 1
+    assert len(result.fused_trees) == 1
     assert len(result.extracts) == 1
 
 
@@ -167,10 +170,10 @@ async def test_click_dispatches_via_ref_cache(
     snap = await driver.execute(
         open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
     )
-    button = _find_role(snap.snapshots[0].root, "button")
-    assert button is not None and button.ref
+    button = _find_role(snap.fused_trees[0], "button")
+    assert button is not None
 
-    await driver.execute(open_ctx, [ClickAction(ref=button.ref)])
+    await driver.execute(open_ctx, [ClickAction(ref=_ref(button))])
 
     result = await driver.execute(open_ctx, [ExtractAction(format="html")])
     assert "clicked" in result.extracts[0]
@@ -183,10 +186,10 @@ async def test_fill_dispatches_via_ref_cache(
     snap = await driver.execute(
         open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
     )
-    textbox = _find_role(snap.snapshots[0].root, "textbox")
-    assert textbox is not None and textbox.ref
+    textbox = _find_role(snap.fused_trees[0], "textbox")
+    assert textbox is not None
 
-    await driver.execute(open_ctx, [FillAction(ref=textbox.ref, text="hello")])
+    await driver.execute(open_ctx, [FillAction(ref=_ref(textbox), text="hello")])
 
     # `.fill()` sets the live DOM `.value` *property*, not the `value`
     # attribute -- `page.content()`'s outerHTML serialization wouldn't show
@@ -213,24 +216,23 @@ async def test_click_with_unknown_ref_raises_stale_ref_error(
     assert exc_info.value.epoch_superseded is False
 
 
-async def test_ref_from_superseded_epoch_raises_stale_ref_error(
+async def test_ref_from_superseded_snapshot_raises_stale_ref_error(
     driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
 ) -> None:
     """A ref minted by an earlier snapshot must be rejected once a newer
     snapshot has superseded it -- no cascade, no lookalike click on stale DOM.
 
-    Replacing the button between snapshots (rather than just re-snapshotting
-    an unchanged page) matters: Playwright's `aria-ref=` numbering is stable
-    for an unchanged element, so an unchanged page's second snapshot would
-    reissue the *same* ref for the *same* button -- correctly still valid,
-    not a regression to test against. Mutating the DOM is what actually
-    frees up (or reassigns) that ref number, exercising the real hazard."""
+    Replacing the element between snapshots (rather than just re-snapshotting
+    an unchanged page) frees up its `backendNodeId`, so the old `e<id>` ref is
+    no longer in the current fused index -- the fusion path raises
+    `StaleRefError` (it does not distinguish "superseded" from "never existed";
+    both are simply absent from the fresh capture)."""
 
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     snap1 = await driver.execute(
         open_ctx, [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()]
     )
-    old_button = _find_role(snap1.snapshots[0].root, "button")
+    old_button = _find_role(snap1.fused_trees[0], "button")
     assert old_button is not None
 
     await driver.execute(
@@ -240,70 +242,33 @@ async def test_ref_from_superseded_epoch_raises_stale_ref_error(
                 script="document.getElementById('probe').outerHTML = "
                 "'<span>replaced</span>'"
             ),
-            SnapshotAction(),  # bumps the epoch; the old button no longer exists
+            SnapshotAction(),  # fresh capture; the old backendNodeId is gone
         ],
     )
 
-    with pytest.raises(StaleRefError) as exc_info:
-        await driver.execute(open_ctx, [ClickAction(ref=old_button.ref)])
-    assert exc_info.value.epoch_superseded is True
+    with pytest.raises(StaleRefError):
+        await driver.execute(open_ctx, [ClickAction(ref=_ref(old_button))])
 
 
-async def test_snapshot_viewport_only_drops_offscreen_elements(
+async def test_snapshot_populates_leaf_bounding_boxes(
     driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
 ) -> None:
-    html = """<html><body>
-    <button id="onscreen">Visible</button>
-    <button id="offscreen" style="position:absolute; top:9000px;">Hidden</button>
-    </body></html>"""
-    httpserver.expect_request("/").respond_with_data(html, content_type="text/html")
+    """The fusion capture carries per-node layout bounds (`absolute_position`)
+    from the CDP DOMSnapshot merge -- no opt-in flag, always available for
+    coordinate grounding."""
 
-    result = await driver.execute(
-        open_ctx,
-        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(viewport_only=True)],
-    )
-
-    names = _collect_names(result.snapshots[0].root)
-    assert "Visible" in names
-    assert "Hidden" not in names
-
-
-async def test_snapshot_with_bbox_populates_leaf_bounding_boxes(
-    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
-) -> None:
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
 
     result = await driver.execute(
         open_ctx,
-        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(with_bbox=True)],
+        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction()],
     )
 
-    button = _find_role(result.snapshots[0].root, "button")
+    button = _find_role(result.fused_trees[0], "button")
     assert button is not None
-    assert button.bbox is not None
-    assert button.bbox.width > 0
-    assert button.bbox.height > 0
-
-
-async def test_snapshot_roles_filter_drops_non_matching_leaves(
-    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
-) -> None:
-    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
-
-    result = await driver.execute(
-        open_ctx,
-        [NavigateAction(url=httpserver.url_for("/")), SnapshotAction(roles=("button",))],
-    )
-
-    assert _find_role(result.snapshots[0].root, "button") is not None
-    assert _find_role(result.snapshots[0].root, "link") is None
-
-
-def _collect_names(node) -> set[str]:
-    names = {node.name} if node.name else set()
-    for child in node.children:
-        names |= _collect_names(child)
-    return names
+    assert button.absolute_position is not None
+    assert button.absolute_position.width > 0
+    assert button.absolute_position.height > 0
 
 
 async def test_export_restore_round_trips_cookies_and_multi_origin_localstorage(

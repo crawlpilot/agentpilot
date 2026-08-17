@@ -54,30 +54,51 @@ class GoBackActionIn(BaseModel):
     type: Literal["go_back"]
 
 
+# The element-ref contract, described to the model the way browser-use names
+# its typed action target. Refs are `e<backendNodeId>` tokens shown in the page
+# state as `[e12]<button …/>`; a strong field description steers the model to
+# copy the exact token rather than a label. Deliberately NOT a JSON-schema
+# `pattern`: llama.cpp / Ollama structured outputs compile the schema to a GBNF
+# grammar and reject any `pattern` (400 Bad Request), so a regex constraint
+# would break every local-model run. The loop's `valid_refs` guard (a ref not
+# in the current selector map) is what rejects a malformed/stale ref, mirroring
+# browser-use's `index not in selector_map` check.
+_REF_DESCRIPTION = (
+    "The exact element ref from the current page state, shown in square brackets "
+    'e.g. \'e12\' in `[e12]<button "Add to cart"/>`. Copy it verbatim (an `e` '
+    "followed by digits). Never use a human-readable name/label, a description, "
+    "or a URL as a ref -- to open a URL use the navigate action."
+)
+
+
+def _ref_field() -> Any:
+    return Field(description=_REF_DESCRIPTION)
+
+
 class ClickActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["click"]
-    ref: str
+    ref: str = _ref_field()
 
 
 class FillActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["fill"]
-    ref: str
+    ref: str = _ref_field()
     text: str
 
 
 class SelectOptionActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["select_option"]
-    ref: str
+    ref: str = _ref_field()
     values: list[str] = Field(default_factory=list)
 
 
 class HoverActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["hover"]
-    ref: str
+    ref: str = _ref_field()
 
 
 class PressActionIn(BaseModel):
@@ -90,7 +111,7 @@ class ScrollActionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["scroll"]
     direction: Literal["up", "down", "left", "right"]
-    ref: str | None = None
+    ref: str | None = Field(default=None, description=_REF_DESCRIPTION)
 
 
 class WaitActionIn(BaseModel):
