@@ -20,6 +20,7 @@ Chrome for everything and never construct headers by hand (`NetworkManager
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Iterable
 
 # Chrome's actual top-level-navigation header order. `Host`/`Connection` are
@@ -47,11 +48,36 @@ _NAVIGATION_ACCEPT = (
     "application/signed-exchange;v=b3;q=0.7"
 )
 
-_ACCEPT_ENCODING = "gzip, deflate, br, zstd"
-"""What Chrome advertises. `httpx` defaults to `gzip, deflate` (no brotli, no
-zstd), which does not match any browser -- and the client must actually be able
-to decode whatever it claims, so this is only correct alongside a client that
-supports them."""
+CHROME_ACCEPT_ENCODING = "gzip, deflate, br, zstd"
+"""What Chrome advertises."""
+
+
+def _supported_accept_encoding() -> str:
+    """Chrome's `Accept-Encoding`, reduced to what this process can actually
+    decode.
+
+    Advertising an encoding you cannot decode is worse than advertising a
+    smaller set: the server honours the claim and you get undecodable bytes.
+    `httpx` handles br/zstd only when `brotli`/`zstandard` are importable, so
+    the honest header depends on what is installed. They are base dependencies
+    precisely so this normally resolves to the full Chrome string -- a short
+    `gzip, deflate` is itself a (mild) tell, since no browser sends it.
+    """
+
+    codings = ["gzip", "deflate"]
+    for module, coding in (("brotli", "br"), ("brotlicffi", "br"), ("zstandard", "zstd")):
+        if coding in codings:
+            continue
+        try:
+            importlib.import_module(module)
+        except ImportError:
+            continue
+        codings.append(coding)
+    # Chrome's order is gzip, deflate, br, zstd.
+    return ", ".join(sorted(codings, key=CHROME_ACCEPT_ENCODING.split(", ").index))
+
+
+_ACCEPT_ENCODING = _supported_accept_encoding()
 
 
 def navigation_headers(

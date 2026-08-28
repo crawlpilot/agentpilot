@@ -57,3 +57,29 @@ async def test_guarded_get_raises_before_connecting_to_blocked_host(
     monkeypatch.setattr(httpx_guard, "resolve_all_ips", lambda host: ["169.254.169.254"])
     with pytest.raises(EgressBlocked):
         await httpx_guard.guarded_get("http://metadata.internal/latest/", DEFAULT_POLICY)
+
+
+async def test_basic_tier_fetcher_refuses_a_metadata_address() -> None:
+    """`egress/httpx_guard` is documented as the `basic` tier's SSRF
+    protection, but nothing had ever called it -- `guarded_get` and
+    `assert_host_allowed` had no production caller at all, so a scrape of
+    `http://169.254.169.254/` went straight out. The browser path is covered
+    separately by the container-wide iptables baseline, which this path never
+    touches because it never opens a browser.
+    """
+
+    import pytest
+
+    from agentpilot.session.http_fetch import fetch_via_http
+    from agentpilot.spi.egress import EgressPolicy
+    from agentpilot.spi.errors import EgressBlocked
+    from agentpilot.spi.scrape import ScrapeOptions
+
+    with pytest.raises(EgressBlocked):
+        await fetch_via_http(
+            url="http://169.254.169.254/latest/meta-data/",
+            formats=("markdown",),
+            options=ScrapeOptions(formats=("markdown",)),
+            headers={},
+            egress=EgressPolicy(),
+        )

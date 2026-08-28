@@ -20,9 +20,11 @@ import re
 
 import httpx
 
+from agentpilot.egress.httpx_guard import assert_host_allowed
 from agentpilot.extraction import block_detect
 from agentpilot.extraction.extractor import extract
 from agentpilot.spi.actions import ActionResult, ExtractFormat
+from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.proxy import ProxyEndpoint
 from agentpilot.spi.scrape import ScrapeOptions
@@ -55,6 +57,7 @@ async def fetch_via_http(
     proxy: ProxyEndpoint | None = None,
     timeout_ms: int = 30_000,
     client: httpx.AsyncClient | None = None,
+    egress: EgressPolicy | None = None,
 ) -> ActionResult:
     """GET `url` over HTTP, classify the response, and extract the requested
     formats -- returning an `ActionResult` matching the browser path's shape
@@ -63,12 +66,30 @@ async def fetch_via_http(
     wall so the caller escalates to the browser; a soft (CRAWL) verdict is
     recorded on the result and the content returned."""
 
+    # SSRF guard. This module is the `basic` tier's fetcher and
+    # `egress/httpx_guard` is documented as that tier's protection, but nothing
+    # had ever called it: `guarded_get`/`assert_host_allowed` had no production
+    # caller at all, so a scrape of `http://169.254.169.254/` went straight out.
+    # The browser path is covered separately by the container-wide iptables
+    # baseline (`egress/policy.apply_baseline`), which this path never touches
+    # because it never opens a browser.
+    #
+    # Skipped when the caller injected a client: that is the test seam, and the
+    # tests point at a local `MockTransport`/loopback server the guard would
+    # (correctly) refuse.
+    if client is None:
+        assert_host_allowed(httpx.URL(url).host, egress or EgressPolicy())
+
     owns_client = client is None
     if client is None:
         client = httpx.AsyncClient(
             proxy=proxy_url(proxy) if proxy else None,
             follow_redirects=True,
             timeout=timeout_ms / 1000,
+            # Chrome always negotiates h2. Offering only HTTP/1.1 while
+            # claiming to be Chrome is a tell on its own, independent of the
+            # HTTP/2 SETTINGS-frame fingerprint a WAF may go on to compare.
+            http2=True,
         )
     try:
         resp = await client.get(url, headers=headers)

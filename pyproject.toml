@@ -23,7 +23,15 @@ dependencies = [
     "prometheus-client>=0.21",
     "structlog>=24.4",
     "redis>=5.0",
-    "httpx>=0.27",
+    # `[http2]` pulls `h2`: Chrome always negotiates HTTP/2, and an HTTP/1.1-only
+    # ALPN offer from a client claiming to be Chrome is a standalone tell --
+    # before any HTTP/2 SETTINGS-frame fingerprint is even compared.
+    "httpx[http2]>=0.27",
+    # Content encodings Chrome advertises. httpx only decodes br/zstd when
+    # these are importable, and the `basic` tier must not claim an encoding it
+    # cannot decode -- see `session/browser_headers._supported_accept_encoding`.
+    "brotli>=1.1",
+    "zstandard>=0.22",
     "websockets>=13.0",
 ]
 
