@@ -292,8 +292,12 @@ export interface DocumentOut {
   screenshot?: string | null // base64 PNG
   metadata?: ScrapeMetadataOut | null
   error?: string | null
-  extract?: Record<string, unknown> | null
+  extract?: Record<string, unknown> | unknown[] | null
+  /** An array when the request's `extract.json_schema` had an array at its root. */
   extract_error?: string | null
+  /** Non-fatal degradation of an extraction that still produced a result
+   *  (today: page content truncated to fit the model's input budget). */
+  extract_warning?: string | null
 }
 
 export interface ScrapeResponse {

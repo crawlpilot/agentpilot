@@ -61,6 +61,18 @@ export function ScrapeOptionsFields({
   onChange: (next: ScrapeOptionsValue) => void
   showAdvanced?: boolean
 }) {
+  // Remount key for the schema editor: `JsonTextareaField` seeds its own text
+  // state once, so loading an example has to give it a fresh instance or the
+  // textarea keeps showing the previous schema.
+  const [exampleId, setExampleId] = useState(DEFAULT_EXAMPLE_SCHEMA.id)
+
+  function loadExample(id: string) {
+    const example = EXAMPLE_SCHEMAS.find((e) => e.id === id)
+    if (!example) return
+    setExampleId(id)
+    onChange({ ...value, extract: { json_schema: example.schema, prompt: example.prompt } })
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
@@ -150,7 +162,19 @@ export function ScrapeOptionsFields({
                   type="checkbox"
                   checked={value.extract !== null}
                   onChange={(e) =>
-                    onChange({ ...value, extract: e.target.checked ? { json_schema: null, prompt: '' } : null })
+                    onChange({
+                      ...value,
+                      // Seed with a worked example rather than an empty box:
+                      // the schema language is the hard part of this feature,
+                      // and a runnable reference teaches it faster than the
+                      // placeholder text ever did.
+                      extract: e.target.checked
+                        ? {
+                            json_schema: DEFAULT_EXAMPLE_SCHEMA.schema,
+                            prompt: DEFAULT_EXAMPLE_SCHEMA.prompt,
+                          }
+                        : null,
+                    })
                   }
                 />
                 Enable LLM extraction
@@ -158,9 +182,35 @@ export function ScrapeOptionsFields({
               {value.extract !== null && (
                 <div className="flex flex-col gap-3">
                   <p className="text-xs text-muted-foreground">
-                    Calls an LLM over the page's markdown (server-side, gated by AGENTPILOT_LLM_API_KEY).
-                    Provide a prompt, a JSON Schema to extract into, or both.
+                    Calls an LLM over the page's markdown (server-side, gated by the worker's LLM
+                    config). Provide a prompt, a JSON Schema to extract into, or both.
                   </p>
+
+                  <div className="flex flex-col gap-1.5">
+                    <Label>Start from an example</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {EXAMPLE_SCHEMAS.map((example) => (
+                        <button
+                          key={example.id}
+                          type="button"
+                          title={example.description}
+                          onClick={() => loadExample(example.id)}
+                          className={
+                            'rounded-md border px-2 py-1 text-xs transition-colors ' +
+                            (exampleId === example.id
+                              ? 'border-accent bg-accent/10 text-foreground'
+                              : 'border-border text-muted-foreground hover:bg-muted')
+                          }
+                        >
+                          {example.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {EXAMPLE_SCHEMAS.find((e) => e.id === exampleId)?.description}
+                    </p>
+                  </div>
+
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="extract-prompt">Prompt</Label>
                     <Textarea
@@ -174,13 +224,45 @@ export function ScrapeOptionsFields({
                     />
                   </div>
                   <JsonTextareaField
+                    key={exampleId}
                     label="JSON Schema (optional)"
+                    rows={14}
                     value={value.extract.json_schema ?? null}
                     onChange={(json_schema) =>
                       onChange({ ...value, extract: { ...(value.extract ?? {}), json_schema } })
                     }
                     placeholder={'{\n  "type": "object",\n  "properties": { "price": { "type": "number" } }\n}'}
                   />
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer select-none">
+                      How to write the output schema
+                    </summary>
+                    <ul className="mt-2 flex list-disc flex-col gap-1 pl-4">
+                      <li>
+                        Standard JSON Schema. Use <code>type</code>, <code>properties</code>,{' '}
+                        <code>items</code>, <code>enum</code> and <code>required</code>.
+                      </li>
+                      <li>
+                        Write a <code>description</code> on every field that could be ambiguous —
+                        it is the instruction the model follows when a page shows several
+                        candidates for one field.
+                      </li>
+                      <li>
+                        List only genuinely-always-present fields in <code>required</code>.
+                        Everything else comes back <code>null</code> when the page lacks it,
+                        instead of being invented.
+                      </li>
+                      <li>
+                        A root-level <code>{'{ "type": "array" }'}</code> is supported and returns a
+                        JSON array.
+                      </li>
+                      <li>
+                        A bare field map — <code>{'{ "name": { "type": "string" } }'}</code> — is
+                        accepted and read as an object schema.
+                      </li>
+                      <li>Omit the schema entirely to get free-form JSON from the prompt alone.</li>
+                    </ul>
+                  </details>
                 </div>
               )}
             </div>

@@ -344,6 +344,35 @@ Notes:
 - For Compose, put the same values in `.env` — Compose only injects the variables named in the
   service's `environment` block.
 
+### Schema-driven extraction (`extract`)
+
+`ScrapeOptions.extract` runs one model call over the page's markdown and returns JSON shaped by
+your schema (`POST /v1/scrape`, and the Playground's Scrape tab, which ships a worked Zara
+product-page schema as its default). Ported from Firecrawl's one-shot `json` format.
+
+Your schema is normalized before it is sent (`agentpilot/llm/schema_normalize.py`) — the schemas
+people write are routinely not the schemas providers accept, and reshaping them beats rejecting
+them:
+
+| You write | What happens |
+|---|---|
+| `{"type": "array", "items": {…}}` at the root | Wrapped in an object to get past the provider, unwrapped on the way out — `extract` comes back as a **JSON array** |
+| `{"name": {"type": "string"}}` (a bare field map, no `type`) | Read as an object schema with those properties |
+| Optional fields (not in `required`) | On OpenAI, made required-but-nullable, which is how strict mode expresses "optional" — the model answers `null` instead of inventing a value. On Bedrock, `required` is honoured as written |
+| `minLength` / `format` / `default` / `minimum` / … | Dropped on OpenAI, whose strict mode rejects them outright. Kept on Bedrock |
+
+Notes:
+
+- **Write a `description` on ambiguous fields.** It is the instruction the model follows when a
+  page shows several candidates for one field — the highest-leverage thing in the schema.
+- **Keep `required` to what a page always has.** Everything else comes back `null` rather than
+  fabricated.
+- Omitting the schema entirely gives free-form JSON driven by `prompt` alone.
+- Page content is truncated at 40k characters; when that happens the response carries
+  `extract_warning` alongside the result, so a partial answer never looks complete.
+- Page text is untrusted and reaches the prompt verbatim, so the system prompt instructs the model
+  to treat instructions inside it as data (Firecrawl's prompt-injection guard).
+
 ## Local development (no Docker)
 
 Install the toolchain and run the unit tests (most never stand up the app, so they need neither a

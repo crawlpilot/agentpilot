@@ -107,6 +107,13 @@ export function DocumentPreview({ document }: { document: DocumentOut }) {
             )}
             {document.extract != null && <CopyButton text={JSON.stringify(document.extract, null, 2)} />}
           </div>
+          {document.extract_warning && (
+            // A result *and* a warning: the extraction succeeded over part of
+            // the page. Without this the answer looks complete.
+            <p className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+              {document.extract_warning}
+            </p>
+          )}
           {document.extract != null ? (
             <pre className="max-h-96 overflow-auto whitespace-pre-wrap p-3 text-xs">
               {JSON.stringify(document.extract, null, 2)}
