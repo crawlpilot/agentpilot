@@ -114,7 +114,16 @@ async def open_interactive_session(
         # uses. Before this, an interactive session -- and therefore every agent
         # run -- opened with none of them no matter which tier was requested.
         stealth = stealth_profile.resolve(
-            identity, tier, proxy=proxy, locale=locale, timezone_id=timezone_id
+            identity,
+            tier,
+            proxy=proxy,
+            locale=locale,
+            timezone_id=timezone_id,
+            # Avoidance yes, reaction no -- see `stealth_profile.resolve`.
+            # A session has no escalation ladder to answer a raised
+            # `ChallengeDetected` with, and an agent legitimately passes
+            # through empty/thin intermediate pages all run long.
+            detect_blocks=False,
         )
         ctx = await driver.open(
             identity,

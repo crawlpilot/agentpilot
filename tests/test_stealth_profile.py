@@ -134,3 +134,23 @@ def test_humanize_and_spi_agree_on_the_cadence_mapping() -> None:
 
     for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
         assert humanize.for_tier(tier).name == stealth_profile.interact_profile_for_tier(tier)
+
+
+def test_block_detection_is_opt_out_for_long_lived_sessions() -> None:
+    """A scrape has an escalation ladder to answer `ChallengeDetected` with; a
+    session does not, so raising mid-run only converts the situation into a
+    failed run. Avoidance (fingerprint, warm-up) is kept either way.
+
+    This is the regression guard for a real break: turning detection on for the
+    interactive path made every agent-loop, recipe and session-lifecycle
+    contract test fail with `ChallengeDetected: empty` on ordinary thin pages.
+    """
+
+    on = stealth_profile.resolve(IDENTITY, "stealth")
+    off = stealth_profile.resolve(IDENTITY, "stealth", detect_blocks=False)
+
+    assert on.detect_blocks is True
+    assert off.detect_blocks is False
+    # Everything that helps *avoid* a block is unchanged.
+    assert off.warmup is True
+    assert (off.user_agent, off.init_script) == (on.user_agent, on.init_script)
