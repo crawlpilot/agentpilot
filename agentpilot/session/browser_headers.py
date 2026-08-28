@@ -23,24 +23,31 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterable
 
-# Chrome's actual top-level-navigation header order. `Host`/`Connection` are
-# owned by the HTTP client and are not ours to set.
+# Chrome's actual top-level-navigation header order *and casing*.
+# `Host`/`Connection` are owned by the HTTP client and are not ours to set.
+#
+# The casing is not cosmetic. Over HTTP/2 header names must be lowercase and
+# the client lowercases them for us, but over HTTP/1.1 they go out exactly as
+# written -- and Chrome sends `User-Agent`, not `user-agent`. It does send the
+# client hints lowercase, which is why those differ here.
 _ORDER = (
     "sec-ch-ua",
     "sec-ch-ua-mobile",
     "sec-ch-ua-platform",
-    "upgrade-insecure-requests",
-    "user-agent",
-    "accept",
-    "sec-fetch-site",
-    "sec-fetch-mode",
-    "sec-fetch-user",
-    "sec-fetch-dest",
-    "referer",
-    "accept-encoding",
-    "accept-language",
-    "priority",
+    "Upgrade-Insecure-Requests",
+    "User-Agent",
+    "Accept",
+    "Sec-Fetch-Site",
+    "Sec-Fetch-Mode",
+    "Sec-Fetch-User",
+    "Sec-Fetch-Dest",
+    "Referer",
+    "Accept-Encoding",
+    "Accept-Language",
+    "Priority",
 )
+
+_CANONICAL = {name.lower(): name for name in _ORDER}
 
 _NAVIGATION_ACCEPT = (
     "text/html,application/xhtml+xml,application/xml;q=0.9,"
@@ -97,30 +104,34 @@ def navigation_headers(
     """
 
     values: dict[str, str] = {
-        "user-agent": user_agent,
-        "accept": _NAVIGATION_ACCEPT,
-        "accept-language": accept_language,
-        "accept-encoding": accept_encoding,
-        "upgrade-insecure-requests": "1",
-        "sec-fetch-site": "cross-site" if referer else "none",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-user": "?1",
-        "sec-fetch-dest": "document",
+        "User-Agent": user_agent,
+        "Accept": _NAVIGATION_ACCEPT,
+        "Accept-Language": accept_language,
+        "Accept-Encoding": accept_encoding,
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Site": "cross-site" if referer else "none",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-User": "?1",
+        "Sec-Fetch-Dest": "document",
         # Chrome sends this on navigations as of the priority-hints rollout.
-        "priority": "u=0, i",
+        "Priority": "u=0, i",
         **{k.lower(): v for k, v in client_hints.items()},
     }
     if referer:
-        values["referer"] = referer
+        values["Referer"] = referer
     return order_headers(values)
 
 
 def order_headers(values: dict[str, str]) -> dict[str, str]:
-    """`values` reordered to Chrome's sequence, with any unrecognised header
-    appended in its original relative order rather than dropped."""
+    """`values` reordered to Chrome's sequence and canonical casing, with any
+    unrecognised header appended in its original relative order rather than
+    dropped. Input keys are matched case-insensitively."""
 
-    ordered = {name: values[name] for name in _ORDER if name in values}
-    ordered.update({k: v for k, v in values.items() if k not in ordered})
+    by_lower = {k.lower(): v for k, v in values.items()}
+    ordered = {name: by_lower[name.lower()] for name in _ORDER if name.lower() in by_lower}
+    for key, value in values.items():
+        if key.lower() not in _CANONICAL:
+            ordered[key] = value
     return ordered
 
 
