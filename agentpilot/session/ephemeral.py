@@ -507,13 +507,14 @@ async def run_ephemeral_scrape(
 
     extract_result = None
     extract_error = None
+    extract_warning = None
     if options.extract is not None:
         if not internal_markdown:
             extract_error = "no markdown content available for structured extraction"
         else:
             try:
                 config = LLMConfig.from_env()
-                extract_result = await schema_extract.extract_structured(
+                extract_result, extract_warning = await schema_extract.extract_structured(
                     internal_markdown,
                     json_schema=options.extract.json_schema,
                     prompt=options.extract.prompt,
@@ -542,5 +543,6 @@ async def run_ephemeral_scrape(
         error=error,
         extract=extract_result,
         extract_error=extract_error,
+        extract_warning=extract_warning,
     )
     return document, screenshot_bytes

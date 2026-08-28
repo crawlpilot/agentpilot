@@ -126,6 +126,7 @@ def _document_from_row(row: dict[str, Any]) -> Document:
         error=row["error"],
         extract=row["extract"],
         extract_error=row["extract_error"],
+        extract_warning=row["extract_warning"],
     )
 
 
@@ -137,7 +138,7 @@ _JOB_COLUMNS = (
 _DOCUMENT_COLUMNS = (
     "document_id, url, status_code, title, markdown, text, html, raw_html, links, "
     "screenshot_artifact_id, tier_used, node_id, duration_ms, error, structured_data, "
-    "extract, extract_error"
+    "extract, extract_error, extract_warning"
 )
 
 
@@ -483,6 +484,7 @@ class PostgresJobStore:
                         Jsonb(document.structured_data) if document.structured_data else None,
                         Jsonb(document.extract) if document.extract else None,
                         document.extract_error,
+                        document.extract_warning,
                     ),
                 )
                 await cur.execute(

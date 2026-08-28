@@ -274,8 +274,13 @@ class DocumentOut(BaseModel):
     `screenshot_artifact_id` once an artifact store exists to upload to."""
     metadata: ScrapeMetadataOut | None = None
     error: str | None = None
-    extract: dict[str, Any] | None = None
+    extract: dict[str, Any] | list[Any] | None = None
+    """A list when the caller's `extract.json_schema` had an array at its root
+    -- see `agentpilot.spi.scrape.Document.extract`."""
     extract_error: str | None = None
+    extract_warning: str | None = None
+    """Non-fatal degradation of an extraction that still produced a result --
+    today, input truncated because the page exceeded the model's budget."""
 
 
 class ScrapeResponse(BaseModel):

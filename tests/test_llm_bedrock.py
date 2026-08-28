@@ -238,7 +238,7 @@ async def test_falls_back_to_text_when_the_model_skipped_the_tool_call(
 async def test_empty_response_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, _Response(content=[]))
 
-    with pytest.raises(ValueError, match="neither a tool call nor JSON text"):
+    with pytest.raises(ValueError, match="empty response"):
         await bedrock.chat_json_bedrock(
             [{"role": "user", "content": "go"}], config=CONFIG, json_schema=SCHEMA
         )

@@ -27,10 +27,9 @@ assumed role, ECS task role, IMDS).
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any, cast
 
-from agentpilot.llm.client import LLMConfig, LLMNotConfiguredError, LLMUsage
+from agentpilot.llm.client import LLMConfig, LLMNotConfiguredError, LLMUsage, parse_json_text
 
 if TYPE_CHECKING:  # pragma: no cover -- typing-only, `anthropic` is optional
     from anthropic import AsyncAnthropic
@@ -200,19 +199,7 @@ def _extract_json(response: Any) -> dict[str, Any]:
             return cast("dict[str, Any]", block.input)
         if block_type == "text":
             text_parts.append(block.text)
-    return _parse_json_text("\n".join(text_parts))
-
-
-def _parse_json_text(text: str) -> dict[str, Any]:
-    """Tolerant JSON parse: strips a markdown code fence, which models still
-    add occasionally even when told not to."""
-
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = stripped.partition("\n")[2].rpartition("```")[0].strip()
-    if not stripped:
-        raise ValueError("Bedrock response contained neither a tool call nor JSON text")
-    return cast("dict[str, Any]", json.loads(stripped))
+    return parse_json_text("\n".join(text_parts))
 
 
 def _extract_usage(response: Any) -> LLMUsage:

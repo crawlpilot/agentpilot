@@ -277,4 +277,20 @@ async def _chat_openai_compatible(
         input_tokens=int(usage_raw.get("prompt_tokens", 0) or 0),
         output_tokens=int(usage_raw.get("completion_tokens", 0) or 0),
     )
-    return cast("dict[str, Any]", json.loads(content)), usage
+    return parse_json_text(content), usage
+
+
+def parse_json_text(text: str) -> dict[str, Any]:
+    """`json.loads`, but tolerant of a markdown code fence around the object.
+
+    Models wrap JSON in ```json fences even when the response format forbids
+    prose -- reliably enough that Firecrawl carries a dedicated repair step
+    (`experimental_repairText`) for it. A bare `json.loads` turns that into a
+    `JSONDecodeError` and throws away a perfectly good extraction."""
+
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.partition("\n")[2].rpartition("```")[0].strip()
+    if not stripped:
+        raise ValueError("model returned an empty response where JSON was expected")
+    return cast("dict[str, Any]", json.loads(stripped))

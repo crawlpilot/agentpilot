@@ -113,6 +113,7 @@ def _document_out(document: Document) -> DocumentOut:
         error=document.error,
         extract=document.extract,
         extract_error=document.extract_error,
+        extract_warning=document.extract_warning,
     )
 
 

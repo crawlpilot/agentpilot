@@ -102,12 +102,23 @@ class Document:
     screenshot_artifact_id: str | None = None
     metadata: DocumentMetadata | None = None
     error: str | None = None
-    extract: dict[str, Any] | None = None
+    extract: dict[str, Any] | list[Any] | None = None
     """The LLM's schema-shaped output, set only when `ScrapeOptions.extract`
     was set. Separate from `structured_data` (deterministic, no LLM) and
     from the top-level `error` (a failed LLM call shouldn't null out an
-    otherwise-successful markdown/html scrape) -- see `extract_error`."""
+    otherwise-successful markdown/html scrape) -- see `extract_error`.
+
+    A list when the caller's schema had an array at its root: the object
+    wrapper `llm.schema_normalize` adds to get such a schema past the provider
+    is undone before it reaches here, so the caller gets the array they asked
+    for rather than our implementation detail."""
     extract_error: str | None = None
     """Set instead of `extract` when the LLM call fails (including
     `AGENTPILOT_LLM_API_KEY` unset) -- never raised through to fail the
     whole scrape."""
+    extract_warning: str | None = None
+    """Set *alongside* a successful `extract` when the extraction was degraded
+    but not failed -- today, page content truncated to fit the model's input
+    budget. Distinct from `extract_error` precisely because there is a result:
+    without this the caller cannot tell a complete answer from one computed
+    over the first 40k characters of a long page."""
