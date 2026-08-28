@@ -22,6 +22,7 @@ Two faithful choices from the Kotlin source:
 
 from __future__ import annotations
 
+import asyncio
 import random
 import time
 from collections.abc import Mapping, Sequence
@@ -30,6 +31,7 @@ from typing import Any
 import structlog
 from patchright.async_api import Page
 
+from agentpilot.driver import mouse
 from agentpilot.driver.humanize import DelayPolicy
 from agentpilot.extraction import block_detect
 
@@ -62,6 +64,46 @@ def _wheel_scroll_count() -> int:
 def _wheel_delta_px() -> float:
     # CommonRPA.kt:  deltaY = 100.0 + 20 * Random.nextInt(10)  -> 100..280 px.
     return 100.0 + 20.0 * random.randint(0, 9)
+
+
+_DRIFT_MOVES = (2, 4)
+"""How many separate pointer drifts the warm-up makes. Akamai's sensor scores
+the *stream* of `mousemove` coordinates (its `bmak.mme` counters weigh pointer
+velocity and acceleration heavily), and a session that scrolls but never moves
+the pointer produces a sensor POST with an empty movement channel -- which is
+its own signal, regardless of whether `_abck` eventually validates."""
+
+
+async def human_mouse_drift(page: Page, policy: DelayPolicy) -> None:
+    """Move the pointer along a few curved paths across the viewport.
+
+    This is the piece the original `CommonRPA.visit` port left out: it emits
+    wheel events only. Best-effort like the rest of warm-up -- a detached page
+    mid-drift is swallowed, never raised into the scrape.
+    """
+
+    try:
+        size = page.viewport_size or {"width": 1280, "height": 800}
+    except Exception:
+        return
+
+    width, height = float(size["width"]), float(size["height"])
+    # Start wherever a pointer plausibly is on arrival: somewhere in the upper
+    # half, not pinned at the origin.
+    current = (random.uniform(0.2, 0.8) * width, random.uniform(0.1, 0.4) * height)
+
+    for _ in range(random.randint(*_DRIFT_MOVES)):
+        target = (random.uniform(0.1, 0.9) * width, random.uniform(0.15, 0.85) * height)
+        for x, y in mouse.path(current, target):
+            try:
+                await page.mouse.move(x, y)
+            except Exception:
+                return
+            # A few ms between samples: this is intra-gesture motion, not an
+            # inter-action pause, so it must not use the action delay table.
+            await asyncio.sleep(random.uniform(0.008, 0.022))
+        current = target
+        await policy.pause("gap")
 
 
 async def human_scroll(page: Page, policy: DelayPolicy) -> None:
@@ -128,6 +170,7 @@ async def warm_up(page: Page, policy: DelayPolicy, *, wait_abck: bool = False) -
         await page.wait_for_selector("body", timeout=int(policy.sample("waitForSelector") * 10))
     except Exception:
         pass
+    await human_mouse_drift(page, policy)
     await human_scroll(page, policy)
     if not wait_abck:
         return True

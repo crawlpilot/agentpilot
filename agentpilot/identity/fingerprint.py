@@ -172,6 +172,14 @@ class Fingerprint:
                 "fullVersionList": _full_version_list(self.chrome_full_version, self.chrome_major),
                 "wow64": False,
             },
+            # Per-identity canvas/audio noise seed. Derived from the identity
+            # digest (`generate`), so the *same* identity always draws the same
+            # canvas -- a fingerprint that changes between page loads is a
+            # louder signal than one that never changes at all.
+            "canvasSeed": _seed_int(self.canvas_seed),
+            "maxTouchPoints": self.hardware.max_touch_points,
+            "vendor": self.hardware.vendor,
+            "productSub": self.hardware.product_sub,
         }
         return _INIT_SCRIPT_TEMPLATE.replace("__CFG__", json.dumps(cfg))
 
@@ -220,6 +228,16 @@ def _full_version_list(full: str, major: str) -> list[dict[str, str]]:
         {"brand": "Chromium", "version": full},
         {"brand": "Google Chrome", "version": full},
     ]
+
+
+def _seed_int(canvas_seed: str) -> int:
+    """The hex `canvas_seed` as a 32-bit int for the init script's xorshift.
+
+    `canvas_seed` was computed and stored from the identity digest but read by
+    nothing until the canvas/audio noise landed -- this is what finally uses it.
+    """
+
+    return int(canvas_seed[:8], 16)
 
 
 def _sec_ch_ua(major: str) -> str:
@@ -427,6 +445,144 @@ _INIT_SCRIPT_TEMPLATE = """
       Object.defineProperty(navigator, 'userAgentData', { get: () => data, configurable: true });
     } catch (e) {}
   }
+  // navigator scalars that the dataclass already carried but nothing applied.
+  define(navigator, 'maxTouchPoints', cfg.maxTouchPoints);
+  define(navigator, 'vendor', cfg.vendor);
+  define(navigator, 'productSub', cfg.productSub);
+  // navigator.plugins / mimeTypes. Headless Chrome reports an *empty*
+  // PluginArray; a real desktop Chrome always carries the built-in PDF
+  // entries, so emptiness is itself the tell. Cross-referenced the way Chrome
+  // does it (each plugin's item(0) is its mimeType and vice versa).
+  try {
+    const specs = [
+      ['PDF Viewer', 'internal-pdf-viewer'],
+      ['Chrome PDF Viewer', 'internal-pdf-viewer'],
+      ['Chromium PDF Viewer', 'internal-pdf-viewer'],
+      ['Microsoft Edge PDF Viewer', 'internal-pdf-viewer'],
+      ['WebKit built-in PDF', 'internal-pdf-viewer'],
+    ];
+    const mimeSpecs = [
+      ['application/pdf', 'pdf'],
+      ['text/pdf', 'pdf'],
+    ];
+    const mimes = mimeSpecs.map(([type, suffixes]) =>
+      Object.create(MimeType.prototype, {
+        type: { value: type, enumerable: true },
+        suffixes: { value: suffixes, enumerable: true },
+        description: { value: 'Portable Document Format', enumerable: true },
+      }));
+    const plugins = specs.map(([name, filename]) => {
+      const p = Object.create(Plugin.prototype, {
+        name: { value: name, enumerable: true },
+        filename: { value: filename, enumerable: true },
+        description: { value: 'Portable Document Format', enumerable: true },
+        length: { value: mimes.length, enumerable: true },
+      });
+      mimes.forEach((m, i) => Object.defineProperty(p, i, { value: m, enumerable: true }));
+      Object.defineProperty(p, 'item', { value: (i) => mimes[i] || null });
+      Object.defineProperty(p, 'namedItem', {
+        value: (n) => mimes.find((m) => m.type === n) || null });
+      return p;
+    });
+    mimes.forEach((m) => Object.defineProperty(m, 'enabledPlugin', { value: plugins[0] }));
+    const arrayLike = (items, proto, key) => {
+      const obj = Object.create(proto);
+      items.forEach((it, i) => Object.defineProperty(obj, i, { value: it, enumerable: true }));
+      Object.defineProperty(obj, 'length', { value: items.length });
+      Object.defineProperty(obj, 'item', { value: (i) => items[i] || null });
+      Object.defineProperty(obj, 'namedItem', {
+        value: (n) => items.find((it) => it[key] === n) || null });
+      Object.defineProperty(obj, 'refresh', { value: () => undefined });
+      return obj;
+    };
+    define(navigator, 'plugins', arrayLike(plugins, PluginArray.prototype, 'name'));
+    define(navigator, 'mimeTypes', arrayLike(mimes, MimeTypeArray.prototype, 'type'));
+  } catch (e) {}
+  // permissions.query: headless Chrome answers 'denied' for notifications
+  // while Notification.permission says 'default' -- a self-contradiction no
+  // real browser produces.
+  try {
+    const origQuery = Permissions.prototype.query;
+    const query = function (parameters) {
+      if (parameters && parameters.name === 'notifications') {
+        return Promise.resolve({ state: Notification.permission, onchange: null });
+      }
+      return origQuery.call(this, parameters);
+    };
+    patched.add(query);
+    Permissions.prototype.query = query;
+  } catch (e) {}
+  // Canvas + audio noise, seeded per identity. Deterministic on purpose: a
+  // fingerprint that differs on every read is a louder signal than a stable
+  // one, so this perturbs by a fixed-per-identity amount rather than randomly.
+  try {
+    let seed = cfg.canvasSeed >>> 0;
+    const nextNoise = () => {
+      // xorshift32 -- small, dependency-free, and reproducible from the seed.
+      seed ^= seed << 13; seed >>>= 0;
+      seed ^= seed >> 17;
+      seed ^= seed << 5;  seed >>>= 0;
+      return seed % 3;  // 0..2, i.e. at most one LSB step per channel
+    };
+    const perturb = (data) => {
+      for (let i = 0; i < data.length; i += 4) {
+        // Alpha (i+3) is deliberately untouched: nudging it changes visible
+        // transparency and breaks pages that composite the canvas.
+        data[i] = Math.min(255, Math.max(0, data[i] + nextNoise() - 1));
+        data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + nextNoise() - 1));
+        data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + nextNoise() - 1));
+      }
+    };
+    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+    const getImageData = function (...args) {
+      const out = origGetImageData.apply(this, args);
+      const localSeed = seed;
+      perturb(out.data);
+      seed = localSeed;  // same input -> same output within a document
+      return out;
+    };
+    patched.add(getImageData);
+    CanvasRenderingContext2D.prototype.getImageData = getImageData;
+
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    const toDataURL = function (...args) {
+      try {
+        const ctx = this.getContext('2d');
+        if (ctx && this.width > 0 && this.height > 0) {
+          const img = origGetImageData.call(ctx, 0, 0, this.width, this.height);
+          const localSeed = seed;
+          perturb(img.data);
+          seed = localSeed;
+          ctx.putImageData(img, 0, 0);
+        }
+      } catch (e) {}
+      return origToDataURL.apply(this, args);
+    };
+    patched.add(toDataURL);
+    HTMLCanvasElement.prototype.toDataURL = toDataURL;
+  } catch (e) {}
+  try {
+    const origGetChannelData = AudioBuffer.prototype.getChannelData;
+    const getChannelData = function (channel) {
+      const out = origGetChannelData.call(this, channel);
+      // A fixed, inaudible offset keyed to the identity -- enough to move the
+      // fingerprint hash, far below anything that affects playback.
+      const delta = ((cfg.canvasSeed % 1000) + 1) * 1e-8;
+      for (let i = 0; i < out.length; i += 100) out[i] = out[i] + delta;
+      return out;
+    };
+    patched.add(getChannelData);
+    AudioBuffer.prototype.getChannelData = getChannelData;
+  } catch (e) {}
+  // Error.prepareStackTrace lockdown (Browser4's hand-appended CDP defence,
+  // stealth.js:121-130). Non-writable + non-configurable means a page cannot
+  // install a getter to observe how an Error is serialized, which is the
+  // classic `Runtime.enable` + console.debug side channel.
+  try {
+    Object.defineProperty(Error, 'prepareStackTrace', {
+      writable: false, configurable: false, value: undefined,
+    });
+  } catch (e) {}
   // Keep toString native for patched getters (stealth.js core trick).
   const toStringProxy = new Proxy(nativeToString, {
     apply(target, thisArg, args) {

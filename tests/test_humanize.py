@@ -51,3 +51,40 @@ def test_by_name_mapping() -> None:
     assert humanize.by_name("stealth") is humanize.STEALTH
     assert humanize.by_name("fast") is humanize.FAST
     assert humanize.by_name("nope") is humanize.DEFAULT
+
+
+def test_sample_is_right_skewed_not_uniform() -> None:
+    """Human latencies cluster low with an occasional long pause. A uniform
+    draw has a flat histogram, which is itself learnable by keystroke-timing
+    telemetry -- the delay is randomised but its *distribution* is not human.
+    Both source projects sample uniformly; this asserts we do not.
+    """
+
+    import statistics
+
+    lo, hi = humanize.STEALTH.ranges["type"]
+    samples = [humanize.STEALTH.sample("type") for _ in range(20_000)]
+
+    assert lo <= min(samples) and max(samples) <= hi, "escaped the declared range"
+    # A uniform draw would put the median at the midpoint; a right-skewed one
+    # sits clearly below it.
+    assert statistics.median(samples) < (lo + hi) / 2
+    assert statistics.mean(samples) > statistics.median(samples), "not right-skewed"
+
+
+def test_sample_never_leaves_the_declared_range_for_any_action() -> None:
+    for policy in (humanize.DEFAULT, humanize.FAST, humanize.STEALTH):
+        for action, (lo, hi) in policy.ranges.items():
+            for _ in range(200):
+                v = policy.sample(action)
+                assert lo <= v <= hi, f"{policy.name}.{action} produced {v}"
+
+
+def test_for_tier_delegates_to_the_shared_spi_mapping() -> None:
+    """The tier -> table mapping lives in `spi.actions` so `session` can read
+    it without importing `driver`; this asserts the delegation is live."""
+
+    from agentpilot.spi.actions import interact_profile_for_tier
+
+    for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
+        assert humanize.for_tier(tier).name == interact_profile_for_tier(tier)

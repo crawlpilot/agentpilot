@@ -47,7 +47,7 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from agentpilot.driver import humanize, warmup
+from agentpilot.driver import humanize, mouse, warmup
 from agentpilot.driver.dom_fusion_engine import capture_fused_tree
 from agentpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
@@ -155,10 +155,6 @@ _SCROLL_DELTAS: dict[str, tuple[float, float]] = {
 # action ultimately does. All keyed off `random`, seeded per-process, so
 # tests that need determinism can `random.seed()`.
 
-_MOUSE_MOVE_STEPS_RANGE = (8, 18)
-"""Intermediate `mouse.move` steps before a click -- Playwright interpolates
-a straight line across them, still far more human than a single teleport to
-the target center; step count varies so the cadence isn't fixed."""
 
 _SCROLL_JITTER_FRAC = 0.15
 """Fraction of the base scroll delta to randomize by (±), so repeated
@@ -1086,13 +1082,31 @@ class PatchrightDriver:
             box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
         except PlaywrightTimeoutError:
             box = None
-        if box is not None and box["width"] > 0 and box["height"] > 0:
-            tx = box["x"] + box["width"] * random.uniform(0.3, 0.7)
-            ty = box["y"] + box["height"] * random.uniform(0.3, 0.7)
-            with contextlib.suppress(Exception):
-                await live.page.mouse.move(tx, ty, steps=random.randint(*_MOUSE_MOVE_STEPS_RANGE))
-            await policy.pause("click")
-        await locator.click()
+        if box is None or box["width"] <= 0 or box["height"] <= 0:
+            await locator.click()
+            return
+
+        target = mouse.jittered_point_in(box)
+        with contextlib.suppress(Exception):
+            # Approach from outside the element so the browser emits a real
+            # mouseover/mouseenter transition -- a pointer that materialises
+            # inside the element never produces one (Browser4's `hover`,
+            # `EmulationHandler.kt:829-866`).
+            start = mouse.approach_from_outside(box)
+            await live.page.mouse.move(*start)
+            for x, y in mouse.path(start, target):
+                await live.page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.006, 0.018))
+        await policy.pause("click")
+
+        # `position` is element-relative and is what stops Playwright from
+        # doing its own `mouse.move` to the element's exact geometric centre
+        # just before dispatching -- which is what used to discard the whole
+        # approach above, leaving a teleport to dead-centre as the last thing
+        # the page saw. Actionability checks still run.
+        await locator.click(
+            position={"x": target[0] - box["x"], "y": target[1] - box["y"]}
+        )
 
     async def _human_fill(
         self, live: _Page, locator: Locator, text: str, policy: humanize.DelayPolicy

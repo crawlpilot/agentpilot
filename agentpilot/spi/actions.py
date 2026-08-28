@@ -49,6 +49,32 @@ def stealth_from_tier(tier: str) -> bool:
     return tier in _STEALTH_TIERS
 
 
+# Which named delay table (`driver.humanize`) a tier interacts on. Lives here,
+# not in `driver.humanize`, because `session.stealth_profile` also has to
+# resolve it and `session` may not import `driver` (import-linter: they are
+# separate branches under `spi`). `humanize.for_tier` delegates here, so the
+# mapping has exactly one definition.
+_TIER_TO_INTERACT_PROFILE = {
+    "auto": "default",
+    "stealth": "stealth",
+    "enhanced": "stealth",
+}
+
+
+def interact_profile_for_tier(tier: str) -> str:
+    """The delay-table name a tier interacts on.
+
+    `stealth`/`enhanced` take the slowest, most-human table. `auto` takes the
+    default one: a long-lived session pays the table's inter-action `gap`
+    before every click, fill and press for the whole run, so the slow table on
+    the *default* tier would cost seconds per agent step -- while the
+    behavioural signal it buys matters most during page load, which the
+    warm-up covers separately. `basic` never reaches a browser.
+    """
+
+    return _TIER_TO_INTERACT_PROFILE.get(tier, "default")
+
+
 @dataclass
 class NavigateAction:
     url: str

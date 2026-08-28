@@ -23,7 +23,6 @@ def test_protected_tiers_get_the_full_stealth_kwargs(tier: str) -> None:
 
     assert profile.warmup is True
     assert profile.detect_blocks is True
-    assert profile.interact_profile == "stealth"
     assert profile.user_agent
     assert profile.init_script
     assert profile.extra_http_headers
@@ -50,9 +49,21 @@ def test_auto_resolves_to_the_ladders_first_rung() -> None:
 
     assert stealth_profile.effective_tier("auto") == "stealth"
     assert stealth_profile.is_protected("auto") is True
-    assert stealth_profile.resolve(IDENTITY, "auto") == stealth_profile.resolve(
-        IDENTITY, "stealth"
+
+    auto = stealth_profile.resolve(IDENTITY, "auto")
+    stealth = stealth_profile.resolve(IDENTITY, "stealth")
+
+    # Identical everywhere the anti-block signal lives...
+    assert (auto.user_agent, auto.init_script, auto.extra_http_headers) == (
+        stealth.user_agent,
+        stealth.init_script,
+        stealth.extra_http_headers,
     )
+    assert (auto.warmup, auto.detect_blocks) == (stealth.warmup, stealth.detect_blocks)
+    # ...and only the per-action cadence differs, which is the one cost that
+    # scales with session length rather than being paid once per page load.
+    assert auto.interact_profile == "default"
+    assert stealth.interact_profile == "stealth"
 
 
 def test_explicit_locale_and_timezone_win_over_the_fingerprints() -> None:
@@ -100,3 +111,26 @@ def test_as_open_kwargs_matches_the_driver_open_signature() -> None:
 
     accepted = set(inspect.signature(BrowserDriver.open).parameters)
     assert set(stealth_profile.resolve(IDENTITY, "stealth").as_open_kwargs()) <= accepted
+
+
+@pytest.mark.parametrize(
+    ("tier", "expected"),
+    [("auto", "default"), ("stealth", "stealth"), ("enhanced", "stealth")],
+)
+def test_interaction_cadence_follows_the_requested_tier(tier: str, expected: str) -> None:
+    """A long-lived session pays the delay table's inter-action `gap` before
+    every click, fill and press for the whole run. Putting the default tier on
+    the slow table cost seconds per agent step for a signal that matters most
+    during page load -- which the warm-up covers separately."""
+
+    assert stealth_profile.resolve(IDENTITY, tier).interact_profile == expected
+
+
+def test_humanize_and_spi_agree_on_the_cadence_mapping() -> None:
+    """`humanize.for_tier` delegates to the spi mapping so the two can never
+    drift; this asserts the delegation is actually wired."""
+
+    from agentpilot.driver import humanize
+
+    for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
+        assert humanize.for_tier(tier).name == stealth_profile.interact_profile_for_tier(tier)

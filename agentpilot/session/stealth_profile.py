@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
+from agentpilot.spi.actions import interact_profile_for_tier
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -101,7 +102,17 @@ def resolve(
         # cross-checks). Without this the header leaks the real, newer Chrome.
         extra_http_headers=fp.client_hint_headers(),
         extra_launch_args=fp.launch_args(),
-        # Protected tiers interact on the slow, most-human STEALTH timing table
-        # (click/fill/type/gap); other tiers keep the default cadence.
-        interact_profile="stealth",
+        # The interaction cadence comes from `humanize.for_tier`, the mapping
+        # the codebase already declares for exactly this (`auto` -> DEFAULT,
+        # `stealth`/`enhanced` -> STEALTH) and which nothing had been calling.
+        #
+        # Using the *requested* tier, not the effective rung, is deliberate.
+        # For a one-shot scrape the cadence costs one navigation's worth of
+        # pauses, but a long-lived session pays STEALTH's 900-1600 ms `gap`
+        # before every click, fill and press for the whole run -- so an agent
+        # run on the default tier would become several seconds per step slower
+        # for a behavioural signal that matters most on the page *load*, which
+        # the warm-up above already covers. An explicit `stealth`/`enhanced`
+        # still opts into the slow table.
+        interact_profile=interact_profile_for_tier(tier),
     )

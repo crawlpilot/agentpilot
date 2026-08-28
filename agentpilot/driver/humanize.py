@@ -18,8 +18,11 @@ preset mirrors Pulsar's `InteractLevel -> preset` factory
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 from dataclasses import dataclass
+
+from agentpilot.spi.actions import interact_profile_for_tier
 
 # Global clamp from InteractSettings.kt:71-76 -- no sampled delay is ever
 # shorter than this or longer than this, whatever a preset range says.
@@ -103,10 +106,31 @@ class DelayPolicy:
     ranges: dict[str, tuple[int, int]]
 
     def sample(self, action: str = "default") -> int:
+        """A log-normal draw within `[lo, hi]`, not a uniform one.
+
+        Human inter-action and inter-keystroke latencies are right-skewed: a
+        cluster of quick actions with an occasional long pause, not an even
+        spread. A uniform draw over a 180 ms window has a flat histogram, which
+        is itself learnable by keystroke-timing telemetry -- the delay is
+        randomised but its *distribution* is not human. Both source projects
+        sample uniformly (`AbstractWebDriver.randomDelayMillis`); this is one of
+        the few places worth diverging from them.
+
+        The lognormal is centred so its median sits about a third into the
+        range, then clamped to the range's bounds.
+        """
+
         lo, hi = self.ranges.get(action) or self.ranges.get("default", _FALLBACK_RANGE)
         if lo <= 0 or hi > 10_000 or lo > hi:
             lo, hi = _FALLBACK_RANGE
-        return max(MIN_DELAY_MS, min(MAX_DELAY_MS, random.randint(lo, hi)))
+        span = hi - lo
+        if span <= 0:
+            value = float(lo)
+        else:
+            # mu/sigma chosen so exp(N(mu, sigma)) has a median of ~0.35*span
+            # and a long right tail that the clamp truncates at `hi`.
+            value = lo + min(float(span), random.lognormvariate(math.log(span * 0.35), 0.6))
+        return max(MIN_DELAY_MS, min(MAX_DELAY_MS, int(value)))
 
     async def pause(self, action: str = "default") -> None:
         await asyncio.sleep(self.sample(action) / 1_000)
@@ -118,19 +142,16 @@ STEALTH = DelayPolicy("stealth", _STEALTH)
 
 _BY_NAME = {p.name: p for p in (DEFAULT, FAST, STEALTH)}
 
-# Map the request `tier` knob (gateway/schemas.py) to a delay preset. `basic`
-# never reaches the browser (httpx path), so it isn't here; `stealth` and
-# `enhanced` both want the slowest, most-human timing.
-_TIER_TO_POLICY = {
-    "auto": DEFAULT,
-    "stealth": STEALTH,
-    "enhanced": STEALTH,
-}
-
-
 def for_tier(tier: str) -> DelayPolicy:
-    """Resolve a scrape `tier` to its delay preset (defaults to `DEFAULT`)."""
-    return _TIER_TO_POLICY.get(tier, DEFAULT)
+    """Resolve a request `tier` (gateway/schemas.py) to its delay preset.
+
+    The tier -> table-name mapping lives in `spi.actions
+    .interact_profile_for_tier` rather than here, because
+    `session.stealth_profile` needs it too and `session` may not import
+    `driver`. This resolves that name to the actual policy object.
+    """
+
+    return by_name(interact_profile_for_tier(tier))
 
 
 def by_name(name: str) -> DelayPolicy:
