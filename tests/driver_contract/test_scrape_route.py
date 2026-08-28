@@ -235,7 +235,8 @@ async def test_protected_scrape_warms_up_on_the_site_root_first(
         profiles_root=tmp_path,
         proxy_pinner=None,
         lease_ttl_seconds=60,
-        tier="stealth",
+        # `enhanced` is the rung that opts into the extra root navigation.
+        tier="enhanced",
         retry_delay_base_s=0.0,
     )
 

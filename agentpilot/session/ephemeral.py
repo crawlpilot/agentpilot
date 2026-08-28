@@ -331,9 +331,21 @@ async def run_ephemeral_scrape(
     # anti-detection lever only; `basic` keeps a bare, refererless hit.
     protected = any(t in _PROTECTED_TIERS for t in attempts)
     referer = _search_engine_referer(url) if protected else None
-    # A warm identity already holds the site's cookies from its previous visit,
-    # so the extra root navigation buys it nothing and costs a page load.
-    batch = _build_batch(url, options, referer=referer, warm_up_root=protected and not warm)
+    def _batch_for(attempt_tier: str) -> list[spi_actions.Action]:
+        # Homepage-first is an *escalation* behaviour, not a default one. It
+        # costs a whole extra navigation plus its warm-up -- measured at roughly
+        # 3x the latency of a direct hit -- which is wasted on a site that was
+        # going to serve us anyway. `enhanced` is the rung that already means
+        # "spend whatever it takes": `auto` climbs to it after a block, and an
+        # explicit `enhanced` asks for it outright. A warm identity is excluded
+        # regardless: it already holds the site's cookies from its last visit,
+        # so the root navigation buys it nothing.
+        return _build_batch(
+            url,
+            options,
+            referer=referer,
+            warm_up_root=attempt_tier == "enhanced" and not warm,
+        )
 
     # Protected scrapes pin a residential exit; a warm identity being retired
     # rotates within that same tier (see `_retire_warm`).
@@ -401,7 +413,7 @@ async def run_ephemeral_scrape(
             opener=lambda: _opener(identity, attempt_tier),
         )
         try:
-            return await driver.execute(ctx, batch), ctx.node_id
+            return await driver.execute(ctx, _batch_for(attempt_tier)), ctx.node_id
         finally:
             try:
                 await registry.evict(identity)

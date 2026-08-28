@@ -12,7 +12,6 @@ from agentpilot.recipe.models import FieldLocator
 from agentpilot.recipe.replay import _read_field
 from agentpilot.recipe.schema import FieldNormalization
 
-
 # --- coalesce: first non-empty candidate wins ---
 
 

@@ -185,6 +185,10 @@ def test_warm_up_root_prepends_a_root_navigation() -> None:
 
 
 def test_warm_up_root_is_off_by_default() -> None:
+    """It is an escalation behaviour: roughly 3x the latency of a direct hit,
+    and wasted on a site that was going to serve us anyway. `enhanced` is the
+    rung that already means "spend whatever it takes"."""
+
     batch = _build_batch(
         "https://www.zara.com/uk/en/dress-p123.html", ScrapeOptions(formats=("markdown",))
     )

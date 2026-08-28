@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import enum
 import re
+from collections.abc import Mapping
 from typing import Protocol
 
 
@@ -64,7 +65,7 @@ _AKAMAI_MARKERS = (
     "reference #",
 )
 
-# --- Cloudflare / hCaptcha / generic interstitials.
+# --- Cloudflare / hCaptcha / Turnstile / generic interstitials.
 _CHALLENGE_MARKERS = (
     "just a moment",
     "cf-browser-verification",
@@ -72,7 +73,38 @@ _CHALLENGE_MARKERS = (
     "hcaptcha",
     "/cdn-cgi/challenge-platform",
     "attention required",
+    # Turnstile is Cloudflare's current challenge widget and was missing
+    # entirely -- `cf-challenge` above only covers the older interstitial.
+    "cf-turnstile",
+    "challenges.cloudflare.com",
 )
+
+# --- DataDome. Nothing in this module detected it before, which is why COS
+# and H&M -- both DataDome-class -- classified as OK or TOO_SMALL and their
+# interstitials were returned to callers as if they were content.
+_DATADOME_MARKERS = (
+    "geo.captcha-delivery.com",
+    "captcha-delivery.com",
+    "datadome",
+    "dd_cookie",
+    "interstitial.captcha",
+)
+
+# --- PerimeterX / HUMAN.
+_PERIMETERX_MARKERS = (
+    "px-captcha",
+    "_pxhd",
+    "perimeterx",
+    "please verify you are a human",
+    "captcha.px-cdn.net",
+)
+
+# Response headers that identify a WAF outright, checked independently of the
+# body: a challenge page can be visually indistinguishable from a thin real
+# page, but these headers are unambiguous. `classify_page` only ever received
+# `(html, url, status)` before, so all of this was invisible to it.
+_DATADOME_HEADERS = ("x-datadome", "x-datadome-cid")
+_PERIMETERX_HEADERS = ("x-px-block", "x-px-request-id")
 
 # Amazon-style CAPTCHA and other site-specific tells now live in
 # `agentpilot.extraction.site_checkers` (installed into the chain at the bottom
@@ -96,6 +128,31 @@ def is_abck_valid(abck_cookie_value: str | None) -> bool:
     if not abck_cookie_value:
         return False
     return _ABCK_INVALID.search(abck_cookie_value) is None
+
+
+def has_known_wall_marker(html: str | None) -> bool:
+    """Whether the body carries a marker the generic classifier recognises as a
+    definite wall (Akamai / Cloudflare / DataDome / PerimeterX).
+
+    Exists for site checkers: they run *before* the generic markers (Pulsar's
+    `addFirst`), so a checker whose own signal is a weak heuristic -- a page-size
+    floor, say -- must defer on a page the generic path can classify precisely.
+    Otherwise a size floor downgrades a hard `FORBIDDEN` (PRIVACY scope, instant
+    burn) to a soft `TOO_SMALL` (CRAWL scope, same-identity retry), and the
+    identity keeps hammering a wall it has already been told about.
+    """
+
+    body = (html or "").lower()
+    return any(
+        m in body
+        for group in (
+            _AKAMAI_MARKERS,
+            _CHALLENGE_MARKERS,
+            _DATADOME_MARKERS,
+            _PERIMETERX_MARKERS,
+        )
+        for m in group
+    )
 
 
 class SiteChecker(Protocol):
@@ -133,16 +190,58 @@ def _site_verdict(html: str | None, url: str, status: int | None) -> Verdict | N
     return None
 
 
+def _header_verdict(headers: Mapping[str, str] | None) -> Verdict | None:
+    """A WAF identified by its own response headers.
+
+    `x-datadome`/`x-px-block` are set on served *and* blocked responses by some
+    deployments, so presence alone is not a block -- the value is. DataDome
+    marks a challenge with `x-datadome: protected` plus a 403, and PerimeterX
+    sets `x-px-block: 1`. When the header is present but the status is fine, we
+    defer to the body checks rather than crying wolf.
+    """
+
+    if not headers:
+        return None
+    lowered = {k.lower(): (v or "").lower() for k, v in headers.items()}
+
+    if any(h in lowered for h in _PERIMETERX_HEADERS):
+        if lowered.get("x-px-block") == "1":
+            return Verdict.ROBOT_CHECK
+    if any(h in lowered for h in _DATADOME_HEADERS):
+        # A DataDome deployment tags every response; only a 4xx alongside it
+        # means this particular one was refused.
+        if lowered.get("x-datadome") in ("protected", "blocked"):
+            return Verdict.ROBOT_CHECK
+    if "set-cookie" in lowered and "datadome=" in lowered["set-cookie"]:
+        # Not a block by itself -- just proof the site is DataDome-protected,
+        # which the body markers below then interpret.
+        return None
+    return None
+
+
 def classify_page(
     *,
     html: str | None,
     url: str,
     status: int | None,
+    headers: Mapping[str, str] | None = None,
 ) -> Verdict:
-    """Pure classifier: `(html, url, status) -> Verdict`. Status is the primary
-    signal when present, but body markers win for the 200-body walls Akamai and
-    Cloudflare serve. Order matters -- hard status, then per-site checkers, then
-    the generic provider walls, then the empty/too-small fallbacks, then OK."""
+    """Pure classifier: `(html, url, status, headers) -> Verdict`. Status is the
+    primary signal when present, but body markers win for the 200-body walls
+    Akamai, Cloudflare and DataDome serve. Order matters -- hard status, then
+    response headers, then per-site checkers, then the generic provider walls,
+    then the empty/too-small fallbacks, then OK.
+
+    `url` should be the page's *final* location as the browser computed it, not
+    the URL that was requested: a WAF commonly 200-redirects a bot to a block
+    page without the fetcher ever seeing a redirect status, and only the landed
+    URL betrays it (Pulsar's `WalmartHtmlChecker` reads `activeDOMUrls.location`
+    for exactly this reason).
+
+    `headers` is optional so existing callers keep working, but passing it is
+    what catches a challenge that is visually indistinguishable from a thin
+    real page.
+    """
 
     body = (html or "").lower()
 
@@ -151,6 +250,11 @@ def classify_page(
         return Verdict.NOT_FOUND
     if status == 429:
         return Verdict.RATE_LIMITED
+
+    # Response headers -- unambiguous, and invisible to every body heuristic.
+    header_verdict = _header_verdict(headers)
+    if header_verdict is not None:
+        return header_verdict
 
     # Per-site checkers (Pulsar addFirst): host-aware redirect/captcha/undersize
     # tells that the generic markers can't see (silent redirects to a block URL,
@@ -163,6 +267,10 @@ def classify_page(
     if any(m in body for m in _AKAMAI_MARKERS):
         return Verdict.FORBIDDEN
     if any(m in body for m in _CHALLENGE_MARKERS):
+        return Verdict.ROBOT_CHECK
+    if any(m in body for m in _DATADOME_MARKERS):
+        return Verdict.ROBOT_CHECK
+    if any(m in body for m in _PERIMETERX_MARKERS):
         return Verdict.ROBOT_CHECK
 
     # Generic redirect-to-block / forbidden-body tells (a site checker upgrades

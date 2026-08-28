@@ -999,7 +999,15 @@ class PatchrightDriver:
             html: str | None = None
             with contextlib.suppress(Exception):
                 html = await live.page.content()
-            verdict = block_detect.classify_page(html=html, url=live.page.url, status=status)
+            # `live.page.url` is the browser's *final* location, so a silent
+            # 200-redirect to a block page is already visible to the site
+            # checkers (what Pulsar reads `activeDOMUrls.location` for).
+            # Headers additionally catch a DataDome/PerimeterX challenge that
+            # is visually indistinguishable from a thin real page.
+            headers = response.headers if response is not None else None
+            verdict = block_detect.classify_page(
+                html=html, url=live.page.url, status=status, headers=headers
+            )
             weight = block_detect.warning_weight(verdict)
             scope = block_detect.retry_scope(verdict)
             if weight:

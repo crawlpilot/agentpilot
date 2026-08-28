@@ -22,7 +22,11 @@ from __future__ import annotations
 
 import os
 
-from agentpilot.extraction.block_detect import Verdict, register_site_checker
+from agentpilot.extraction.block_detect import (
+    Verdict,
+    has_known_wall_marker,
+    register_site_checker,
+)
 
 # Amazon CAPTCHA prompt (AmazonHtmlIntegrityChecker.kt:120): a *short* page
 # carrying this exact prompt is a robot check.
@@ -105,9 +109,86 @@ class JdChecker:
         return None
 
 
+# --- The three retailers agentpilot is actually blocked on. All Inditex/H&M
+# storefronts render their PDPs client-side from a large JSON payload, so a real
+# product page is hundreds of KB while a wall or a geo/consent stub is a few.
+# The generic `_TOO_SMALL_LEN = 500` floor in `block_detect` is far too low to
+# tell them apart -- a 2 KB DataDome interstitial sails through it as OK.
+_FASHION_PDP_MIN = 120_000
+"""Floor for a product page on these storefronts. Deliberately well under the
+observed size of a real PDP: the cost of a false TOO_SMALL is one cheap
+same-identity retry (CRAWL scope), while a false OK returns a wall to the
+caller as if it were content."""
+
+_FASHION_LISTING_MIN = 40_000
+"""Category/listing pages are lighter than PDPs but still far from a stub."""
+
+_FASHION_HOSTS = (
+    "zara.com",
+    "cosstores.com",
+    "cos.com",
+    "hm.com",
+    "www2.hm.com",
+)
+
+# Landed-URL tells shared across the three. Inditex/H&M bounce a suspected bot
+# to a consent/geo gate or an error route rather than serving a 403.
+_FASHION_BLOCK_PATHS = ("/blocked", "/verify", "/errors/", "/error-page", "/challenge")
+
+
+class FashionRetailChecker:
+    """Zara / COS / H&M.
+
+    These sit behind Akamai (Zara) and DataDome (COS, H&M). Two signals the
+    generic classifier cannot see:
+
+    1. **A landed URL that is not the one requested.** `classify_page` is given
+       the browser's final location, so a silent 200-redirect to a consent gate
+       or error route is visible here even though the status is clean.
+    2. **A per-page-type size floor.** See `_FASHION_PDP_MIN`.
+    """
+
+    def is_relevant(self, url: str) -> bool:
+        lurl = url.lower()
+        return any(host in lurl for host in _FASHION_HOSTS)
+
+    def check(self, *, html: str | None, url: str, status: int | None) -> Verdict | None:
+        lurl = url.lower()
+        if any(p in lurl for p in _FASHION_BLOCK_PATHS):
+            return Verdict.ROBOT_CHECK_3
+        if html is None:
+            return None
+        body = html.lower()
+        # DataDome's interstitial is served on the requested URL with a 200 and
+        # is small; the marker is what distinguishes it from a thin real page.
+        if "captcha-delivery.com" in body or "geo.captcha-delivery" in body:
+            return Verdict.ROBOT_CHECK_3
+        # Defer on any page the generic classifier can name precisely. The
+        # size floor below is a heuristic; `Access Denied` is not, and letting
+        # the heuristic win would downgrade a hard FORBIDDEN to a soft retry.
+        if has_known_wall_marker(html):
+            return None
+        floor = _FASHION_PDP_MIN if _looks_like_pdp(lurl) else _FASHION_LISTING_MIN
+        if len(html) < floor:
+            return Verdict.TOO_SMALL
+        return None
+
+
+def _looks_like_pdp(lurl: str) -> bool:
+    """Product-detail URL shapes across the three storefronts: Zara/COS use a
+    `-p01234567.html` suffix, H&M uses `/productpage.<article>.html`."""
+
+    return (
+        "/productpage." in lurl
+        or ".html" in lurl
+        and ("-p" in lurl.rsplit("/", 1)[-1] or "/product/" in lurl)
+    )
+
+
 def install_default_site_checkers() -> None:
-    """Register the built-in Walmart/Amazon/JD checkers. Called once at import
+    """Register the built-in Walmart/Amazon/JD/fashion-retail checkers. Called once at import
     from `block_detect`; safe to call again only if the chain was cleared."""
     register_site_checker(WalmartChecker())
     register_site_checker(AmazonChecker())
     register_site_checker(JdChecker())
+    register_site_checker(FashionRetailChecker())
