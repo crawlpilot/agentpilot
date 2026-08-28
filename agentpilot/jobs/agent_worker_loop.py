@@ -178,10 +178,13 @@ class AgentWorkerLoop:
         finally:
             # Unpublish before releasing: a live-view connection opened against
             # a session that's mid-release would 404 cleanly rather than race
-            # a half-torn-down context. The redis route (if any) is left to
-            # expire on its TTL -- SessionPlacer has no explicit delete.
+            # a half-torn-down context. The redis route goes with it -- letting
+            # it linger on its TTL leaves the gateway proxying live-view to a
+            # worker that no longer has the session, which the worker can only
+            # answer with a reason-less handshake rejection.
             if self._sessions is not None:
                 self._sessions.pop(live_session_id, None)
+            await self._forget_live_route(live_session_id, session)
             try:
                 await release_interactive_session(
                     session,
@@ -227,3 +230,14 @@ class AgentWorkerLoop:
                 tier,
                 self._lease_ttl_seconds,
             )
+
+    async def _forget_live_route(self, session_id: str, session: Session) -> None:
+        """Counterpart to `_publish_live_route`, run once the run's session is
+        gone. Same best-effort contract: the route also carries a TTL, so a
+        redis hiccup here degrades to the old behaviour instead of failing a
+        run that has already finished its work."""
+
+        if self._placer is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._placer.forget_route(session_id, session.ctx.node_id)

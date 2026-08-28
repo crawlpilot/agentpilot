@@ -21,6 +21,7 @@ import structlog
 import websockets
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import InvalidHandshake
 
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.routing import resolve_route
@@ -126,3 +127,19 @@ async def live_view_proxy(
     except OSError as exc:
         log.error("live_view_proxy.worker_unreachable", url=ws_url, error=str(exc))
         await websocket.close(code=_BAD_UPSTREAM, reason="worker unreachable")
+    except InvalidHandshake as exc:
+        # The worker refused the upgrade. `routes/live_view.py` closes *before*
+        # accepting for every rejection it has (no such session, invalid key,
+        # driver without LiveViewCapable), and a pre-accept close is only
+        # expressible on the wire as a bare HTTP 403 -- the close code and
+        # reason never leave the worker. So this is not an error to raise out
+        # of the ASGI app (which is all it did before: an unhandled
+        # `InvalidStatus` traceback per attempt, and a browser left staring at
+        # a failed handshake); it is a "session isn't live here" answer, and
+        # the browser gets it as a close code it can act on.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        log.info(
+            "live_view_proxy.worker_rejected", url=ws_url, status=status, error=str(exc)
+        )
+        code = _NOT_FOUND if status == 403 else _BAD_UPSTREAM
+        await websocket.close(code=code, reason="session is not live on the worker")

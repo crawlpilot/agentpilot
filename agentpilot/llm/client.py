@@ -1,9 +1,18 @@
-"""Thin, provider-agnostic HTTP client for schema-driven LLM extraction --
-`httpx` against an OpenAI-compatible `/chat/completions` endpoint, not the
-`openai` SDK: `httpx` is already a base dependency, and a configurable
-`base_url` already gets provider-agnosticism (OpenAI, Azure OpenAI,
-OpenRouter, a local vLLM/Ollama-compatible server) for free, without adding
-a new dependency for what is, structurally, one POST request.
+"""Thin, provider-agnostic client for schema-driven LLM extraction.
+
+The default backend is `httpx` against an OpenAI-compatible
+`/chat/completions` endpoint, not the `openai` SDK: `httpx` is already a base
+dependency, and a configurable `base_url` already gets provider-agnosticism
+(OpenAI, Azure OpenAI, OpenRouter, a local vLLM/Ollama-compatible server) for
+free, without adding a new dependency for what is, structurally, one POST
+request.
+
+`AGENTPILOT_LLM_PROVIDER=bedrock` selects the second backend
+(`agentpilot.llm.bedrock`): Claude in Amazon Bedrock, whose Messages API at
+`/anthropic/v1/messages` has no OpenAI-compatible shape and so cannot be
+reached by pointing `base_url` at it. The dispatch lives inside
+`chat_json_conversation_with_usage` -- the single chokepoint every caller
+funnels through -- so no call site knows which provider it is talking to.
 """
 
 from __future__ import annotations
@@ -12,15 +21,25 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import httpx
 
+_BEDROCK_DEFAULT_MODEL = "anthropic.claude-opus-5"
+"""Bedrock model IDs carry an `anthropic.` provider prefix; a bare
+first-party `claude-*` id is rejected by the endpoint."""
+
+_DEFAULT_MAX_TOKENS = 16_000
+"""The Messages API requires an explicit `max_tokens`; OpenAI's
+`/chat/completions` does not. Sized for the small JSON objects these calls
+produce while leaving room for a large `done` payload."""
+
 
 class LLMNotConfiguredError(Exception):
-    """Raised when `AGENTPILOT_LLM_API_KEY` is unset -- fails closed and
-    explicit, the same "unset gates the feature off, doesn't silently
-    degrade" discipline `AGENTPILOT_ADMIN_TOKEN` uses elsewhere in this
-    codebase (`gateway/wiring.py`)."""
+    """Raised when the selected provider's required settings are unset --
+    fails closed and explicit, the same "unset gates the feature off, doesn't
+    silently degrade" discipline `AGENTPILOT_ADMIN_TOKEN` uses elsewhere in
+    this codebase (`gateway/wiring.py`)."""
 
 
 @dataclass
@@ -35,13 +54,29 @@ class LLMUsage:
 
 @dataclass
 class LLMConfig:
-    api_key: str
+    api_key: str | None
     base_url: str
     model: str
     timeout_s: float
+    provider: str = "openai"
+    region: str | None = None
+    max_tokens: int = _DEFAULT_MAX_TOKENS
+    """`api_key` is `None` only on Bedrock's SigV4 path, where the AWS
+    credential chain -- not a bearer token -- authenticates the request. The
+    trailing fields default so the OpenAI construction stays a four-argument
+    call everywhere it already appears."""
 
     @classmethod
     def from_env(cls) -> LLMConfig:
+        provider = os.environ.get("AGENTPILOT_LLM_PROVIDER", "openai").strip().lower()
+        if provider == "bedrock":
+            return cls._bedrock_from_env()
+        if provider != "openai":
+            raise LLMNotConfiguredError(
+                f"AGENTPILOT_LLM_PROVIDER={provider!r} is not a known provider "
+                "(expected 'openai' or 'bedrock')"
+            )
+
         api_key = os.environ.get("AGENTPILOT_LLM_API_KEY")
         if not api_key:
             raise LLMNotConfiguredError(
@@ -53,6 +88,66 @@ class LLMConfig:
             model=os.environ.get("AGENTPILOT_LLM_MODEL", "gpt-4o-mini"),
             timeout_s=float(os.environ.get("AGENTPILOT_LLM_TIMEOUT_S", "60")),
         )
+
+    @classmethod
+    def _bedrock_from_env(cls) -> LLMConfig:
+        """Claude in Amazon Bedrock. Deliberately reads the `ANTHROPIC_*` names
+        as fallbacks: the Anthropic SDK already understands them, so the
+        documented three-export setup (`ANTHROPIC_BASE_URL`,
+        `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`) works without a
+        crawlpilot-specific rename. No API key is *required* here -- absent
+        one, the dedicated Bedrock client signs with SigV4 off the standard AWS
+        credential chain -- so the OpenAI branch's fail-closed key check would
+        be wrong; the region takes its place as the must-be-set setting."""
+
+        base_url = os.environ.get("AGENTPILOT_LLM_BASE_URL") or os.environ.get(
+            "ANTHROPIC_BASE_URL"
+        )
+        region = (
+            os.environ.get("AGENTPILOT_LLM_AWS_REGION")
+            or os.environ.get("AWS_REGION")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or (region_from_bedrock_url(base_url) if base_url else None)
+        )
+        if not region:
+            raise LLMNotConfiguredError(
+                "AGENTPILOT_LLM_PROVIDER=bedrock needs a region -- set "
+                "AGENTPILOT_LLM_AWS_REGION or AWS_REGION, or point "
+                "ANTHROPIC_BASE_URL at https://bedrock-mantle.{region}.api.aws/anthropic"
+            )
+        return cls(
+            api_key=(
+                os.environ.get("AGENTPILOT_LLM_API_KEY")
+                or os.environ.get("ANTHROPIC_API_KEY")
+                or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+                or None
+            ),
+            base_url=base_url or bedrock_base_url(region),
+            model=os.environ.get("AGENTPILOT_LLM_MODEL", _BEDROCK_DEFAULT_MODEL),
+            timeout_s=float(os.environ.get("AGENTPILOT_LLM_TIMEOUT_S", "60")),
+            provider="bedrock",
+            region=region,
+            max_tokens=int(os.environ.get("AGENTPILOT_LLM_MAX_TOKENS", _DEFAULT_MAX_TOKENS)),
+        )
+
+
+def bedrock_base_url(region: str) -> str:
+    """The Claude-in-Bedrock (Mantle) endpoint for `region`. `/v1/messages` is
+    appended by the SDK, matching the first-party client's `base_url` shape."""
+
+    return f"https://bedrock-mantle.{region}.api.aws/anthropic"
+
+
+def region_from_bedrock_url(base_url: str) -> str | None:
+    """`https://bedrock-mantle.us-east-1.api.aws/anthropic` -> `us-east-1`.
+    Lets the region be implied by the one URL an operator is most likely to
+    have exported, rather than demanded twice."""
+
+    host = urlparse(base_url).hostname or ""
+    parts = host.split(".")
+    if len(parts) >= 2 and parts[0] == "bedrock-mantle":
+        return parts[1]
+    return None
 
 
 async def chat_json(
@@ -95,17 +190,40 @@ async def chat_json_conversation_with_usage(
     config: LLMConfig,
     json_schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], LLMUsage]:
-    """One `/chat/completions` call, structured-output mode, over an
-    arbitrary message list -- the primitive `agentpilot.agent`'s step loop
-    needs (system + rendered-history-as-text + current state each turn, not
-    a raw growing transcript -- see `agent/prompts.py`). Returns the parsed
-    JSON object the model produced *and* its token usage. A malformed/non-JSON
-    model response raises `json.JSONDecodeError`/`KeyError` -- callers catch
-    broadly and surface it as an error field rather than crashing the run.
+    """One structured-output completion over an arbitrary message list -- the
+    primitive `agentpilot.agent`'s step loop needs (system + rendered-history-
+    as-text + current state each turn, not a raw growing transcript -- see
+    `agent/prompts.py`). Returns the parsed JSON object the model produced
+    *and* its token usage. A malformed/non-JSON model response raises
+    `json.JSONDecodeError`/`ValueError`/`KeyError` -- callers catch broadly and
+    surface it as an error field rather than crashing the run.
 
     A message's `content` may be a plain string or, for a vision-capable
     model, the OpenAI multimodal parts list (`[{"type": "text", ...},
-    {"type": "image_url", ...}]`) -- passed through to the endpoint as-is."""
+    {"type": "image_url", ...}]`). The OpenAI backend passes that through
+    as-is; the Bedrock backend translates it into Messages-API content blocks.
+
+    This is the one place either backend is chosen, which is why every caller
+    (`agent/loop.py`, `agent/judge.py`, `agent/state.py`,
+    `llm/schema_extract.py`, `recipe/locator_proposal.py`, `recipe/codegen.py`)
+    is provider-blind."""
+
+    if config.provider == "bedrock":
+        # Imported here, not at module scope: `anthropic` is an optional extra
+        # and the OpenAI path must keep working without it installed.
+        from agentpilot.llm.bedrock import chat_json_bedrock
+
+        return await chat_json_bedrock(messages, config=config, json_schema=json_schema)
+    return await _chat_openai_compatible(messages, config=config, json_schema=json_schema)
+
+
+async def _chat_openai_compatible(
+    messages: list[dict[str, Any]],
+    *,
+    config: LLMConfig,
+    json_schema: dict[str, Any] | None,
+) -> tuple[dict[str, Any], LLMUsage]:
+    """One `/chat/completions` call against an OpenAI-compatible endpoint."""
 
     if json_schema is not None:
         response_format: dict[str, Any] = {

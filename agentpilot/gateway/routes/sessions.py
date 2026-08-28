@@ -19,6 +19,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from agentpilot.dom.serializer import serialize
 from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
@@ -47,7 +48,6 @@ from agentpilot.session.interactive import (
     release_interactive_session,
 )
 from agentpilot.session.reaper import _read_pid_rss_mb
-from agentpilot.dom.serializer import serialize
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
 from agentpilot.spi.errors import NodeLost

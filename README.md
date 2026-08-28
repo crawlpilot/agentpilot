@@ -295,6 +295,51 @@ by default. Set them in `.env`, then recreate the workers so they pick the new v
 docker compose up -d --force-recreate worker worker-2
 ```
 
+## LLM providers
+
+Everything that calls a model — the web agent's step loop, its completion judge, history
+compaction, `ScrapeOptions.extract`, and recipe locator/codegen — goes through one seam
+(`agentpilot/llm/client.py`). `AGENTPILOT_LLM_PROVIDER` picks the backend:
+
+**`openai` (default)** — one POST to an OpenAI-compatible `/chat/completions`. Works against
+OpenAI, Azure OpenAI, OpenRouter, or a local vLLM/Ollama-compatible server by pointing
+`AGENTPILOT_LLM_BASE_URL` at it, no code changes. Needs `AGENTPILOT_LLM_API_KEY` set (unset fails
+closed, it does not silently degrade).
+
+**`bedrock`** — Claude in Amazon Bedrock. Bedrock serves the Messages API at
+`/anthropic/v1/messages`, which is not OpenAI-compatible, so this is a real second backend
+(`agentpilot/llm/bedrock.py`) behind the same seam and needs the optional extra:
+
+```bash
+uv sync --extra bedrock
+source bedrock.local.env      # see the template below; the app never dotenv-loads
+```
+
+```sh
+export AGENTPILOT_LLM_PROVIDER=bedrock
+export ANTHROPIC_BASE_URL="https://bedrock-mantle.us-east-1.api.aws/anthropic"
+export ANTHROPIC_WORKSPACE_ID="default"
+export ANTHROPIC_API_KEY="<bedrock bearer token>"   # or unset -> SigV4 via the AWS chain
+export AGENTPILOT_LLM_MODEL="anthropic.claude-opus-5"
+```
+
+Notes:
+
+- **Model IDs carry an `anthropic.` prefix** on Bedrock (`anthropic.claude-opus-5`,
+  `anthropic.claude-sonnet-5`, …). A bare first-party `claude-*` id is rejected.
+- **Auth** is either a bearer token (`ANTHROPIC_API_KEY` / `AGENTPILOT_LLM_API_KEY` /
+  `AWS_BEARER_TOKEN_BEDROCK`) or, with none set, SigV4 off the standard AWS credential chain.
+  The **region** is the required setting here: `AGENTPILOT_LLM_AWS_REGION`, `AWS_REGION`, or
+  parsed out of `ANTHROPIC_BASE_URL`.
+- **Structured outputs are not supported on Bedrock**, so the OpenAI backend's strict
+  `response_format` JSON Schema is emulated with a single forced tool — the schema becomes the
+  tool's `input_schema` and the model's `tool_use.input` is the parsed JSON. A forced tool choice
+  rules out extended thinking, so thinking is disabled on that path.
+- Screenshots reach Bedrock as base64 `image` blocks; the OpenAI `image_url` parts the agent loop
+  builds are translated on the way out.
+- For Compose, put the same values in `.env` — Compose only injects the variables named in the
+  service's `environment` block.
+
 ## Local development (no Docker)
 
 Install the toolchain and run the unit tests (most never stand up the app, so they need neither a

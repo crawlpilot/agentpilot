@@ -28,8 +28,10 @@ COPY pyproject.toml uv.lock* ./
 # postgres extra too: docker-compose gives the worker an AGENTPILOT_DATABASE_URL
 # so it runs the crawl/agent/recipe worker loops, whose PostgresJobStore needs
 # psycopg[pool] -- without it the worker crashes at boot importing psycopg_pool.
+# bedrock extra: the worker is where LLMConfig.from_env() runs, so
+# AGENTPILOT_LLM_PROVIDER=bedrock needs `anthropic` present in this image.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --extra driver --extra postgres
+    uv sync --no-install-project --extra driver --extra postgres --extra bedrock
 
 # Chrome + its apt deps depend only on the (already-installed) patchright
 # version. `--no-sync` uses the venv from the step above without trying to

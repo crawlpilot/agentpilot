@@ -120,3 +120,21 @@ async def test_commit_route_writes_session_hash_and_node_sessions_set(redis, pla
     ttl = await redis.ttl("session:sess-1")
     assert 0 < ttl <= 300
     assert await redis.sismember("node_sessions:node-a", "sess-1")
+
+
+async def test_forget_route_drops_the_hash_and_the_node_set_entry(redis, placer) -> None:
+    """A route that outlives its session keeps `resolve_route` pointing a
+    live-view proxy at a worker that will only reject the handshake."""
+
+    await placer.commit_route("sess-1", "node-a", IDENTITY, "auto", ttl_seconds=300)
+
+    await placer.forget_route("sess-1", "node-a")
+
+    assert await redis.hgetall("session:sess-1") == {}
+    assert not await redis.sismember("node_sessions:node-a", "sess-1")
+
+
+async def test_forget_route_is_idempotent(redis, placer) -> None:
+    await placer.forget_route("never-committed", "node-a")
+
+    assert await redis.hgetall("session:never-committed") == {}

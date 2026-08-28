@@ -94,7 +94,12 @@ def _llm_endpoint_host() -> str | None:
     control-plane egress alive while the browser stays fenced off the rest of
     the private ranges."""
 
-    base = os.environ.get("AGENTPILOT_LLM_BASE_URL")
+    # `ANTHROPIC_BASE_URL` is the fallback the Bedrock provider resolves its
+    # endpoint from (`LLMConfig._bedrock_from_env`), so read it here too rather
+    # than silently losing the exemption when only that one is set. Read from
+    # the environment rather than importing `agentpilot.llm`: egress is not
+    # modelled above llm in the import-linter layer contracts.
+    base = os.environ.get("AGENTPILOT_LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
     if not base:
         return None
     return urlparse(base).hostname

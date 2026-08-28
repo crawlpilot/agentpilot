@@ -51,6 +51,15 @@ postgres = [
     "psycopg[binary,pool]>=3.2",
     "alembic>=1.13",
 ]
+# Claude in Amazon Bedrock (`AGENTPILOT_LLM_PROVIDER=bedrock`, see
+# agentpilot.llm.bedrock). Optional for the same reason as the extras above:
+# the default OpenAI-compatible backend is plain httpx and must keep working
+# without this installed. The `[bedrock]` sub-extra pulls boto3, needed only
+# for the SigV4 auth path -- a bearer-token deployment can install bare
+# `anthropic`, and this package never imports boto3 itself.
+bedrock = [
+    "anthropic[bedrock]>=0.70",
+]
 
 [dependency-groups]
 dev = [
@@ -94,6 +103,12 @@ strict = false
 [[tool.mypy.overrides]]
 module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
 strict = true
+
+# `anthropic` ships with the optional `bedrock` extra, so a dev env synced
+# without it must still typecheck agentpilot.llm.bedrock's guarded import.
+[[tool.mypy.overrides]]
+module = ["anthropic.*"]
+ignore_missing_imports = true
 
 [tool.importlinter]
 root_package = "agentpilot"

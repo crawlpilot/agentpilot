@@ -16,7 +16,7 @@ FROM base
 WORKDIR /app
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra driver --extra postgres
+    uv sync --extra driver --extra postgres --extra bedrock
 
 EXPOSE 8000
 ENTRYPOINT ["/app/docker/worker-entrypoint.sh"]

@@ -31,7 +31,9 @@ _DICT_ACTION_BUILDERS: dict[str, Any] = {
 }
 
 
-def stabilize_action(action: spi_actions.Action, snapshot: EnhancedDOMTreeNode) -> RevealStep | None:
+def stabilize_action(
+    action: spi_actions.Action, snapshot: EnhancedDOMTreeNode
+) -> RevealStep | None:
     """Returns `None` for actions that aren't reveal steps at all (navigate,
     go_back, extract, screenshot, tab management -- replay issues its own
     navigate and never needs the rest) or whose `ref` can't be resolved into

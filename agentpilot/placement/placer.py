@@ -97,3 +97,19 @@ class SessionPlacer:
             pipe.expire(f"session:{session_id}", int(ttl_seconds))
             pipe.sadd(f"node_sessions:{node_id}", session_id)
             await pipe.execute()
+
+    async def forget_route(self, session_id: str, node_id: str) -> None:
+        """Drops a `commit_route()` route the moment its session is gone,
+        rather than leaving it to expire on the TTL.
+
+        The TTL alone is not enough for a route whose session can end long
+        before it: `gateway/routing.py:resolve_route` keeps resolving the stale
+        route, so a live-view proxy connects to a worker that no longer holds
+        the session and the worker rejects the handshake -- a bare HTTP 403
+        with no close reason, for as long as the TTL has left to run. Deleting
+        the route turns that into an immediate, explicable 404."""
+
+        async with self._redis.pipeline() as pipe:
+            pipe.delete(f"session:{session_id}")
+            pipe.srem(f"node_sessions:{node_id}", session_id)
+            await pipe.execute()

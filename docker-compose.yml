@@ -150,6 +150,20 @@ services:
       AGENTPILOT_LLM_BASE_URL: ${AGENTPILOT_LLM_BASE_URL:-}
       AGENTPILOT_LLM_MODEL: ${AGENTPILOT_LLM_MODEL:-}
       AGENTPILOT_LLM_TIMEOUT_S: ${AGENTPILOT_LLM_TIMEOUT_S:-}
+      # `bedrock` swaps the OpenAI-compatible backend for Claude in Amazon
+      # Bedrock (agentpilot.llm.bedrock). The image must then carry the
+      # `bedrock` extra -- see docker/worker.Dockerfile.
+      AGENTPILOT_LLM_PROVIDER: ${AGENTPILOT_LLM_PROVIDER:-}
+      AGENTPILOT_LLM_AWS_REGION: ${AGENTPILOT_LLM_AWS_REGION:-}
+      AGENTPILOT_LLM_MAX_TOKENS: ${AGENTPILOT_LLM_MAX_TOKENS:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_WORKSPACE_ID: ${ANTHROPIC_WORKSPACE_ID:-}
+      # SigV4 path (no bearer token): the standard AWS credential chain.
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       # Proxy pools for the anti-detection tiers (see README "Anti-detection,
       # tiers & proxies"). Passed through from your shell/.env; empty by default
       # -> egress uses the container IP and tier=stealth|enhanced fail closed.
