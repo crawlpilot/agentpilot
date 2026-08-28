@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { JsonTextareaField } from '@/components/app/JsonTextareaField'
 import { StringListField } from '@/components/app/StringListField'
+import { DEFAULT_EXAMPLE_SCHEMA, EXAMPLE_SCHEMAS } from '@/lib/exampleSchemas'
 import type { ExtractConfigIn, ScrapeFormat } from '@/lib/api/types'
 
 export interface ScrapeOptionsValue {
