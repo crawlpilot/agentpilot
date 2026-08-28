@@ -132,3 +132,85 @@ def test_is_blocked() -> None:
     assert block_detect.is_blocked(Verdict.TOO_SMALL) is False  # CRAWL (soft)
     assert block_detect.is_blocked(Verdict.RATE_LIMITED) is False
     assert block_detect.is_blocked(Verdict.OK) is False
+
+
+# --- DataDome / PerimeterX / Turnstile. None of these were detected at all
+# before, which is why COS and H&M -- both DataDome-class -- classified as OK
+# or TOO_SMALL and had their interstitials returned to callers as content.
+
+
+def test_datadome_interstitial_is_a_robot_check() -> None:
+    body = _big(
+        "<html><head><title>hm.com</title></head><body>"
+        "<script src='https://geo.captcha-delivery.com/captcha/?initialCid=x'></script>"
+        "</body></html>"
+    )
+
+    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_perimeterx_block_is_a_robot_check() -> None:
+    body = _big("<div id='px-captcha'></div> Please verify you are a human")
+
+    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_turnstile_is_a_robot_check() -> None:
+    body = _big("<div class='cf-turnstile' data-sitekey='x'></div>")
+
+    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_datadome_block_header_is_a_robot_check_even_on_a_plausible_body() -> None:
+    """A challenge can be visually indistinguishable from a thin real page; the
+    header is not ambiguous."""
+
+    verdict = block_detect.classify_page(
+        html=_big("<h1>Products</h1><a href='/x'>x</a>"),
+        url="https://example.test/x",
+        status=403,
+        headers={"X-DataDome": "protected"},
+    )
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_perimeterx_block_header_is_a_robot_check() -> None:
+    verdict = block_detect.classify_page(
+        html=_big("<h1>hi</h1><a href='/x'>x</a>"),
+        url="https://example.test/x",
+        status=403,
+        headers={"x-px-block": "1"},
+    )
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_a_datadome_protected_site_serving_real_content_is_not_a_block() -> None:
+    """DataDome tags every response on a protected site. Presence of the
+    header alone must not be read as a refusal, or every successful scrape of
+    a protected site burns its identity."""
+
+    verdict = block_detect.classify_page(
+        html=_big("<h1>Product</h1><a href='/x'>x</a>"),
+        url="https://example.test/x",
+        status=200,
+        headers={"x-datadome-cid": "abc", "set-cookie": "datadome=xyz; Path=/"},
+    )
+
+    assert verdict is Verdict.OK
+
+
+def test_headers_are_optional() -> None:
+    assert (
+        block_detect.classify_page(
+            html=_big("<h1>hi</h1><a href='/x'>x</a>"), url="https://x.test/", status=200
+        )
+        is Verdict.OK
+    )

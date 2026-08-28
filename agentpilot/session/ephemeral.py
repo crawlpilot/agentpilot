@@ -39,7 +39,7 @@ from agentpilot.identity.profile_store import (
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
-from agentpilot.session import stealth_profile
+from agentpilot.session import browser_headers, stealth_profile
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
@@ -383,11 +383,16 @@ async def run_ephemeral_scrape(
                 else proxy_pinner.pick_ephemeral(identity, tier=None)
             )
         fp = generate_fingerprint(identity.slug(), region=proxy.country if proxy else None)
-        headers = {
-            "User-Agent": fp.user_agent,
-            "Accept-Language": ", ".join(fp.geo.languages),
-            **fp.client_hint_headers(),
-        }
+        # The full Chrome navigation header set, in Chrome's order. This path
+        # used to send five headers and nothing else -- no Accept, no
+        # Sec-Fetch-*, no Upgrade-Insecure-Requests, no Referer -- which is a
+        # one-line rule at any WAF edge, long before TLS is even looked at.
+        headers = browser_headers.navigation_headers(
+            user_agent=fp.user_agent,
+            accept_language=", ".join(fp.geo.languages),
+            client_hints=fp.client_hint_headers(),
+            referer=_search_engine_referer(url),
+        )
         return await fetcher(
             url=url,
             formats=_effective_formats(options),
