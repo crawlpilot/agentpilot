@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from pytest_httpserver import HTTPServer
+from werkzeug import Response
 
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.scrape import scrape
@@ -197,3 +198,46 @@ async def test_scrape_raises_on_akamai_200_access_denied_and_leaves_no_trace(
     assert await wiring.registry.snapshot() == []  # both rungs cleaned up
     domain_dir = tmp_path / "acme" / "127.0.0.1"
     assert not domain_dir.exists() or not any(domain_dir.iterdir())
+
+
+async def test_protected_scrape_warms_up_on_the_site_root_first(
+    driver: PatchrightDriver, tmp_path, httpserver: HTTPServer, monkeypatch
+) -> None:
+    """The canonical Akamai pattern: hit the root, let the sensor run and the
+    cookie mature there, then request the deep link as a browser that has
+    already visited the origin.
+
+    Asserts against the *server's* request log, so it verifies real
+    navigations rather than the shape of the action list.
+    """
+
+    from agentpilot.session.ephemeral import run_ephemeral_scrape
+    from agentpilot.session.registry import Registry
+    from agentpilot.spi.scrape import ScrapeOptions
+
+    seen: list[str] = []
+
+    def _record(request):
+        seen.append(request.path)
+        return Response("<html><body><h1>hi</h1><a href='/x'>x</a></body></html>",
+                        content_type="text/html")
+
+    httpserver.expect_request("/").respond_with_handler(_record)
+    httpserver.expect_request("/deep/product").respond_with_handler(_record)
+
+    await run_ephemeral_scrape(
+        tenant="acme",
+        domain="127.0.0.1",
+        url=httpserver.url_for("/deep/product"),
+        options=ScrapeOptions(formats=("markdown",)),
+        registry=Registry(),
+        driver=driver,
+        profiles_root=tmp_path,
+        proxy_pinner=None,
+        lease_ttl_seconds=60,
+        tier="stealth",
+        retry_delay_base_s=0.0,
+    )
+
+    assert seen[0] == "/", f"root was not visited first, saw {seen}"
+    assert "/deep/product" in seen

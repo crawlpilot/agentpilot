@@ -30,7 +30,12 @@ import structlog
 
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
-from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
+from agentpilot.identity.profile_store import (
+    delete_profile_dir,
+    prototype_dir_for,
+    resolve_profile_dir,
+    seed_profile_dir,
+)
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
@@ -128,18 +133,52 @@ def _search_engine_referer(url: str) -> str | None:
     return "https://www.google.com/"
 
 
+def _site_root(url: str) -> str | None:
+    """The site root to warm up on before a deep link, or `None` when the
+    request *is* the root (nothing to warm) or the URL has no host."""
+
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    if parts.path in ("", "/") and not parts.query:
+        return None
+    return f"{parts.scheme}://{parts.netloc}/"
+
+
 def _build_batch(
-    url: str, options: ScrapeOptions, *, referer: str | None = None
+    url: str,
+    options: ScrapeOptions,
+    *,
+    referer: str | None = None,
+    warm_up_root: bool = False,
 ) -> list[spi_actions.Action]:
-    # One navigation, straight to the requested URL -- Pulsar's `visit()` shape
-    # (navigate -> settle on body -> in-place human warm-up), never a
-    # homepage-first double navigation. The `referer` (protected tiers) makes the
-    # single hit look like an organic-search landing rather than a cold
-    # scripted deep-link; the driver's per-navigate warm-up + block detection do
-    # the rest on the target page itself.
-    batch: list[spi_actions.Action] = [
+    # `warm_up_root` prepends a navigation to the site root. This is the
+    # canonical Akamai pattern and what Pulsar's `warnUpBrowser` does
+    # (`WalmartCrawler.kt`: `visit("https://www.walmart.com/")` before any
+    # product URL): the sensor script runs on the root, the per-navigate
+    # warm-up feeds it pointer/scroll telemetry, and `_abck` gets a chance to
+    # validate on a page that is *expected* to be entered cold -- so the deep
+    # link is then requested by a browser that already holds a matured cookie,
+    # from an origin it has already visited, rather than as a cold deep-link
+    # with a bare Google referer and nothing else.
+    #
+    # Only for protected tiers: it costs a full extra navigation plus its
+    # warm-up, which is the wrong trade on a site that isn't scoring you.
+    batch: list[spi_actions.Action] = []
+    if warm_up_root:
+        root = _site_root(url)
+        if root is not None:
+            batch.append(
+                spi_actions.NavigateAction(
+                    url=root, timeout_ms=options.timeout_ms, referer=referer
+                )
+            )
+            # The deep link is now same-site, so the referer that fits is the
+            # page we just came from -- not the search engine.
+            referer = root
+    batch.append(
         spi_actions.NavigateAction(url=url, timeout_ms=options.timeout_ms, referer=referer)
-    ]
+    )
     if options.wait_for_ms:
         batch.append(spi_actions.WaitAction(ms=options.wait_for_ms))
     batch.extend(options.actions)
@@ -250,6 +289,13 @@ async def run_ephemeral_scrape(
                     return pooled_ctx
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
+        # Seed from a hand-warmed prototype when one is configured, so this
+        # throwaway identity is born with a plausible history instead of being
+        # the cookieless first-visit browser this module's docstring flags as
+        # a bot signal. No-op when unset.
+        prototype = prototype_dir_for(domain)
+        if prototype is not None and seed_profile_dir(profile_dir, prototype):
+            log.info("ephemeral.profile_seeded", domain=domain, prototype=str(prototype))
         # Shared with `session/interactive.py` so a tier means the same thing on
         # /v1/scrape, /v1/sessions and agent runs -- see that module's docstring.
         stealth = stealth_profile.resolve(
@@ -285,7 +331,9 @@ async def run_ephemeral_scrape(
     # anti-detection lever only; `basic` keeps a bare, refererless hit.
     protected = any(t in _PROTECTED_TIERS for t in attempts)
     referer = _search_engine_referer(url) if protected else None
-    batch = _build_batch(url, options, referer=referer)
+    # A warm identity already holds the site's cookies from its previous visit,
+    # so the extra root navigation buys it nothing and costs a page load.
+    batch = _build_batch(url, options, referer=referer, warm_up_root=protected and not warm)
 
     # Protected scrapes pin a residential exit; a warm identity being retired
     # rotates within that same tier (see `_retire_warm`).

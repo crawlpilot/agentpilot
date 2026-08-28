@@ -28,8 +28,25 @@ from __future__ import annotations
 
 import math
 import random
+from typing import TypedDict
 
 Point = tuple[float, float]
+
+
+class Box(TypedDict):
+    """An element's bounding box.
+
+    Structurally identical to Playwright's `FloatRect`, which is what
+    `Locator.bounding_box()` returns -- declaring our own keeps this module
+    free of a Playwright import (it is pure geometry and unit-tested without a
+    browser) while still type-checking at the call site, since mypy compares
+    TypedDicts structurally.
+    """
+
+    x: float
+    y: float
+    width: float
+    height: float
 
 _OVERSHOOT_PROBABILITY = 0.25
 """How often a movement overshoots and corrects. Every movement overshooting is
@@ -96,7 +113,7 @@ def path(start: Point, end: Point, *, steps: int | None = None) -> list[Point]:
     return points
 
 
-def jittered_point_in(box: dict[str, float]) -> Point:
+def jittered_point_in(box: Box) -> Point:
     """A point inside `box` that is deliberately *not* its centre.
 
     Clicking the exact geometric centre every time is a fingerprint in its own
@@ -113,7 +130,7 @@ def jittered_point_in(box: dict[str, float]) -> Point:
     )
 
 
-def approach_from_outside(box: dict[str, float], *, distance: float = 50.0) -> Point:
+def approach_from_outside(box: Box, *, distance: float = 50.0) -> Point:
     """A point just outside `box` to approach from.
 
     Moving in from outside makes the browser emit a real `mouseover`/`mouseenter`

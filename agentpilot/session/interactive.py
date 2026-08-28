@@ -28,7 +28,12 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
+from agentpilot.identity.profile_store import (
+    delete_profile_dir,
+    prototype_dir_for,
+    resolve_profile_dir,
+    seed_profile_dir,
+)
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.observability.metrics import context_rotations_total
 from agentpilot.session import stealth_profile
@@ -103,6 +108,18 @@ async def open_interactive_session(
         # make every open look "already existed".
         is_fresh = not profile_dir.exists()
         profile_dir.mkdir(parents=True, exist_ok=True)
+        # Only a genuinely fresh identity is seeded: a returning one already
+        # has its own earned cookies, and overwriting them with the
+        # prototype's would discard exactly the reputation this is for.
+        if is_fresh:
+            prototype = prototype_dir_for(domain)
+            if prototype is not None and seed_profile_dir(profile_dir, prototype):
+                log.info(
+                    "interactive_session.profile_seeded",
+                    session_id=session_id,
+                    domain=domain,
+                    prototype=str(prototype),
+                )
 
         # Protected tiers want a residential exit, same as the scrape path --
         # datacenter IPs are the dominant Akamai edge-block.
