@@ -143,6 +143,10 @@ async def test_agent_worker_loop_processes_a_queued_run_to_completion(
     )
     monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("AGENTPILOT_LLM_BASE_URL", llm_httpserver.url_for("/"))
+    # Pin the provider: this fixture scripts an OpenAI-compatible
+    # /chat/completions, so an AGENTPILOT_LLM_PROVIDER=bedrock left in the
+    # developer's shell would send the run to Bedrock instead.
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "openai")
 
     tenant = _tenant()
     domain = "127.0.0.1"

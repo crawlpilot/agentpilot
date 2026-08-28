@@ -87,6 +87,41 @@ def test_bedrock_config_reads_the_anthropic_env_names(monkeypatch: pytest.Monkey
     assert config.max_tokens == 16_000
 
 
+def test_bedrock_ignores_a_leftover_openai_endpoint_and_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Switching provider does not blank the shared `AGENTPILOT_LLM_*` names,
+    so a config that used to run against Ollama still carries that endpoint
+    and key. Reading them first sent Bedrock traffic to `localhost:11434/v1`
+    (a 404 from Ollama) with `ollama` as the bearer token."""
+
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "bedrock")
+    monkeypatch.setenv("AGENTPILOT_LLM_BASE_URL", "http://host.docker.internal:11434/v1")
+    monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "ollama")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://bedrock-mantle.us-east-1.api.aws/anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "bearer-token")
+
+    config = LLMConfig.from_env()
+
+    assert config.base_url == "https://bedrock-mantle.us-east-1.api.aws/anthropic"
+    assert config.api_key == "bearer-token"
+    assert config.region == "us-east-1"
+
+
+def test_bedrock_falls_back_to_the_generic_names_when_anthropic_ones_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "bedrock")
+    monkeypatch.setenv("AGENTPILOT_LLM_BASE_URL", "https://bedrock-mantle.us-west-2.api.aws/anthropic")
+    monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "generic-token")
+
+    config = LLMConfig.from_env()
+
+    assert config.base_url == "https://bedrock-mantle.us-west-2.api.aws/anthropic"
+    assert config.api_key == "generic-token"
+    assert config.region == "us-west-2"
+
+
 def test_bedrock_config_does_not_require_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """SigV4 auth has no bearer token, so the OpenAI branch's fail-closed key
     check must not apply here."""
@@ -105,6 +140,57 @@ def test_bedrock_config_raises_without_a_region(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "bearer-token")
 
     with pytest.raises(LLMNotConfiguredError, match="region"):
+        LLMConfig.from_env()
+
+
+def test_empty_env_values_are_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docker-compose's `VAR: ${VAR:-}` *defines* a variable as the empty
+    string when the host has no value for it, so every numeric read has to
+    survive `""` -- `int("")` here failed every agent run with
+    `invalid literal for int() with base 10: ''`."""
+
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "bedrock")
+    monkeypatch.setenv("AGENTPILOT_LLM_AWS_REGION", "us-east-1")
+    for empty in (
+        "AGENTPILOT_LLM_MAX_TOKENS",
+        "AGENTPILOT_LLM_TIMEOUT_S",
+        "AGENTPILOT_LLM_MODEL",
+        "AGENTPILOT_LLM_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.setenv(empty, "")
+
+    config = LLMConfig.from_env()
+
+    assert config.max_tokens == 16_000
+    assert config.timeout_s == 60.0
+    assert config.model == "anthropic.claude-opus-5"
+    assert config.base_url == "https://bedrock-mantle.us-east-1.api.aws/anthropic"
+    assert config.api_key is None
+
+
+def test_empty_env_values_are_treated_as_unset_on_the_openai_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "")
+    monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("AGENTPILOT_LLM_BASE_URL", "")
+    monkeypatch.setenv("AGENTPILOT_LLM_MODEL", "")
+    monkeypatch.setenv("AGENTPILOT_LLM_TIMEOUT_S", "")
+
+    config = LLMConfig.from_env()
+
+    assert config.provider == "openai"
+    assert config.base_url == "https://api.openai.com/v1"
+    assert config.model == "gpt-4o-mini"
+    assert config.timeout_s == 60.0
+
+
+def test_an_empty_api_key_still_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "   ")
+
+    with pytest.raises(LLMNotConfiguredError):
         LLMConfig.from_env()
 
 

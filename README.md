@@ -331,6 +331,10 @@ Notes:
   `AWS_BEARER_TOKEN_BEDROCK`) or, with none set, SigV4 off the standard AWS credential chain.
   The **region** is the required setting here: `AGENTPILOT_LLM_AWS_REGION`, `AWS_REGION`, or
   parsed out of `ANTHROPIC_BASE_URL`.
+- **`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` take precedence** over the shared
+  `AGENTPILOT_LLM_BASE_URL` / `AGENTPILOT_LLM_API_KEY`. Those two are also the OpenAI provider's,
+  and switching provider does not blank them — an `.env` that previously ran against Ollama still
+  carries that endpoint and key, and reading them first would send Bedrock traffic there.
 - **Structured outputs are not supported on Bedrock**, so the OpenAI backend's strict
   `response_format` JSON Schema is emulated with a single forced tool — the schema becomes the
   tool's `input_schema` and the model's `tool_use.input` is the parsed JSON. A forced tool choice

@@ -127,6 +127,10 @@ async def test_run_ephemeral_scrape_populates_extract_via_stubbed_llm(
     )
     monkeypatch.setenv("AGENTPILOT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("AGENTPILOT_LLM_BASE_URL", llm_httpserver.url_for("/"))
+    # Pin the provider: this fixture scripts an OpenAI-compatible
+    # /chat/completions, so an AGENTPILOT_LLM_PROVIDER=bedrock left in the
+    # developer's shell would send the run to Bedrock instead.
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "openai")
     registry = Registry()
 
     document, _screenshot = await run_ephemeral_scrape(
@@ -163,6 +167,9 @@ async def test_run_ephemeral_scrape_sets_extract_error_when_llm_not_configured(
 ) -> None:
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     monkeypatch.delenv("AGENTPILOT_LLM_API_KEY", raising=False)
+    # The unset-key check this asserts on is the OpenAI provider's; Bedrock
+    # fails closed on a missing region instead.
+    monkeypatch.setenv("AGENTPILOT_LLM_PROVIDER", "openai")
     registry = Registry()
 
     document, _screenshot = await run_ephemeral_scrape(

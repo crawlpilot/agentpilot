@@ -35,6 +35,21 @@ _DEFAULT_MAX_TOKENS = 16_000
 produce while leaving room for a large `done` payload."""
 
 
+def _env(name: str, default: str | None = None) -> str | None:
+    """`os.environ.get`, but an empty/whitespace value counts as unset.
+
+    Not defensive padding -- it is the shape docker-compose hands us.
+    `VAR: ${VAR:-}` in a service's `environment` block *defines* VAR as the
+    empty string when the host has no value for it, so `os.environ.get(name,
+    default)` never sees its default and `int("")`/`float("")` raise. Every
+    read below goes through this."""
+
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
 class LLMNotConfiguredError(Exception):
     """Raised when the selected provider's required settings are unset --
     fails closed and explicit, the same "unset gates the feature off, doesn't
@@ -68,7 +83,7 @@ class LLMConfig:
 
     @classmethod
     def from_env(cls) -> LLMConfig:
-        provider = os.environ.get("AGENTPILOT_LLM_PROVIDER", "openai").strip().lower()
+        provider = (_env("AGENTPILOT_LLM_PROVIDER", "openai") or "openai").lower()
         if provider == "bedrock":
             return cls._bedrock_from_env()
         if provider != "openai":
@@ -77,36 +92,44 @@ class LLMConfig:
                 "(expected 'openai' or 'bedrock')"
             )
 
-        api_key = os.environ.get("AGENTPILOT_LLM_API_KEY")
+        api_key = _env("AGENTPILOT_LLM_API_KEY")
         if not api_key:
             raise LLMNotConfiguredError(
                 "AGENTPILOT_LLM_API_KEY is not set -- schema-based extraction is unavailable"
             )
         return cls(
             api_key=api_key,
-            base_url=os.environ.get("AGENTPILOT_LLM_BASE_URL", "https://api.openai.com/v1"),
-            model=os.environ.get("AGENTPILOT_LLM_MODEL", "gpt-4o-mini"),
-            timeout_s=float(os.environ.get("AGENTPILOT_LLM_TIMEOUT_S", "60")),
+            base_url=_env("AGENTPILOT_LLM_BASE_URL", "https://api.openai.com/v1") or "",
+            model=_env("AGENTPILOT_LLM_MODEL", "gpt-4o-mini") or "",
+            timeout_s=float(_env("AGENTPILOT_LLM_TIMEOUT_S", "60") or "60"),
         )
 
     @classmethod
     def _bedrock_from_env(cls) -> LLMConfig:
-        """Claude in Amazon Bedrock. Deliberately reads the `ANTHROPIC_*` names
-        as fallbacks: the Anthropic SDK already understands them, so the
-        documented three-export setup (`ANTHROPIC_BASE_URL`,
-        `ANTHROPIC_API_KEY`, `ANTHROPIC_WORKSPACE_ID`) works without a
-        crawlpilot-specific rename. No API key is *required* here -- absent
+        """Claude in Amazon Bedrock. Reads the `ANTHROPIC_*` names first: the
+        Anthropic SDK already understands them, so the documented three-export
+        setup (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`,
+        `ANTHROPIC_WORKSPACE_ID`) works without a crawlpilot-specific rename,
+        and they are the only names that unambiguously belong to this provider
+        (see the comment on the resolution order below). No API key is
+        *required* here -- absent
         one, the dedicated Bedrock client signs with SigV4 off the standard AWS
         credential chain -- so the OpenAI branch's fail-closed key check would
         be wrong; the region takes its place as the must-be-set setting."""
 
-        base_url = os.environ.get("AGENTPILOT_LLM_BASE_URL") or os.environ.get(
-            "ANTHROPIC_BASE_URL"
-        )
+        # Provider-specific names beat the shared generic ones here, the
+        # reverse of what you might expect. `AGENTPILOT_LLM_BASE_URL` /
+        # `AGENTPILOT_LLM_API_KEY` are shared with the OpenAI provider, so in
+        # any config that has ever run against OpenAI or Ollama they still
+        # hold *that* endpoint and *that* key -- switching provider does not
+        # blank them. Reading them first sends Bedrock traffic to a leftover
+        # `localhost:11434/v1` with `ollama` as the bearer token. The
+        # `ANTHROPIC_*` names can only have been set for this provider.
+        base_url = _env("ANTHROPIC_BASE_URL") or _env("AGENTPILOT_LLM_BASE_URL")
         region = (
-            os.environ.get("AGENTPILOT_LLM_AWS_REGION")
-            or os.environ.get("AWS_REGION")
-            or os.environ.get("AWS_DEFAULT_REGION")
+            _env("AGENTPILOT_LLM_AWS_REGION")
+            or _env("AWS_REGION")
+            or _env("AWS_DEFAULT_REGION")
             or (region_from_bedrock_url(base_url) if base_url else None)
         )
         if not region:
@@ -117,17 +140,16 @@ class LLMConfig:
             )
         return cls(
             api_key=(
-                os.environ.get("AGENTPILOT_LLM_API_KEY")
-                or os.environ.get("ANTHROPIC_API_KEY")
-                or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
-                or None
+                _env("ANTHROPIC_API_KEY")
+                or _env("AWS_BEARER_TOKEN_BEDROCK")
+                or _env("AGENTPILOT_LLM_API_KEY")
             ),
             base_url=base_url or bedrock_base_url(region),
-            model=os.environ.get("AGENTPILOT_LLM_MODEL", _BEDROCK_DEFAULT_MODEL),
-            timeout_s=float(os.environ.get("AGENTPILOT_LLM_TIMEOUT_S", "60")),
+            model=_env("AGENTPILOT_LLM_MODEL", _BEDROCK_DEFAULT_MODEL) or _BEDROCK_DEFAULT_MODEL,
+            timeout_s=float(_env("AGENTPILOT_LLM_TIMEOUT_S", "60") or "60"),
             provider="bedrock",
             region=region,
-            max_tokens=int(os.environ.get("AGENTPILOT_LLM_MAX_TOKENS", _DEFAULT_MAX_TOKENS)),
+            max_tokens=int(_env("AGENTPILOT_LLM_MAX_TOKENS") or _DEFAULT_MAX_TOKENS),
         )
 
 
