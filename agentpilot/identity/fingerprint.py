@@ -367,6 +367,13 @@ _INIT_SCRIPT_TEMPLATE = """
       if (p === 37446) return cfg.webglRenderer;
       return orig.call(this, p);
     };
+    // Register with the toString guard below, exactly like `define()` does for
+    // every getter it installs. Without this,
+    // `WebGLRenderingContext.prototype.getParameter.toString()` returns this
+    // function's literal source instead of "[native code]" -- a hard,
+    // trivially-scriptable tell that defeats the very spoof it is guarding,
+    // and one of the first things a commercial sensor checks.
+    patched.add(wrapped);
     proto.getParameter = wrapped;
   };
   try { patchGL(WebGLRenderingContext && WebGLRenderingContext.prototype); } catch (e) {}

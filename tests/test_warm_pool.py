@@ -191,3 +191,18 @@ async def test_keepalive_keeps_live_idle_context(tmp_path: Path) -> None:
     snap = await registry.snapshot()
     assert len(snap) == 1 and snap[0][1].context_id == ctx.context_id
     assert ctx.context_id not in driver.closed
+
+
+async def test_protected_tiers_never_adopt_a_pooled_context() -> None:
+    """A pooled context is launched before the adopting identity exists, so it
+    carries no pinned fingerprint, no warm-up and no block detection
+    (`WarmPool._open` passes none of them). Adopting one on a stealth run would
+    silently downgrade it to a bare browser."""
+
+    from agentpilot.session import stealth_profile
+
+    assert stealth_profile.is_protected("stealth") is True
+    assert stealth_profile.is_protected("enhanced") is True
+    assert stealth_profile.is_protected("auto") is True
+    # `basic` is the only tier that may still take the cheap pooled path.
+    assert stealth_profile.is_protected("basic") is False

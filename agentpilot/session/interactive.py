@@ -31,6 +31,7 @@ import structlog
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.observability.metrics import context_rotations_total
+from agentpilot.session import stealth_profile
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.rotation import RotationConfig, RotationPolicy, should_retire
@@ -82,6 +83,8 @@ async def open_interactive_session(
     proxy_pinner: ProxyPinner | None,
     vault: Vault | None,
     lease_ttl_seconds: float,
+    locale: str | None = None,
+    timezone_id: str | None = None,
 ) -> InteractiveSession:
     """`kind=ProfileKind.DEFAULT` (not the dataclass's own `TEMPORARY`
     default): an interactive, caller-named identity is kept warm across
@@ -101,9 +104,27 @@ async def open_interactive_session(
         is_fresh = not profile_dir.exists()
         profile_dir.mkdir(parents=True, exist_ok=True)
 
-        proxy = await proxy_pinner.get_or_assign(identity) if proxy_pinner else None
+        # Protected tiers want a residential exit, same as the scrape path --
+        # datacenter IPs are the dominant Akamai edge-block.
+        proxy_tier = "residential" if stealth_profile.is_protected(tier) else None
+        proxy = (
+            await proxy_pinner.get_or_assign(identity, tier=proxy_tier) if proxy_pinner else None
+        )
+        # The tier's stealth kwargs, resolved by the same helper `/v1/scrape`
+        # uses. Before this, an interactive session -- and therefore every agent
+        # run -- opened with none of them no matter which tier was requested.
+        stealth = stealth_profile.resolve(
+            identity, tier, proxy=proxy, locale=locale, timezone_id=timezone_id
+        )
         ctx = await driver.open(
-            identity, profile_dir, proxy, headful, EgressPolicy(), block_popups, enable_cdp
+            identity,
+            profile_dir,
+            proxy,
+            headful,
+            EgressPolicy(),
+            block_popups,
+            enable_cdp,
+            **stealth.as_open_kwargs(),
         )
 
         if is_fresh and vault is not None:

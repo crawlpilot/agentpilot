@@ -11,6 +11,7 @@ a worker's `/internal/scrape`.
 from __future__ import annotations
 
 import base64
+import os
 from urllib.parse import urlparse
 
 import structlog
@@ -34,6 +35,21 @@ log = structlog.get_logger(__name__)
 router = APIRouter(tags=["scrape"])
 
 
+def _proxyless_stealth_allowed() -> bool:
+    """Opt out of the proxy fail-closed guard above.
+
+    Read at call time, not import time, so a test (or an operator toggling the
+    env) does not need a process restart -- and so the default stays "off"
+    without a module-level constant that a test would have to monkeypatch.
+    """
+
+    return os.environ.get("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 @router.post("", response_model=ScrapeResponse)
 async def scrape(
     req: ScrapeRequest, request: Request, wiring: Wiring = Depends(get_wiring)
@@ -55,14 +71,26 @@ async def scrape(
     # egress IP is the dominant Akamai-block signal on hardened targets, and
     # `tier=stealth|enhanced` with no proxy pool configured would otherwise
     # look like it's doing something it isn't. `basic`/`auto` stay lenient.
-    if req.tier in ("stealth", "enhanced") and wiring.proxy_pinner is None:
+    #
+    # The guard defends against *accidental* raw-IP scraping, not deliberate
+    # raw-IP scraping. Without the opt-out below, a proxy-less deployment
+    # cannot select the tiers that carry the stealth machinery at all, which
+    # makes that machinery untestable and unreachable -- see
+    # `session/stealth_profile.py`.
+    if (
+        req.tier in ("stealth", "enhanced")
+        and wiring.proxy_pinner is None
+        and not _proxyless_stealth_allowed()
+    ):
         raise HTTPException(
             status_code=503,
             detail=(
                 f"tier={req.tier!r} requires a proxy pool, but none is configured "
                 "(set AGENTPILOT_PROXY_POOL to a residential/mobile pool). "
                 "Scraping bot-protected sites from the raw host IP will be blocked; "
-                "use tier='basic' to proceed without a proxy anyway."
+                "use tier='basic' to proceed without a proxy anyway, or set "
+                "AGENTPILOT_ALLOW_PROXYLESS_STEALTH=1 to run this tier from the "
+                "host IP deliberately."
             ),
         )
 

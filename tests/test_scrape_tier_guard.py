@@ -30,7 +30,50 @@ class _NoProxyWiring:
     proxy_pinner = None
 
 
+@pytest.fixture(autouse=True)
+def _no_proxyless_optout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard has an opt-out; the default-behaviour tests must not inherit
+    it from the developer's shell."""
+
+    monkeypatch.delenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", raising=False)
+
+
 async def test_stealth_tier_without_proxy_pool_fails_closed() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await scrape(
+            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),
+            _FakeRequest(),
+            _NoProxyWiring(),  # type: ignore[arg-type]
+        )
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES"])
+async def test_proxyless_stealth_opt_out_lifts_the_guard(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """Without this escape hatch a proxy-less deployment cannot select the
+    tiers that carry the stealth machinery at all, so none of it is reachable
+    or testable. The guard stops accidental raw-IP scraping, not deliberate."""
+
+    monkeypatch.setenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", value)
+
+    # Past the guard, the request proceeds into the driver -- which this fake
+    # wiring has none of. An AttributeError here means the 503 did NOT fire,
+    # which is exactly what is under test.
+    with pytest.raises((AttributeError, TypeError)):
+        await scrape(
+            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),
+            _FakeRequest(),
+            _NoProxyWiring(),  # type: ignore[arg-type]
+        )
+
+
+async def test_opt_out_is_ignored_when_unset_to_a_falsey_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", "0")
+
     with pytest.raises(HTTPException) as exc_info:
         await scrape(
             ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),

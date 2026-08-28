@@ -34,6 +34,7 @@ from agentpilot.identity.profile_store import delete_profile_dir, resolve_profil
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
+from agentpilot.session import stealth_profile
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
@@ -48,11 +49,13 @@ from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
-_PROTECTED_TIERS = frozenset({"stealth", "enhanced"})
+_PROTECTED_TIERS = stealth_profile.PROTECTED_TIERS
 """Tiers that opt into the ported stealth path: human warm-up after each
 navigation plus body-level block detection (raises `ChallengeDetected` on a bot
 wall). `basic` keeps the cheap path; `auto` starts on the ladder below and
-escalates into the protected path on a block signal."""
+escalates into the protected path on a block signal. Aliased from
+`stealth_profile` rather than redeclared, so this module and the interactive
+path can never drift on what "protected" means."""
 
 _ESCALATION: dict[str, tuple[str, ...]] = {
     # `auto` climbs the ladder on `ChallengeDetected` (Firecrawl's start-cheap-
@@ -232,37 +235,26 @@ async def run_ephemeral_scrape(
             # profile, so it can adopt a context pre-launched for its proxy
             # tier and skip the cold Chrome launch entirely. On a miss, fall
             # through to a cold open below.
-            if warm_pool is not None:
+            #
+            # Never on a protected tier. A pooled context is launched *before*
+            # the adopting identity exists, so it cannot carry that identity's
+            # pinned fingerprint, warm-up, block detection or interact profile
+            # -- `warm_pool._open` passes none of them. Adopting one would
+            # silently downgrade a stealth run to a bare browser, which is the
+            # exact failure `stealth_profile` exists to prevent. The cold
+            # launch is the cost of a coherent identity.
+            if warm_pool is not None and not stealth_profile.is_protected(attempt_tier):
                 pooled_ctx = await warm_pool.take(proxy)
                 if pooled_ctx is not None:
                     pooled_ctx.identity = identity  # re-label the adopted ref
                     return pooled_ctx
         profile_dir = resolve_profile_dir(profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
-        protected = attempt_tier in _PROTECTED_TIERS
-        eff_locale, eff_timezone = locale, timezone_id
-        user_agent: str | None = None
-        init_script: str | None = None
-        extra_http_headers: dict[str, str] | None = None
-        extra_launch_args: list[str] | None = None
-        if protected:
-            # Pin one coherent fingerprint to this identity for life. When the
-            # resolved proxy declares an exit-IP country, seed the fingerprint
-            # from it so the pinned timezone/locale match the egress geo;
-            # otherwise the family is a stable function of the identity slug.
-            # The fingerprint's own geo fills any locale/timezone the caller
-            # didn't pin -- but an explicit request value still wins.
-            region = proxy.country if proxy else None
-            fp = generate_fingerprint(identity.slug(), region=region)
-            user_agent = fp.user_agent
-            init_script = fp.init_script()
-            # Pin the Client-Hint headers to the same Chrome build as the UA, so
-            # Sec-CH-UA / navigator.userAgentData / UA all agree (the trio Akamai
-            # cross-checks). Without this the header leaked the real, newer Chrome.
-            extra_http_headers = fp.client_hint_headers()
-            extra_launch_args = fp.launch_args()
-            eff_locale = locale or fp.geo.locale
-            eff_timezone = timezone_id or fp.geo.timezone_id
+        # Shared with `session/interactive.py` so a tier means the same thing on
+        # /v1/scrape, /v1/sessions and agent runs -- see that module's docstring.
+        stealth = stealth_profile.resolve(
+            identity, attempt_tier, proxy=proxy, locale=locale, timezone_id=timezone_id
+        )
         # `enhanced` is the top rung: request headful (the driver runs it under
         # Xvfb on the worker, or degrades to headless where no display exists),
         # since headless is itself a detection vector on hardened targets.
@@ -275,19 +267,9 @@ async def run_ephemeral_scrape(
             egress=EgressPolicy(),
             block_popups=True,
             enable_cdp=False,
-            locale=eff_locale,
-            timezone_id=eff_timezone,
-            warmup=protected,
-            detect_blocks=protected,
-            user_agent=user_agent,
-            init_script=init_script,
-            extra_http_headers=extra_http_headers,
-            extra_launch_args=extra_launch_args,
-            # Protected tiers interact on the slow, most-human STEALTH timing
-            # table (click/fill/type/gap); other tiers keep the default cadence.
-            interact_profile="stealth" if protected else None,
             block_resource_types=block_resource_types,
             block_hosts=block_hosts,
+            **stealth.as_open_kwargs(),
         )
         # No vault load/restore: cookie persistence for the warm case comes
         # from the on-disk profile dir surviving teardown (below), not from
