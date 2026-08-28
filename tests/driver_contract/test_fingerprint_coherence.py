@@ -259,6 +259,19 @@ _CLICK_PROBE = """
 """
 
 
+def _find_role(node, role: str):
+    """Walk a fused `EnhancedDOMTreeNode` tree for the first node with `role`.
+    Same helper shape as `test_driver_contract.py`."""
+
+    if node.ax_role == role:
+        return node
+    for child in node.children_and_shadow_roots:
+        found = _find_role(child, role)
+        if found is not None:
+            return found
+    return None
+
+
 async def test_click_is_a_curved_approach_to_an_off_centre_point(
     driver: PatchrightDriver, fingerprinted_ctx: ContextRef
 ) -> None:
@@ -268,13 +281,18 @@ async def test_click_is_a_curved_approach_to_an_off_centre_point(
     teleport as the last thing the page saw. It now passes `position=`.
     """
 
-    from agentpilot.spi.actions import ClickAction
+    from agentpilot.spi.actions import ClickAction, SnapshotAction
 
     cctx = driver._require_context(fingerprinted_ctx)  # noqa: SLF001
     live = driver._require_page(cctx, None)  # noqa: SLF001
     await live.page.goto("data:text/html," + urllib.parse.quote(_CLICK_PROBE))
 
-    await driver.execute(fingerprinted_ctx, [ClickAction(ref="#b")])
+    # Refs are minted by a snapshot, not raw selectors (`driver/ref_cache.py`).
+    snap = await driver.execute(fingerprinted_ctx, [SnapshotAction()])
+    button = _find_role(snap.fused_trees[0], "button")
+    assert button is not None
+
+    await driver.execute(fingerprinted_ctx, [ClickAction(ref=f"e{button.backend_node_id}")])
     await live.page.wait_for_function("document.title.startsWith('{')", timeout=10_000)
     ev = json.loads(await live.page.title())
 
