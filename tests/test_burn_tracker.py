@@ -6,6 +6,7 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.identity.burn_tracker import (
     MAX_WARNINGS,
     MINOR_WARNING_FACTOR,
@@ -18,7 +19,7 @@ IDENTITY = IdentityKey(tenant="t", domain="example.com", name="alice")
 
 @pytest.fixture
 def tracker() -> BurnTracker:
-    return BurnTracker(fakeredis.aioredis.FakeRedis())
+    return BurnTracker(RedisStateStore(fakeredis.aioredis.FakeRedis()))
 
 
 async def test_blocks_accumulate_by_weight(tracker: BurnTracker) -> None:
@@ -70,6 +71,6 @@ async def test_reset_clears_the_counter(tracker: BurnTracker) -> None:
 
 
 async def test_survives_a_fresh_tracker_instance_same_redis() -> None:
-    redis = fakeredis.aioredis.FakeRedis()
-    await BurnTracker(redis).record_block(IDENTITY, 4)
-    assert await BurnTracker(redis).warnings(IDENTITY) == 4
+    store = RedisStateStore(fakeredis.aioredis.FakeRedis())
+    await BurnTracker(store).record_block(IDENTITY, 4)
+    assert await BurnTracker(store).warnings(IDENTITY) == 4

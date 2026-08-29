@@ -11,7 +11,7 @@ import asyncio
 import fakeredis
 import pytest
 
-from agentpilot.session.redis_registry import RedisRegistry
+from agentpilot.control.redis_registry import RedisRegistry
 from agentpilot.spi.errors import LeaseConflict
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState

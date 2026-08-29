@@ -806,6 +806,13 @@ at baseline.
 
 ### Phase 3 — De-tenant the core; policy seam; Redis out (D10, D11)
 
+> **Split into three gated steps.** Sizing it first showed `IdentityKey` has 175
+> usages across 48 files, and `identity.tenant` is load-bearing for **tenant
+> auth checks** in `routes/sessions.py` and `routes/live_view.py` — a security
+> control. Not safe to do in the same pass as everything else, so:
+> **3a Redis out** → **3b policy providers** → **3c de-tenant**, riskiest last.
+> **3a is done**; 3b and 3c are outstanding.
+
 Do this **before** the facade and well before the split: it changes the most
 widely-referenced type in the seam, and after Phase 7 that is a breaking release.
 
@@ -820,7 +827,49 @@ widely-referenced type in the seam, and after Phase 7 that is a breaking release
   to `agentpilot`.
 - Create `agentpilot/control/`; `gateway/wiring.py` constructs and injects.
 
-**Accept:** `grep -rniE "tenant|redis"` over the browser packages returns nothing; a test asserts `IdentityRef(key="t/d/n").slug()` equals the old `IdentityKey("t","d","n").slug()` byte-for-byte; `test_place_session_lua.py`, `test_burn_tracker.py` and `test_placement_redis_outage.py` pass unchanged against the injected implementations.
+**3a status: done.** Redis is gone from the browser layer — grepping for a redis
+import across `spi`, `driver`, `identity`, `egress`, `extraction`, `dom`,
+`session`, `tiers`, `config`, `policy` returns **zero**, and a new contract
+enforces it. It now lives only in `control/`, `gateway/` and `placement/`, all
+platform-side.
+
+| Moved | To |
+|---|---|
+| `session/redis_registry.py` + 6 lease Lua scripts | `control/redis_registry.py`, `control/lua/` |
+| the Redis calls in `burn_tracker`, `proxy_health`, `proxy_pinning` | `control/redis_store.RedisStateStore`, behind `policy.StateStore` |
+| `place_session.lua`, `clear_stale_affinity.lua` (found sitting in `session/lua/`) | `placement/lua/` |
+
+Judgement calls:
+
+- **One `StateStore` Protocol, not the three role-named stores the plan
+  sketched.** All three callers want the same thing — keyed counters and hash
+  fields with a TTL — so three Protocols would have been the same ten methods
+  written three times, and every backend would implement them three times. The
+  *roles* stay distinct where they belong: in the classes holding the policy.
+- **The policy genuinely stayed put.** `BurnTracker` keeps its weighted scoring
+  and floor-at-zero self-heal, `ProxyHealth` its jittered retirement cap,
+  `ProxyPinner` its sticky-pick. Only `INCRBY`/`HSETNX` left.
+- **`tests/test_state_store_equivalence.py` (16 tests) runs every primitive *and*
+  the policy on top of it against both stores.** This is the load-bearing test of
+  the seam: the in-memory store is what an embedding caller gets by default, so a
+  divergence from Redis would mean a single-process crawler and a multi-worker
+  deployment silently disagree about when an identity is burned.
+- **The multi-worker risk from §7 is now a startup warning.** A `worker` role
+  with no Redis logs `wiring.process_local_state` — process-local burn counters
+  never reach the threshold, retired proxies revive on the other node, sticky
+  exit IPs differ per worker. A warning, not a hard failure, so dev and
+  single-worker runs keep working.
+- **Found in passing:** `placement/` loaded its Lua from `session/lua/`, which
+  would have shipped platform Lua inside the browser wheel at Phase 7.
+
+**Gates:** 780 passed / 65 skipped (was 762); **19 contracts kept, 0 broken**
+(+2: no-redis, and the seam never importing the control plane); mypy 11 and ruff
+13, both at baseline. `include_external_packages = true` was needed for
+import-linter to see external edges.
+
+**Still outstanding in Phase 3:** 3b (`ProxyProvider`/`PrototypeProvider`) and 3c
+(`IdentityKey` → opaque `IdentityRef`, including moving tenant auth off the
+identity object).
 
 ### Phase 4 — Extension system (D12)
 

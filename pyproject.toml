@@ -120,6 +120,9 @@ ignore_missing_imports = true
 
 [tool.importlinter]
 root_package = "agentpilot"
+# Required for the "never imports redis" contract below: redis is an external
+# package, so import-linter must be told to include external edges in its graph.
+include_external_packages = true
 
 # agentpilot.placement/control are still P3+/future packages that don't exist yet
 # -- wrapped in parentheses per import-linter's "optional layer" syntax so
@@ -261,6 +264,40 @@ layers = ["agentpilot.jobs", "agentpilot.placement", "agentpilot.spi"]
 # the *only* module in the browser layer allowed to read `os.environ`, and it is
 # depended on by leaves in both branches. If it could import back into the tree,
 # the environment would leak into the layer graph through it.
+# Phase 3: Redis is a *deployment* concern, not a browser one. Every module
+# that used it -- burn accounting, proxy health, proxy pinning, the registry --
+# was answering a cross-process question, which is a property of how agentpilot
+# is deployed. The browser layer now depends on the `agentpilot.policy
+# .StateStore` seam and ships an in-process default; `agentpilot.control`
+# supplies the Redis-backed implementations and `gateway.wiring` injects them.
+# This contract is what keeps the dependency out: after the split (Phase 7) the
+# browser wheel must not name redis in any extra.
+[[tool.importlinter.contracts]]
+name = "the browser layer never imports redis"
+type = "forbidden"
+source_modules = [
+    "agentpilot.spi",
+    "agentpilot.driver",
+    "agentpilot.identity",
+    "agentpilot.egress",
+    "agentpilot.extraction",
+    "agentpilot.dom",
+    "agentpilot.session",
+    "agentpilot.tiers",
+    "agentpilot.config",
+    "agentpilot.policy",
+]
+forbidden_modules = ["redis"]
+
+# `agentpilot.policy` is the seam; `agentpilot.control` is one implementation of
+# it. The seam must never depend on the implementation, or injecting a different
+# backend becomes impossible.
+[[tool.importlinter.contracts]]
+name = "the policy seam never imports the control plane"
+type = "forbidden"
+source_modules = ["agentpilot.policy"]
+forbidden_modules = ["agentpilot.control"]
+
 [[tool.importlinter.contracts]]
 name = "tiers and config are pure leaves"
 type = "forbidden"

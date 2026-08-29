@@ -19,9 +19,8 @@ from __future__ import annotations
 
 import random
 
-from redis.asyncio import Redis
-
 from agentpilot.config import DEFAULT_PROXY_MAX_SUCCESS
+from agentpilot.policy import StateStore
 from agentpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxyhealth:"
@@ -42,8 +41,10 @@ def _proxy_id(proxy: ProxyEndpoint) -> str:
 
 
 class ProxyHealth:
-    def __init__(self, redis: Redis, max_success: int = DEFAULT_PROXY_MAX_SUCCESS) -> None:
-        self._redis = redis
+    def __init__(
+        self, store: StateStore, max_success: int = DEFAULT_PROXY_MAX_SUCCESS
+    ) -> None:
+        self._store = store
         self._max_success = max_success
 
     def _key(self, proxy: ProxyEndpoint) -> str:
@@ -54,10 +55,10 @@ class ProxyHealth:
         return self._max_success + random.randint(-span, span)
 
     async def _mark_retired(self, key: str) -> None:
-        await self._redis.hset(key, _F_RETIRED, "1")
+        await self._store.hset(key, _F_RETIRED, "1")
 
     async def is_retired(self, proxy: ProxyEndpoint) -> bool:
-        return (await self._redis.hget(self._key(proxy), _F_RETIRED)) in (b"1", "1")
+        return (await self._store.hget(self._key(proxy), _F_RETIRED)) == "1"
 
     async def record_success(self, proxy: ProxyEndpoint) -> bool:
         """Count a served page; retire (and return True) once the jittered cap
@@ -67,9 +68,9 @@ class ProxyHealth:
         if await self.is_retired(proxy):
             return True
         # Fix the jittered cap once, on first success, so it's stable per proxy.
-        await self._redis.hsetnx(key, _F_CAP, str(self._jittered_cap()))
-        successes = int(await self._redis.hincrby(key, _F_SUCCESS, 1))
-        cap_raw = await self._redis.hget(key, _F_CAP)
+        await self._store.hsetnx(key, _F_CAP, str(self._jittered_cap()))
+        successes = await self._store.hincr_by(key, _F_SUCCESS, 1)
+        cap_raw = await self._store.hget(key, _F_CAP)
         cap = int(cap_raw) if cap_raw is not None else self._max_success
         if successes >= cap:
             await self._mark_retired(key)
@@ -83,11 +84,11 @@ class ProxyHealth:
         key = self._key(proxy)
         if await self.is_retired(proxy):
             return True
-        losses = int(await self._redis.hincrby(key, _F_LOSSES, 1))
+        losses = await self._store.hincr_by(key, _F_LOSSES, 1)
         if losses >= _MAX_LOSSES:
             await self._mark_retired(key)
             return True
         return False
 
     async def reset(self, proxy: ProxyEndpoint) -> None:
-        await self._redis.delete(self._key(proxy))
+        await self._store.delete(self._key(proxy))

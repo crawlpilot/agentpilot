@@ -8,8 +8,8 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from agentpilot.control.redis_registry import RedisRegistry
 from agentpilot.placement.node_reaper import NodeReaper
-from agentpilot.session.redis_registry import RedisRegistry
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 

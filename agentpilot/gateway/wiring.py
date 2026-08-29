@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+import structlog
 from redis.asyncio import Redis
 
 if TYPE_CHECKING:
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from agentpilot.config import BrowserConfig
+from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.proxy_config import ProxyConfig
@@ -57,6 +59,7 @@ from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
+from agentpilot.policy import InMemoryStateStore, StateStore
 from agentpilot.session.interactive import InteractiveSession
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -64,6 +67,8 @@ from agentpilot.spi.proxy import ProxyEndpoint
 # .InteractiveSession` (moved so `agentpilot.agent`'s step loop can open/drive
 # a session too, without importing `agentpilot.gateway`). Re-exported under
 # the old name for any external code still importing `gateway.wiring.Session`.
+log = structlog.get_logger(__name__)
+
 Session = InteractiveSession
 
 
@@ -112,10 +117,42 @@ class Wiring:
         # caller could change it.
         self.browser_config = BrowserConfig.from_env()
 
+        # The shared-state driver behind burn accounting, proxy health and
+        # proxy pinning (Phase 3). Redis-backed when configured; process-local
+        # otherwise. `InMemoryStateStore` is correct for a single process ONLY
+        # -- see `_assert_shared_state_for_worker()`.
+        self.state_store: StateStore = (
+            RedisStateStore(self.redis) if self.redis is not None else InMemoryStateStore()
+        )
+
+        self._assert_shared_state_for_worker()
+
         if self.role == "gateway":
             self._init_gateway()
         else:
             self._init_worker()
+
+    def _assert_shared_state_for_worker(self) -> None:
+        """A `worker` without Redis is running on process-local state.
+
+        Burn accounting, proxy health and proxy pinning are all *cross-process*
+        questions. With `InMemoryStateStore` two workers keep private counters:
+        neither ever reaches the burn threshold, retired proxies come back to
+        life on the other node, and a warm identity's "sticky" exit IP differs
+        per worker -- each of which silently degrades anti-detection rather than
+        failing. Loud beats silent, but this stays a warning rather than a hard
+        failure so single-worker and dev runs keep working.
+        """
+
+        if self.role == "worker" and self.redis is None:
+            log.warning(
+                "wiring.process_local_state",
+                detail=(
+                    "worker running without AGENTPILOT_REDIS_URL: burn accounting, "
+                    "proxy health and proxy pinning are process-local and will not "
+                    "be shared across workers"
+                ),
+            )
 
     async def _connect_api_keys(self) -> None:
         """Only `gateway` mounts tenant-facing auth-gated routes, so only it
@@ -188,9 +225,9 @@ class Wiring:
         # either way). `docker/gateway.Dockerfile` is a genuinely driver-free
         # image (no Chrome/Xvfb/Patchright at all) -- see `agentpilot/gateway/
         # role.py`'s docstring.
+        from agentpilot.control.redis_registry import RedisRegistry
         from agentpilot.placement.node_reaper import NodeReaper
         from agentpilot.placement.placer import SessionPlacer
-        from agentpilot.session.redis_registry import RedisRegistry
 
         if self.redis is None:
             raise RuntimeError("AGENTPILOT_ROLE=gateway requires AGENTPILOT_REDIS_URL")
@@ -213,12 +250,12 @@ class Wiring:
         import socket
         import uuid
 
+        from agentpilot.control.redis_registry import RedisRegistry
         from agentpilot.driver.patchright_driver import PatchrightDriver
         from agentpilot.driver.process_launcher import ProcessLauncher
         from agentpilot.identity.vault import Vault
         from agentpilot.placement.node_registry import NodeRegistry
         from agentpilot.session.reaper import Reaper
-        from agentpilot.session.redis_registry import RedisRegistry
         from agentpilot.session.registry import Registry, RegistryProtocol
         from agentpilot.session.warm_pool import KeepaliveLoop, WarmPool
         from agentpilot.spi.driver import BrowserDriver
@@ -293,17 +330,19 @@ class Wiring:
             # ±25% jitter) or lost too many connections, and skip retired ones
             # when picking / re-pin a warm identity off a retired exit.
             self.proxy_pinner = ProxyPinner(
-                self.redis,
+                self.state_store,
                 proxy_config,
-                ProxyHealth(self.redis, self.browser_config.proxy_health.max_success),
+                ProxyHealth(self.state_store, self.browser_config.proxy_health.max_success),
             )
 
         # Per-identity burn accounting (retire a warm identity that keeps
-        # getting walled). Redis-backed, so it survives restarts and is shared
-        # across worker processes; None without Redis (dev/in-memory), which
-        # simply disables burn tracking rather than failing.
+        # getting walled). Backed by `state_store`, so with Redis it survives
+        # restarts and is shared across worker processes; None without Redis
+        # (dev/in-memory), which simply disables burn tracking rather than
+        # failing -- process-local burn counters would be worse than none, since
+        # each worker would independently under-count and never retire.
         self.burn_tracker: BurnTracker | None = (
-            BurnTracker(self.redis) if self.redis is not None else None
+            BurnTracker(self.state_store) if self.redis is not None else None
         )
 
         # Anticipatory warm-session pool -- pre-launched contexts per proxy

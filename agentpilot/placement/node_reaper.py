@@ -36,7 +36,7 @@ from agentpilot.spi.identity import IdentityKey
 
 log = structlog.get_logger(__name__)
 
-_LUA_DIR = Path(__file__).resolve().parent.parent / "session" / "lua"
+_LUA_DIR = Path(__file__).resolve().parent / "lua"
 
 
 def _load(name: str) -> str:

@@ -61,6 +61,9 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     # fields on `TierPolicy`, which is the single owner. Recorded here as the
     # deliberate public-API edit this file's maintenance contract requires.
     "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
+    # Phase 3a: the shared-state seam. `InMemoryStateStore` is the shipped
+    # default; `control.redis_store.RedisStateStore` is the injected one.
+    "agentpilot.policy": ("StateStore", "InMemoryStateStore"),
     # Phase 2: the only module in the browser layer that reads the environment.
     "agentpilot.config": (
         "BrowserConfig", "FingerprintConfig", "ProfileConfig",

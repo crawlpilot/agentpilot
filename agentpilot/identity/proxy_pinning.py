@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import hashlib
 
-from redis.asyncio import Redis
-
 from agentpilot.identity.proxy_config import ProxyConfig
 from agentpilot.identity.proxy_health import ProxyHealth
+from agentpilot.policy import StateStore
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -59,7 +58,7 @@ def _deserialize(raw: str, identity: IdentityKey) -> ProxyEndpoint:
 class ProxyPinner:
     def __init__(
         self,
-        redis: Redis,
+        store: StateStore,
         config: ProxyConfig | list[ProxyEndpoint],
         health: ProxyHealth | None = None,
     ) -> None:
@@ -68,7 +67,7 @@ class ProxyPinner:
         cfg = config if isinstance(config, ProxyConfig) else ProxyConfig.from_flat(config)
         if cfg.is_empty:
             raise ValueError("ProxyPinner requires a non-empty proxy config")
-        self._redis = redis
+        self._store = store
         self._config = cfg
         self._health = health
 
@@ -110,19 +109,19 @@ class ProxyPinner:
         # If a previously pinned proxy has since retired, drop the pin so a fresh
         # (healthy) one is chosen below -- the sticky guarantee yields to the
         # retirement guarantee.
-        raw = await self._redis.hget(key, _FIELD)
+        raw = await self._store.hget(key, _FIELD)
         if raw is not None and self._health is not None:
-            pinned = _deserialize(raw.decode() if isinstance(raw, bytes) else raw, identity)
+            pinned = _deserialize(raw, identity)
             if await self._health.is_retired(pinned):
-                await self._redis.delete(key)
+                await self._store.delete(key)
                 raw = None
         if raw is None:
             candidate = await self._healthy_pick(identity, tier)
-            await self._redis.hsetnx(key, _FIELD, _serialize(candidate))
-            raw = await self._redis.hget(key, _FIELD)
+            await self._store.hsetnx(key, _FIELD, _serialize(candidate))
+            raw = await self._store.hget(key, _FIELD)
         if raw is None:
             raise RuntimeError(f"proxy pin for {identity.slug()!r} vanished immediately after set")
-        return _deserialize(raw.decode() if isinstance(raw, bytes) else raw, identity)
+        return _deserialize(raw, identity)
 
     async def rotate(
         self, identity: IdentityKey, tier: str | None = None
@@ -145,19 +144,18 @@ class ProxyPinner:
             if healthy:
                 pool = healthy
 
-        raw = await self._redis.hget(key, _FIELD)
-        current_ser = (raw.decode() if isinstance(raw, bytes) else raw) if raw is not None else None
+        current_ser = await self._store.hget(key, _FIELD)
         # Compare on the serialized form (config endpoints carry no sticky_key,
         # so direct equality against the pinned/deserialized one would never match).
         candidates = [p for p in pool if _serialize(p) != current_ser] or pool
         new_ser = _serialize(self._pick_from(identity, candidates))
-        await self._redis.hset(key, _FIELD, new_ser)
+        await self._store.hset(key, _FIELD, new_ser)
         return _deserialize(new_ser, identity)
 
     async def release(self, identity: IdentityKey) -> None:
         """Drop a warm identity's proxy pin entirely (next `get_or_assign`
         re-picks from the pool). Used when an identity is torn down for good."""
-        await self._redis.delete(f"{_KEY_PREFIX}{identity.slug()}")
+        await self._store.delete(f"{_KEY_PREFIX}{identity.slug()}")
 
     async def pick_ephemeral(
         self, identity: IdentityKey, tier: str | None = None

@@ -19,8 +19,7 @@ and clearing this counter, so its next open is a clean first-visit browser.
 
 from __future__ import annotations
 
-from redis.asyncio import Redis
-
+from agentpilot.policy import StateStore
 from agentpilot.spi.identity import IdentityKey
 
 MAX_WARNINGS = 8
@@ -41,8 +40,8 @@ pages from burning a warm identity as fast as a genuine block would."""
 
 
 class BurnTracker:
-    def __init__(self, redis: Redis) -> None:
-        self._redis = redis
+    def __init__(self, store: StateStore) -> None:
+        self._store = store
 
     def _key(self, identity: IdentityKey) -> str:
         return f"{_KEY_PREFIX}{identity.slug()}"
@@ -55,39 +54,38 @@ class BurnTracker:
         if weight <= 0:
             return await self.warnings(identity)
         key = self._key(identity)
-        total = await self._redis.incrby(key, weight)
-        await self._redis.expire(key, _TTL_SECONDS)
-        return int(total)
+        total = await self._store.incr_by(key, weight)
+        await self._store.expire(key, _TTL_SECONDS)
+        return total
 
     async def record_minor_block(self, identity: IdentityKey) -> int:
         """Record a soft (CRAWL-scope) failure as a minor warning. Every
         `MINOR_WARNING_FACTOR` minor warnings convert to one real warning
         (resetting the minor counter). Returns the current real-warning total."""
         mkey = self._minor_key(identity)
-        minor = await self._redis.incr(mkey)
-        await self._redis.expire(mkey, _TTL_SECONDS)
-        if int(minor) >= MINOR_WARNING_FACTOR:
-            await self._redis.delete(mkey)
+        minor = await self._store.incr_by(mkey, 1)
+        await self._store.expire(mkey, _TTL_SECONDS)
+        if minor >= MINOR_WARNING_FACTOR:
+            await self._store.delete(mkey)
             return await self.record_block(identity, 1)
         return await self.warnings(identity)
 
     async def record_success(self, identity: IdentityKey) -> int:
         """Self-heal: decrement one warning, floored at zero."""
         key = self._key(identity)
-        total = await self._redis.decr(key)
+        total = await self._store.incr_by(key, -1)
         if total < 0:
-            await self._redis.set(key, 0)
+            await self._store.set_int(key, 0)
             total = 0
         else:
-            await self._redis.expire(key, _TTL_SECONDS)
-        return int(total)
+            await self._store.expire(key, _TTL_SECONDS)
+        return total
 
     async def warnings(self, identity: IdentityKey) -> int:
-        raw = await self._redis.get(self._key(identity))
-        return int(raw) if raw is not None else 0
+        return await self._store.get_int(self._key(identity)) or 0
 
     async def is_burned(self, identity: IdentityKey) -> bool:
         return await self.warnings(identity) >= MAX_WARNINGS
 
     async def reset(self, identity: IdentityKey) -> None:
-        await self._redis.delete(self._key(identity), self._minor_key(identity))
+        await self._store.delete(self._key(identity), self._minor_key(identity))

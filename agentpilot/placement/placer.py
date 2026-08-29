@@ -19,7 +19,7 @@ from agentpilot.observability.metrics import placement_decisions_total
 from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
 from agentpilot.spi.identity import IdentityKey
 
-_LUA_DIR = Path(__file__).resolve().parent.parent / "session" / "lua"
+_LUA_DIR = Path(__file__).resolve().parent / "lua"
 
 
 def _load(name: str) -> str:

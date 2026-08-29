@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fakeredis
 
+from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.identity.proxy_health import ProxyHealth
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -14,7 +15,7 @@ OTHER = ProxyEndpoint(scheme="http", host="q", port=8080, tier="residential")
 
 def _health(max_success: int) -> ProxyHealth:
     # max_success=1 -> jitter span int(0.25)=0 -> cap is exactly 1 (deterministic).
-    return ProxyHealth(fakeredis.aioredis.FakeRedis(), max_success=max_success)
+    return ProxyHealth(RedisStateStore(fakeredis.aioredis.FakeRedis()), max_success=max_success)
 
 
 async def test_not_retired_initially() -> None:
@@ -54,7 +55,7 @@ async def test_reset_revives_a_proxy() -> None:
 async def test_cap_is_stable_across_calls_with_jitter() -> None:
     # With a larger cap the jitter is non-zero but must stay within +/-25% and
     # not change between successes (it's fixed on first success).
-    h = ProxyHealth(fakeredis.aioredis.FakeRedis(), max_success=100)
+    h = ProxyHealth(RedisStateStore(fakeredis.aioredis.FakeRedis()), max_success=100)
     for _ in range(50):
         await h.record_success(PROXY)
     assert await h.is_retired(PROXY) is False  # 50 << ~[75,125] cap

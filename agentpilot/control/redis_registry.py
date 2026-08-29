@@ -1,6 +1,6 @@
 """P2's Redis-backed `RegistryProtocol` implementation -- the "registry.py
 -> Redis, same interface" swap `plan.md` calls for. Atomicity comes from the
-five Lua scripts in `agentpilot/session/lua/`, loaded once at construction and
+five Lua scripts in `agentpilot/control/lua/`, loaded once at construction and
 invoked via `redis.asyncio.Redis.register_script()` so callers never see
 raw Lua or raw Redis commands.
 
