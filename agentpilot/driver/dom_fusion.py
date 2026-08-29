@@ -16,10 +16,15 @@ snapshots, unlike Playwright's re-minted `aria-ref`), behind a
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
+from agentpilot.spi.dom_tree import LayoutInfo
 from agentpilot.spi.geometry import BoundingBox
+
+__all__ = ["LayoutInfo", "REQUIRED_COMPUTED_STYLES", "build_snapshot_lookup"]
+"""`LayoutInfo` now lives in `spi.dom_tree` (see its docstring: `spi` may not
+import `driver`, even under TYPE_CHECKING). Re-exported here because this module
+produces it and every existing import site names it from here."""
 
 # The only computed styles the fusion pipeline consumes (visibility, occlusion,
 # scrollability, interactivity). Kept minimal -- requesting every style makes
@@ -37,19 +42,6 @@ REQUIRED_COMPUTED_STYLES = [
     "position",
     "background-color",
 ]
-
-
-@dataclass
-class LayoutInfo:
-    """Per-node layout/paint data extracted from a DOMSnapshot document."""
-
-    bounds: BoundingBox | None = None
-    computed_styles: dict[str, str] = field(default_factory=dict)
-    paint_order: int | None = None
-    is_clickable: bool = False
-    cursor_style: str | None = None
-    client_rects: BoundingBox | None = None
-    scroll_rects: BoundingBox | None = None
 
 
 def _parse_styles(strings: list[str], style_indices: list[int]) -> dict[str, str]:

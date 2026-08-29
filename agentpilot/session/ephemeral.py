@@ -51,30 +51,9 @@ from agentpilot.spi.errors import ChallengeDetected
 from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
+from agentpilot.tiers import TierPolicy
 
 log = structlog.get_logger(__name__)
-
-_PROTECTED_TIERS = stealth_profile.PROTECTED_TIERS
-"""Tiers that opt into the ported stealth path: human warm-up after each
-navigation plus body-level block detection (raises `ChallengeDetected` on a bot
-wall). `basic` keeps the cheap path; `auto` starts on the ladder below and
-escalates into the protected path on a block signal. Aliased from
-`stealth_profile` rather than redeclared, so this module and the interactive
-path can never drift on what "protected" means."""
-
-_ESCALATION: dict[str, tuple[str, ...]] = {
-    # `auto` climbs the ladder on `ChallengeDetected` (Firecrawl's start-cheap-
-    # escalate-on-failure semantics). Each retry mints a fresh throwaway
-    # identity, so it also gets a new proxy pick and a new pinned fingerprint --
-    # the PRIVACY-scope rotation ported from `BrowserResponseHandlerImpl.kt`.
-    # An explicitly requested tier does *not* auto-escalate: the caller chose it.
-    # `basic` fetches over plain HTTP first (no browser) and, only if that hits a
-    # hard wall, escalates to the real `stealth` browser -- the cheap-first path.
-    "auto": ("stealth", "enhanced"),
-    "basic": ("basic", "stealth"),
-    "stealth": ("stealth",),
-    "enhanced": ("enhanced",),
-}
 
 # The `basic` HTTP fast-path fetcher seam (dependency-injected for tests). Must
 # match `http_fetch.fetch_via_http`'s keyword signature.
@@ -252,7 +231,7 @@ async def run_ephemeral_scrape(
         # Protected rungs want a residential exit (datacenter IPs are the
         # dominant Akamai edge-block); the proxy config resolves that per-tenant
         # with a fallback to whatever pool is configured.
-        proxy_tier = "residential" if attempt_tier in _PROTECTED_TIERS else None
+        proxy_tier = TierPolicy.for_tier(attempt_tier).proxy_tier
         if warm:
             # Sticky proxy for a reused identity, same as an interactive
             # session -- the same profile should keep the same egress IP so
@@ -282,7 +261,7 @@ async def run_ephemeral_scrape(
             # silently downgrade a stealth run to a bare browser, which is the
             # exact failure `stealth_profile` exists to prevent. The cold
             # launch is the cost of a coherent identity.
-            if warm_pool is not None and not stealth_profile.is_protected(attempt_tier):
+            if warm_pool is not None and not TierPolicy.for_tier(attempt_tier).protected:
                 pooled_ctx = await warm_pool.take(proxy)
                 if pooled_ctx is not None:
                     pooled_ctx.identity = identity  # re-label the adopted ref
@@ -324,12 +303,12 @@ async def run_ephemeral_scrape(
     # Escalation ladder (resolved up front so it also drives batch shape). A
     # warm identity is reused, so escalation across fresh identities would defeat
     # it -- warm takes a single attempt at the ladder's first tier.
-    ladder = _ESCALATION.get(tier, ("stealth",))
+    ladder = TierPolicy.for_tier(tier).escalation
     attempts = ladder[:1] if warm else ladder
 
     # A search-engine referer on the (single) navigation is a protected-path
     # anti-detection lever only; `basic` keeps a bare, refererless hit.
-    protected = any(t in _PROTECTED_TIERS for t in attempts)
+    protected = any(TierPolicy.for_tier(t).protected for t in attempts)
     referer = _search_engine_referer(url) if protected else None
     def _batch_for(attempt_tier: str) -> list[spi_actions.Action]:
         # Homepage-first is an *escalation* behaviour, not a default one. It
@@ -525,7 +504,7 @@ async def run_ephemeral_scrape(
     # winning attempt's proxy -- the pick is deterministic per identity+tier, so
     # this is the exact endpoint the successful open used).
     if proxy_pinner is not None and used_identity is not None:
-        success_proxy_tier = "residential" if used_tier in _PROTECTED_TIERS else None
+        success_proxy_tier = TierPolicy.for_tier(used_tier).proxy_tier
         used_proxy = (
             await proxy_pinner.get_or_assign(used_identity, tier=success_proxy_tier)
             if warm

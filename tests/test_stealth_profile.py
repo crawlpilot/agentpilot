@@ -13,6 +13,7 @@ import pytest
 from agentpilot.session import stealth_profile
 from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.proxy import ProxyEndpoint
+from agentpilot.tiers import TierPolicy
 
 IDENTITY = IdentityKey(tenant="acme", domain="zara.com", name="s1", kind=ProfileKind.DEFAULT)
 
@@ -47,8 +48,8 @@ def test_auto_resolves_to_the_ladders_first_rung() -> None:
     a long-lived session has no escalation ladder to resolve it through -- so
     without this it would silently mean "no stealth"."""
 
-    assert stealth_profile.effective_tier("auto") == "stealth"
-    assert stealth_profile.is_protected("auto") is True
+    assert TierPolicy.for_tier("auto").effective == "stealth"
+    assert TierPolicy.for_tier("auto").protected is True
 
     auto = stealth_profile.resolve(IDENTITY, "auto")
     stealth = stealth_profile.resolve(IDENTITY, "stealth")
@@ -127,13 +128,15 @@ def test_interaction_cadence_follows_the_requested_tier(tier: str, expected: str
 
 
 def test_humanize_and_spi_agree_on_the_cadence_mapping() -> None:
-    """`humanize.for_tier` delegates to the spi mapping so the two can never
+    """`humanize` resolves the profile name `TierPolicy` hands it, so the two can never
     drift; this asserts the delegation is actually wired."""
 
     from agentpilot.driver import humanize
 
     for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
-        assert humanize.for_tier(tier).name == stealth_profile.interact_profile_for_tier(tier)
+        assert humanize.by_name(TierPolicy.for_tier(tier).interact_profile).name == (
+            TierPolicy.for_tier(tier).interact_profile
+        )
 
 
 def test_block_detection_is_opt_out_for_long_lived_sessions() -> None:

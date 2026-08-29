@@ -247,6 +247,38 @@ layers = ["agentpilot.jobs", "agentpilot.placement", "agentpilot.spi"]
 # it doesn't exist until a later phase of this feature build; add it to
 # source_modules once it does.
 
+# `agentpilot.tiers` (Phase 1 of the browserpilot extraction) owns what a
+# scrape tier *means* -- previously spread across `spi.actions`,
+# `session.stealth_profile`, `session.ephemeral`, `driver.humanize`,
+# `identity.proxy_config` and three `Literal`s in `gateway.schemas`. Both the
+# `driver` and `session` branches need it, and they sit on separate arms of the
+# layer graph above `spi` and may not import each other -- so `tiers` can only
+# be shared if it depends on nothing. This contract is what keeps that true;
+# without it the first `from agentpilot.spi import ...` added here would
+# quietly re-couple the branches.
+[[tool.importlinter.contracts]]
+name = "tiers is a pure leaf"
+type = "forbidden"
+source_modules = ["agentpilot.tiers"]
+forbidden_modules = [
+    "agentpilot.spi",
+    "agentpilot.driver",
+    "agentpilot.session",
+    "agentpilot.identity",
+    "agentpilot.egress",
+    "agentpilot.extraction",
+    "agentpilot.dom",
+    "agentpilot.gateway",
+    "agentpilot.jobs",
+    "agentpilot.crawl",
+    "agentpilot.agent",
+    "agentpilot.recipe",
+    "agentpilot.llm",
+    "agentpilot.auth",
+    "agentpilot.placement",
+    "agentpilot.observability",
+]
+
 [[tool.importlinter.contracts]]
 name = "only the composition root imports the concrete driver"
 type = "forbidden"

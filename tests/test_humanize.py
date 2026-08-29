@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import agentpilot.driver.humanize as humanize
 from agentpilot.driver.humanize import DelayPolicy
+from agentpilot.tiers import TierPolicy
 
 
 def test_stealth_is_slower_than_fast_on_every_action() -> None:
@@ -40,11 +41,19 @@ def test_malformed_range_uses_safe_fallback() -> None:
         assert 500 <= bad.sample("click") <= 1_000
 
 
-def test_for_tier_mapping() -> None:
-    assert humanize.for_tier("stealth") is humanize.STEALTH
-    assert humanize.for_tier("enhanced") is humanize.STEALTH
-    assert humanize.for_tier("auto") is humanize.DEFAULT
-    assert humanize.for_tier("nonsense") is humanize.DEFAULT
+def test_tier_to_delay_table_mapping() -> None:
+    """`humanize.for_tier` was removed in the Phase 1 tier consolidation -- it
+    had no production caller (the driver receives a profile *name* via
+    `open(interact_profile=...)` and calls `by_name`). The mapping it expressed
+    is preserved here, now routed through its single owner."""
+
+    def table(tier: str) -> humanize.DelayPolicy:
+        return humanize.by_name(TierPolicy.for_tier(tier).interact_profile)
+
+    assert table("stealth") is humanize.STEALTH
+    assert table("enhanced") is humanize.STEALTH
+    assert table("auto") is humanize.DEFAULT
+    assert table("nonsense") is humanize.DEFAULT
 
 
 def test_by_name_mapping() -> None:
@@ -80,11 +89,13 @@ def test_sample_never_leaves_the_declared_range_for_any_action() -> None:
                 assert lo <= v <= hi, f"{policy.name}.{action} produced {v}"
 
 
-def test_for_tier_delegates_to_the_shared_spi_mapping() -> None:
-    """The tier -> table mapping lives in `spi.actions` so `session` can read
-    it without importing `driver`; this asserts the delegation is live."""
+def test_humanize_holds_no_tier_knowledge_of_its_own() -> None:
+    """After the Phase 1 consolidation `humanize` is a *name -> table* lookup
+    and nothing more: `TierPolicy` owns tier -> name. Asserting the absence is
+    the point -- a reintroduced `for_tier` here would re-split the mapping
+    across two owners, which is the defect the consolidation removed."""
 
-    from agentpilot.spi.actions import interact_profile_for_tier
-
-    for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
-        assert humanize.for_tier(tier).name == interact_profile_for_tier(tier)
+    assert not hasattr(humanize, "for_tier")
+    for tier in ("basic", "stealth", "enhanced", "auto"):
+        name = TierPolicy.for_tier(tier).interact_profile
+        assert humanize.by_name(name).name == name

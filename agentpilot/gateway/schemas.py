@@ -11,6 +11,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentpilot.tiers import TierName
+
 # --- session lifecycle ---
 
 
@@ -20,7 +22,7 @@ class SessionOpenRequest(BaseModel):
     tenant: str
     domain: str
     name: str
-    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    tier: TierName = "auto"
     headful: bool = False
     block_popups: bool = False
     live_view: bool = False
@@ -210,7 +212,7 @@ class ScrapeRequest(BaseModel):
 
     tenant: str
     url: str
-    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    tier: TierName = "auto"
     """Same not-yet-routed field as `SessionOpenRequest.tier` -- every scrape
     takes the same full-Patchright path today regardless of this value; see
     that model's field for the reasoning."""
@@ -419,7 +421,7 @@ class AgentRunCreateRequest(BaseModel):
     scope for the session this run opens, not necessarily the task's first
     URL (the agent may navigate anywhere the task requires)."""
     task: str
-    tier: Literal["basic", "stealth", "enhanced", "auto"] = "auto"
+    tier: TierName = "auto"
     max_steps: int = 50
     output_schema: dict[str, Any] | None = None
     """Plain JSON Schema -- embedded into the `done` action's `extracted_data`

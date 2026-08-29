@@ -199,10 +199,10 @@ async def test_protected_tiers_never_adopt_a_pooled_context() -> None:
     (`WarmPool._open` passes none of them). Adopting one on a stealth run would
     silently downgrade it to a bare browser."""
 
-    from agentpilot.session import stealth_profile
+    from agentpilot.tiers import TierPolicy
 
-    assert stealth_profile.is_protected("stealth") is True
-    assert stealth_profile.is_protected("enhanced") is True
-    assert stealth_profile.is_protected("auto") is True
+    assert TierPolicy.for_tier("stealth").protected is True
+    assert TierPolicy.for_tier("enhanced").protected is True
+    assert TierPolicy.for_tier("auto").protected is True
     # `basic` is the only tier that may still take the cheap pooled path.
-    assert stealth_profile.is_protected("basic") is False
+    assert TierPolicy.for_tier("basic").protected is False

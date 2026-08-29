@@ -45,6 +45,7 @@ from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.identity import IdentityKey, ProfileKind
 from agentpilot.spi.lease import ContextRef, LeaseId
+from agentpilot.tiers import TierPolicy
 
 if TYPE_CHECKING:
     # Deferred: `Vault` pulls in `cryptography` (the `driver` extra), which
@@ -123,7 +124,7 @@ async def open_interactive_session(
 
         # Protected tiers want a residential exit, same as the scrape path --
         # datacenter IPs are the dominant Akamai edge-block.
-        proxy_tier = "residential" if stealth_profile.is_protected(tier) else None
+        proxy_tier = TierPolicy.for_tier(tier).proxy_tier
         proxy = (
             await proxy_pinner.get_or_assign(identity, tier=proxy_tier) if proxy_pinner else None
         )

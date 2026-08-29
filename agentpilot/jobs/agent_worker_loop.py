@@ -30,8 +30,8 @@ from agentpilot.llm.client import LLMConfig
 from agentpilot.session.interactive import open_interactive_session, release_interactive_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.rotation import RotationConfig
-from agentpilot.spi.actions import stealth_from_tier
 from agentpilot.spi.driver import BrowserDriver
+from agentpilot.tiers import TierPolicy
 
 if TYPE_CHECKING:
     from agentpilot.placement.placer import SessionPlacer
@@ -172,7 +172,7 @@ class AgentWorkerLoop:
                 # UI-driven stealth: the run's `tier` decides whether the fusion
                 # engine may use CDP Runtime (`getEventListeners`). basic/stealth
                 # -> Runtime-free; enhanced/auto -> full browser-use parity.
-                no_runtime=stealth_from_tier(run.tier),
+                no_runtime=TierPolicy.for_tier(run.tier).no_runtime,
                 on_step=_on_step,
             )
         finally:

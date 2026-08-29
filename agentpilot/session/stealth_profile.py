@@ -5,7 +5,7 @@ to `/v1/scrape` and to nothing else: `session/interactive.py` -- the path behind
 `/v1/sessions` and every agent run -- opened its context with no fingerprint, no
 init script, no locale/timezone pin, no warm-up and no block detection,
 *regardless of the tier the caller asked for*. On those paths `tier` only ever
-reached `stealth_from_tier()`, so an agent run against a hardened retail site was
+reached the tier's stealth flag, so an agent run against a hardened retail site was
 a naked, cookieless, unfingerprinted Chrome and was blocked accordingly.
 
 Both callers now resolve their `driver.open()` stealth kwargs here, so a tier
@@ -18,27 +18,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
-from agentpilot.spi.actions import interact_profile_for_tier
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
-
-PROTECTED_TIERS = frozenset({"stealth", "enhanced"})
-"""Tiers that opt into the ported stealth path: pinned fingerprint, human
-warm-up, body-level block detection, and the slow STEALTH interaction cadence."""
-
-_LADDER_ENTRY = {"auto": "stealth"}
-"""`auto` is not itself a rung. `ephemeral.py` resolves it through
-`_ESCALATION` and only ever calls `resolve()` with a concrete rung, but a
-long-lived session has no ladder to climb -- it opens one context and keeps it.
-Without this mapping `auto`, which is the *default* tier for agent runs, would
-resolve to no stealth at all, which is precisely the hole this module exists to
-close. Mapping it to the ladder's first rung makes the two paths agree."""
-
-
-def effective_tier(tier: str) -> str:
-    """The concrete rung `tier` behaves as. Identity for real rungs."""
-
-    return _LADDER_ENTRY.get(tier, tier)
+from agentpilot.tiers import TierPolicy
 
 
 @dataclass
@@ -57,10 +39,6 @@ class StealthProfile:
 
     def as_open_kwargs(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def is_protected(tier: str) -> bool:
-    return effective_tier(tier) in PROTECTED_TIERS
 
 
 def resolve(
@@ -96,7 +74,8 @@ def resolve(
     An agent that lands on a real block page still sees it, and can say so.
     """
 
-    if not is_protected(tier):
+    policy = TierPolicy.for_tier(tier)
+    if not policy.protected:
         return StealthProfile(locale=locale, timezone_id=timezone_id)
 
 
@@ -104,7 +83,7 @@ def resolve(
     return StealthProfile(
         locale=locale or fp.geo.locale,
         timezone_id=timezone_id or fp.geo.timezone_id,
-        warmup=True,
+        warmup=policy.warmup,
         detect_blocks=detect_blocks,
         user_agent=fp.user_agent,
         init_script=fp.init_script(),
@@ -113,10 +92,6 @@ def resolve(
         # cross-checks). Without this the header leaks the real, newer Chrome.
         extra_http_headers=fp.client_hint_headers(),
         extra_launch_args=fp.launch_args(),
-        # The interaction cadence comes from `humanize.for_tier`, the mapping
-        # the codebase already declares for exactly this (`auto` -> DEFAULT,
-        # `stealth`/`enhanced` -> STEALTH) and which nothing had been calling.
-        #
         # Using the *requested* tier, not the effective rung, is deliberate.
         # For a one-shot scrape the cadence costs one navigation's worth of
         # pauses, but a long-lived session pays STEALTH's 900-1600 ms `gap`
@@ -125,5 +100,5 @@ def resolve(
         # for a behavioural signal that matters most on the page *load*, which
         # the warm-up above already covers. An explicit `stealth`/`enhanced`
         # still opts into the slow table.
-        interact_profile=interact_profile_for_tier(tier),
+        interact_profile=policy.interact_profile,
     )

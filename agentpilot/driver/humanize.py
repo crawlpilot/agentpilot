@@ -22,8 +22,6 @@ import math
 import random
 from dataclasses import dataclass
 
-from agentpilot.spi.actions import interact_profile_for_tier
-
 # Global clamp from InteractSettings.kt:71-76 -- no sampled delay is ever
 # shorter than this or longer than this, whatever a preset range says.
 MIN_DELAY_MS = 50
@@ -141,18 +139,6 @@ FAST = DelayPolicy("fast", _FAST)
 STEALTH = DelayPolicy("stealth", _STEALTH)
 
 _BY_NAME = {p.name: p for p in (DEFAULT, FAST, STEALTH)}
-
-def for_tier(tier: str) -> DelayPolicy:
-    """Resolve a request `tier` (gateway/schemas.py) to its delay preset.
-
-    The tier -> table-name mapping lives in `spi.actions
-    .interact_profile_for_tier` rather than here, because
-    `session.stealth_profile` needs it too and `session` may not import
-    `driver`. This resolves that name to the actual policy object.
-    """
-
-    return by_name(interact_profile_for_tier(tier))
-
 
 def by_name(name: str) -> DelayPolicy:
     """Resolve a preset by name (defaults to `DEFAULT`)."""

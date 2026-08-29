@@ -15,23 +15,40 @@ keyed on the stable `backendNodeId` -- never the re-minted Playwright aria-ref -
 so a node is the *same* node across snapshots even as the page mutates. That is
 what makes cross-step change detection and history replay possible.
 
-Layering note: `snapshot` is typed as `LayoutInfo` for editors but imported only
-under `TYPE_CHECKING`; with `from __future__ import annotations` the hint is a
-string and never evaluated at runtime, so this `spi` module carries no runtime
-dependency on `driver`.
+`LayoutInfo` is defined here rather than in `driver.dom_fusion` (which produces
+it) because it is pure data over `spi.geometry.BoundingBox` with no engine
+behaviour, and `EnhancedDOMTreeNode.snapshot` -- an `spi` field -- is typed by
+it. Defining it in the driver forced `spi` to import `driver` even under
+`TYPE_CHECKING`, which import-linter counts as a layering violation (it reads
+the AST, not the runtime graph). `driver.dom_fusion` re-exports the name, so
+every existing `from agentpilot.driver.dom_fusion import LayoutInfo` still works.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import TYPE_CHECKING
 
 from agentpilot.spi import hashing
 from agentpilot.spi.geometry import BoundingBox
 
-if TYPE_CHECKING:
-    from agentpilot.driver.dom_fusion import LayoutInfo
+
+@dataclass
+class LayoutInfo:
+    """Per-node layout/paint data extracted from a DOMSnapshot document.
+
+    Produced by `driver.dom_fusion.build_snapshot_lookup`; consumed by
+    `EnhancedDOMTreeNode.snapshot` below and by `dom.clickable_elements` /
+    `dom.paint_order`.
+    """
+
+    bounds: BoundingBox | None = None
+    computed_styles: dict[str, str] = field(default_factory=dict)
+    paint_order: int | None = None
+    is_clickable: bool = False
+    cursor_style: str | None = None
+    client_rects: BoundingBox | None = None
+    scroll_rects: BoundingBox | None = None
 
 
 class NodeType(IntEnum):

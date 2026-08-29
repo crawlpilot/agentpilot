@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.spi.actions import stealth_from_tier
+from agentpilot.tiers import TierPolicy
 
 
 @pytest.mark.parametrize(
@@ -18,4 +18,4 @@ from agentpilot.spi.actions import stealth_from_tier
     ],
 )
 def test_stealth_from_tier(tier: str, expected: bool) -> None:
-    assert stealth_from_tier(tier) is expected
+    assert TierPolicy.for_tier(tier).no_runtime is expected
