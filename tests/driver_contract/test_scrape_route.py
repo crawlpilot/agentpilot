@@ -12,12 +12,12 @@ import pytest
 from pytest_httpserver import HTTPServer
 from werkzeug import Response
 
+from agentpilot.control.identity import identity_for
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.scrape import scrape
 from agentpilot.gateway.schemas import ScrapeRequest
 from agentpilot.session.registry import Registry
 from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.identity import IdentityKey
 
 ARTICLE_HTML = """<html><body>
 <article>
@@ -144,9 +144,7 @@ async def test_scrape_does_not_disturb_a_concurrent_interactive_session(
     wiring = _FakeWiring(driver, tmp_path)
 
     domain = "127.0.0.1"
-    interactive_identity = IdentityKey(
-        tenant="acme", domain=domain, name="alice", kind=ProfileKind.DEFAULT
-    )
+    interactive_identity = identity_for("acme", domain, "alice", kind=ProfileKind.DEFAULT)
 
     async def _open_interactive():
         profile_dir = resolve_profile_dir(tmp_path, interactive_identity)

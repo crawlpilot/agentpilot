@@ -96,7 +96,7 @@ from agentpilot.spi.errors import (
     TabNotFound,
 )
 from agentpilot.spi.health import ContextHealth, HealthStatus
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
@@ -398,7 +398,7 @@ class PatchrightDriver:
 
     async def open(
         self,
-        identity: IdentityKey,
+        identity: IdentityRef,
         profile_dir: Path,
         proxy: ProxyEndpoint | None,
         headful: bool,

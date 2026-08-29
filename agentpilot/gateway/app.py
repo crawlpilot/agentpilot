@@ -34,10 +34,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 
-from agentpilot.gateway.auth_deps import require_admin, require_tenant_auth
+from agentpilot.gateway.auth_deps import require_admin
 from agentpilot.gateway.errors import register_exception_handlers
 from agentpilot.gateway.role import get_role
-from agentpilot.observability.logging import configure_logging
 from agentpilot.gateway.routes import (
     agent_runs,
     api_keys,
@@ -57,6 +56,7 @@ from agentpilot.gateway.routes import (
 from agentpilot.gateway.routes import map as map_routes
 from agentpilot.gateway.spa import mount_spa, resolve_ui_dir
 from agentpilot.gateway.wiring import get_wiring, reset_wiring
+from agentpilot.observability.logging import configure_logging
 
 
 @asynccontextmanager

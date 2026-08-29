@@ -1,7 +1,7 @@
 """In-memory session registry -- the real version of P0's `wiring.py`
 `active_identities`/`warm_contexts` dicts (a port of a prior internal
 system's get-or-create-under-lock context pool), now with a
-per-`IdentityKey` `asyncio.Lock` instead of one global lock. P2 swaps the
+per-`IdentityRef` `asyncio.Lock` instead of one global lock. P2 swaps the
 in-memory dicts for Redis + Lua behind this same interface -- the
 <=1-ACTIVE-per-identity invariant enforced here is exactly what
 `bind_active_context.lua` re-implements atomically, not a different rule.
@@ -18,7 +18,7 @@ from typing import Protocol, runtime_checkable
 from agentpilot.session.lease import new_lease
 from agentpilot.session.lease import renew as _renew_lease
 from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 Opener = Callable[[], Awaitable[ContextRef]]
@@ -33,7 +33,7 @@ class RegistryProtocol(Protocol):
     change, not a rewrite of everything that uses a registry."""
 
     async def acquire(
-        self, identity: IdentityKey, owner: str, ttl_seconds: float, opener: Opener
+        self, identity: IdentityRef, owner: str, ttl_seconds: float, opener: Opener
     ) -> tuple[ContextRef, Lease]: ...
 
     async def renew(self, lease_id: LeaseId) -> Lease: ...
@@ -42,11 +42,11 @@ class RegistryProtocol(Protocol):
 
     async def snapshot(
         self,
-    ) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]: ...
+    ) -> list[tuple[IdentityRef, ContextRef, Lease | None, float | None]]: ...
 
-    async def evict(self, identity: IdentityKey) -> ContextRef | None: ...
+    async def evict(self, identity: IdentityRef) -> ContextRef | None: ...
 
-    async def force_release(self, identity: IdentityKey) -> None: ...
+    async def force_release(self, identity: IdentityRef) -> None: ...
 
 
 @dataclass
@@ -61,17 +61,17 @@ class _Entry:
 
 class Registry:
     def __init__(self) -> None:
-        self._entries: dict[IdentityKey, _Entry] = {}
-        self._lease_owner: dict[LeaseId, IdentityKey] = {}
-        self._identity_locks: dict[IdentityKey, asyncio.Lock] = {}
+        self._entries: dict[IdentityRef, _Entry] = {}
+        self._lease_owner: dict[LeaseId, IdentityRef] = {}
+        self._identity_locks: dict[IdentityRef, asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
 
-    async def _lock_for(self, identity: IdentityKey) -> asyncio.Lock:
+    async def _lock_for(self, identity: IdentityRef) -> asyncio.Lock:
         async with self._locks_guard:
             return self._identity_locks.setdefault(identity, asyncio.Lock())
 
     async def acquire(
-        self, identity: IdentityKey, owner: str, ttl_seconds: float, opener: Opener
+        self, identity: IdentityRef, owner: str, ttl_seconds: float, opener: Opener
     ) -> tuple[ContextRef, Lease]:
         """`computeIfAbsent` for a warm context: reuses an IDLE entry for
         `identity` if one exists (a still-running Chrome from a prior
@@ -128,7 +128,7 @@ class Registry:
             entry.lease = None
             entry.released_at = time.monotonic()
 
-    async def snapshot(self) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]:
+    async def snapshot(self) -> list[tuple[IdentityRef, ContextRef, Lease | None, float | None]]:
         """Read-only view for the reaper/metrics. Safe without a lock: callers
         only read `ContextRef`/`Lease` (never mutate), and the identity-level
         locks only ever protect registry bookkeeping, not these reads.
@@ -140,7 +140,7 @@ class Registry:
             for identity, e in self._entries.items()
         ]
 
-    async def evict(self, identity: IdentityKey) -> ContextRef | None:
+    async def evict(self, identity: IdentityRef) -> ContextRef | None:
         """Removes and returns the entry so the reaper can destroy it.
         Distinct from `release()` (ACTIVE -> IDLE, context stays warm):
         eviction destroys the underlying context entirely."""
@@ -154,7 +154,7 @@ class Registry:
                 self._lease_owner.pop(entry.lease.lease_id, None)
             return entry.context_ref
 
-    async def force_release(self, identity: IdentityKey) -> None:
+    async def force_release(self, identity: IdentityRef) -> None:
         """Reaper-only: reclaims an ACTIVE lease whose owner let it expire
         without renewing (a crashed/abandoned client) -- releases to IDLE
         rather than destroying, so the identity is still warm for a fresh

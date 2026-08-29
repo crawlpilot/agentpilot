@@ -11,12 +11,12 @@ import asyncio
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_registry import RedisRegistry
 from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
+IDENTITY = identity_for("t", "example.com", "a")
 
 _next_ctx_id = iter(range(1, 10_000))
 

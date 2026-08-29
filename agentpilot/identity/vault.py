@@ -19,7 +19,7 @@ job, at the same release call site.
 
 **Key management**: one `AGENTPILOT_VAULT_KEY` (a `Fernet.generate_key()`
 value) shared fleet-wide. Per-tenant *key derivation* (not just per-tenant
-*file paths*, which this module already has via `IdentityKey.slug()`) is
+*file paths*, which this module already has via `IdentityRef.slug()`) is
 real further hardening, deliberately left for later -- this pass gets
 encryption-at-rest and the two trigger semantics right first.
 """
@@ -32,7 +32,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 
@@ -72,19 +72,19 @@ class Vault:
         self._root = root
         self._fernet = Fernet(key)
 
-    def _path(self, identity: IdentityKey) -> Path:
+    def _path(self, identity: IdentityRef) -> Path:
         # `identity.slug()` (not raw tenant/domain/name fields) is what
         # keeps this path-traversal-safe -- same sanitizer `profile_store.py`
         # relies on for the actual browser profile dir.
         return self._root / f"{identity.slug()}.json.enc"
 
-    def save(self, identity: IdentityKey, state: StorageState) -> None:
+    def save(self, identity: IdentityRef, state: StorageState) -> None:
         path = self._path(identity)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(_to_json(state)).encode("utf-8")
         path.write_bytes(self._fernet.encrypt(payload))
 
-    def load(self, identity: IdentityKey) -> StorageState | None:
+    def load(self, identity: IdentityRef) -> StorageState | None:
         path = self._path(identity)
         if not path.exists():
             return None

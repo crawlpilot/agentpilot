@@ -163,7 +163,7 @@ async def list_sessions(
     request: Request, tenant: str | None = None, wiring: Wiring = Depends(get_wiring)
 ) -> SessionListOut:
     """Sourced from `wiring.sessions` (the `session_id` dict), not
-    `registry.snapshot()` -- the registry is keyed by `IdentityKey`/lease and
+    `registry.snapshot()` -- the registry is keyed by `IdentityRef`/lease and
     has no `session_id` at all, since one warm context can be reused across
     many session_ids over its lifetime. `snapshot()` is only consulted here to
     tell whether each session's lease is still live (state="active") or has

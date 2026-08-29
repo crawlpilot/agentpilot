@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.proxy import ProxyEndpoint
 
 
@@ -36,7 +36,7 @@ class ProxyProvider(Protocol):
     """
 
     def endpoints_for(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> list[ProxyEndpoint]: ...
 
     def all_endpoints(self) -> list[ProxyEndpoint]: ...
@@ -69,7 +69,7 @@ class StaticProxies:
         self._endpoints = list(endpoints)
 
     def endpoints_for(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> list[ProxyEndpoint]:
         if tier is None:
             return list(self._endpoints)

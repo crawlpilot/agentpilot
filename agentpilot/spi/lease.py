@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import NewType
 
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 
 LeaseId = NewType("LeaseId", str)
 
@@ -26,7 +26,7 @@ class ContextRef:
     need a breaking shape change."""
 
     context_id: str
-    identity: IdentityKey
+    identity: IdentityRef
     state: ContextState
     pid: int | None
     node_id: str = "local"
@@ -35,7 +35,7 @@ class ContextRef:
 @dataclass
 class Lease:
     lease_id: LeaseId
-    identity: IdentityKey
+    identity: IdentityRef
     owner: str
     acquired_at: datetime
     ttl_seconds: float

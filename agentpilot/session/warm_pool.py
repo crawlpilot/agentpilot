@@ -30,12 +30,13 @@ from pathlib import Path
 
 import structlog
 
+from agentpilot.control.identity import identity_for
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.session.reaper import read_meminfo_used_pct
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey, ProfileKind
+from agentpilot.spi.identity import IdentityRef, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -59,7 +60,7 @@ def tier_key(proxy: ProxyEndpoint | None) -> Hashable:
 @dataclass
 class _Pooled:
     ctx: ContextRef
-    identity: IdentityKey
+    identity: IdentityRef
     """The pooled context's throwaway identity -- carried only so its profile
     dir can be deleted via `delete_profile_dir` on destroy/sweep."""
 
@@ -189,8 +190,7 @@ class WarmPool:
 
     async def _open(self, proxy: ProxyEndpoint | None) -> _Pooled | None:
         host = proxy.host if proxy is not None else "direct"
-        identity = IdentityKey(
-            tenant=_WARM_TENANT, domain=host, name=uuid.uuid4().hex, kind=ProfileKind.TEMPORARY
+        identity = identity_for(_WARM_TENANT, host, uuid.uuid4().hex, kind=ProfileKind.TEMPORARY
         )
         profile_dir = resolve_profile_dir(self._profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)

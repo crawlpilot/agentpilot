@@ -13,7 +13,7 @@ placement layer (`SessionPlacer`, `NodeReaper`, a `RedisRegistry` used only
 for the reaper's lease-eviction calls) -- and never touches `agentpilot.driver`.
 
 The `session_id -> Session` dict is worker-local: `Registry` is keyed by
-`IdentityKey`, not `session_id`, since one warm context can be reused across
+`IdentityRef`, not `session_id`, since one warm context can be reused across
 many session_ids over its lifetime (open, release, reopen mints a new
 session_id for the same underlying context).
 

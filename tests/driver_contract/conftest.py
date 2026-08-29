@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
+from agentpilot.control.identity import identity_for
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef
 
 
@@ -24,7 +24,7 @@ def driver(launcher: ProcessLauncher) -> PatchrightDriver:
 
 @pytest_asyncio.fixture
 async def open_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
-    identity = IdentityKey(tenant="t", domain="example.com", name="test")
+    identity = identity_for("t", "example.com", "test")
     ctx = await driver.open(
         identity, tmp_path / "profile", None, headful=False, egress=EgressPolicy()
     )
@@ -34,7 +34,7 @@ async def open_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
 
 @pytest_asyncio.fixture
 async def cdp_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
-    identity = IdentityKey(tenant="t", domain="example.com", name="cdp-test")
+    identity = identity_for("t", "example.com", "cdp-test")
     ctx = await driver.open(
         identity,
         tmp_path / "profile",

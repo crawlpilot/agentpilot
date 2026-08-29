@@ -18,14 +18,14 @@ from collections.abc import Callable
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.identity.burn_tracker import MAX_WARNINGS, BurnTracker
 from agentpilot.identity.proxy_health import ProxyHealth
 from agentpilot.policy import InMemoryStateStore, StateStore
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
-IDENTITY = IdentityKey(tenant="t", domain="d", name="n")
+IDENTITY = identity_for("t", "d", "n")
 PROXY = ProxyEndpoint(scheme="http", host="p", port=1)
 
 STORES: list[tuple[str, Callable[[], StateStore]]] = [

@@ -43,7 +43,7 @@ from agentpilot.observability.metrics import (
 from agentpilot.session.lease import is_expired
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState
 
 log = structlog.get_logger(__name__)
@@ -182,7 +182,7 @@ class Reaper:
             )
             await self._destroy(identity, ctx, reason="memory_pressure")
 
-    async def _destroy(self, identity: IdentityKey, ctx: ContextRef, *, reason: str) -> None:
+    async def _destroy(self, identity: IdentityRef, ctx: ContextRef, *, reason: str) -> None:
         # Vault save-on-release-to-IDLE is stubbed until P2's vault.py lands
         # (plan.md: profile dirs are a node-local cache, vault is source of
         # truth) -- P1 destroys straight from the profile-dir cache, so a

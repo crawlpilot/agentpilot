@@ -6,15 +6,15 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.identity.burn_tracker import (
     MAX_WARNINGS,
     MINOR_WARNING_FACTOR,
     BurnTracker,
 )
-from agentpilot.spi.identity import IdentityKey
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="alice")
+IDENTITY = identity_for("t", "example.com", "alice")
 
 
 @pytest.fixture

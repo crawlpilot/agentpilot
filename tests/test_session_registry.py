@@ -8,13 +8,13 @@ import asyncio
 
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.session.lease import is_expired
 from agentpilot.session.registry import Registry
 from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
+IDENTITY = identity_for("t", "example.com", "a")
 
 
 def _make_ctx(n: int = 0) -> ContextRef:

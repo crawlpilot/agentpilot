@@ -16,7 +16,7 @@ from agentpilot.session.registry import Registry
 from agentpilot.spi.actions import Action, ActionResult
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState
 from agentpilot.spi.proxy import ProxyEndpoint
 from agentpilot.spi.scrape import ScrapeOptions
@@ -31,14 +31,14 @@ class _FakeProxyPinner:
         self.proxy = proxy
         self.tiers_requested: list[str | None] = []
         self.successes: list[ProxyEndpoint] = []
-        self.rotated: list[tuple[IdentityKey, str | None]] = []
-        self.released: list[IdentityKey] = []
+        self.rotated: list[tuple[IdentityRef, str | None]] = []
+        self.released: list[IdentityRef] = []
 
-    async def get_or_assign(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+    async def get_or_assign(self, identity: IdentityRef, tier: str | None = None) -> ProxyEndpoint:
         self.tiers_requested.append(tier)
         return self.proxy
 
-    async def pick_ephemeral(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+    async def pick_ephemeral(self, identity: IdentityRef, tier: str | None = None) -> ProxyEndpoint:
         self.tiers_requested.append(tier)
         return self.proxy
 
@@ -46,12 +46,12 @@ class _FakeProxyPinner:
         self.successes.append(proxy)
 
     async def rotate(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> ProxyEndpoint | None:
         self.rotated.append((identity, tier))
         return self.proxy
 
-    async def release(self, identity: IdentityKey) -> None:
+    async def release(self, identity: IdentityRef) -> None:
         self.released.append(identity)
 
 
@@ -64,7 +64,7 @@ class _FakeDriver:
 
     async def open(
         self,
-        identity: IdentityKey,
+        identity: IdentityRef,
         profile_dir: Path,
         proxy: object,
         headful: bool,
@@ -174,7 +174,7 @@ async def test_warm_identity_uses_default_profile_kind(tmp_path: Path) -> None:
     driver = _FakeDriver()
     await _scrape(driver, tmp_path, session_name="s")
     identity = driver.opens[0]["identity"]
-    assert isinstance(identity, IdentityKey)
+    assert isinstance(identity, IdentityRef)
     assert identity.name == "s"
     assert identity.is_permanent  # ProfileKind.DEFAULT -> warm/persistent
 
@@ -485,18 +485,18 @@ class _FakeBurnTracker:
         self.successes = 0
         self.resets = 0
 
-    async def is_burned(self, identity: IdentityKey) -> bool:
+    async def is_burned(self, identity: IdentityRef) -> bool:
         return self.burned
 
-    async def record_block(self, identity: IdentityKey, weight: int) -> int:
+    async def record_block(self, identity: IdentityRef, weight: int) -> int:
         self.blocks.append(weight)
         return weight
 
-    async def record_success(self, identity: IdentityKey) -> int:
+    async def record_success(self, identity: IdentityRef) -> int:
         self.successes += 1
         return 0
 
-    async def reset(self, identity: IdentityKey) -> None:
+    async def reset(self, identity: IdentityRef) -> None:
         self.resets += 1
 
 

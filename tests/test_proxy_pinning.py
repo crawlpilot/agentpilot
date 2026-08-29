@@ -8,9 +8,9 @@ import asyncio
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
 POOL = [
@@ -19,7 +19,7 @@ POOL = [
     ProxyEndpoint(scheme="http", host="proxy3.example.com", port=8080, vendor="acme"),
 ]
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="alice")
+IDENTITY = identity_for("t", "example.com", "alice")
 
 
 @pytest.fixture
@@ -71,7 +71,7 @@ async def test_different_identities_can_get_different_proxies() -> None:
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())
     pinner = ProxyPinner(store, POOL)
     assignments = {
-        await pinner.get_or_assign(IdentityKey(tenant="t", domain="example.com", name=f"user{i}"))
+        await pinner.get_or_assign(identity_for("t", "example.com", f"user{i}"))
         for i in range(20)
     }
     # Not asserting *all* pool entries get used (hash collisions are legal)

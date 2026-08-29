@@ -17,7 +17,7 @@ from redis.exceptions import ResponseError
 
 from agentpilot.observability.metrics import placement_decisions_total
 from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
 
@@ -35,7 +35,7 @@ class SessionPlacer:
         self._redis = redis
         self._place = redis.register_script(_load("place_session.lua"))
 
-    async def place(self, identity: IdentityKey, affinity_ttl_seconds: float) -> str:
+    async def place(self, identity: IdentityRef, affinity_ttl_seconds: float) -> str:
         """Returns the chosen node_id. Raises `LeaseConflict` (409 -- the
         identity is ACTIVE on a full/dead affinity target, relocating would
         orphan a live context) or `CapacityExhausted` (503 -- no live node
@@ -73,7 +73,7 @@ class SessionPlacer:
         self,
         session_id: str,
         node_id: str,
-        identity: IdentityKey,
+        identity: IdentityRef,
         tier: str,
         ttl_seconds: float,
     ) -> None:

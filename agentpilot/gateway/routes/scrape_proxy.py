@@ -37,13 +37,13 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from agentpilot.auth.models import AuthedTenant
+from agentpilot.control.identity import identity_for
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.routing import resolve_node_addr
 from agentpilot.gateway.schemas import ScrapeRequest
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
 from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.identity import IdentityKey
 
 log = structlog.get_logger(__name__)
 
@@ -67,7 +67,7 @@ async def scrape(
             status_code=400, detail=f"cannot determine a domain from url {req.url!r}"
         )
 
-    placement_identity = IdentityKey(tenant=req.tenant, domain=domain, name="scrape")
+    placement_identity = identity_for(req.tenant, domain, "scrape")
     node_id = await wiring.placer.place(placement_identity, wiring.affinity_ttl_seconds)
     try:
         addr = await resolve_node_addr(wiring, node_id)

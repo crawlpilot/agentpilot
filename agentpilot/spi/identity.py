@@ -27,24 +27,40 @@ def _sanitize_segment(segment: str) -> str:
 
 
 @dataclass(frozen=True)
-class IdentityKey:
-    """Identifies a single warm browsing identity: `(tenant, domain, name)`.
+class IdentityRef:
+    """An opaque handle for "these requests share cookies, profile and exit IP".
 
-    A profile dir on a node's local disk exists for exactly one `IdentityKey`.
+    `key` is **never parsed by the browser layer** -- it is validated for
+    filesystem safety and otherwise used only for equality and scoping. What it
+    means is the caller's business: the multi-tenant platform composes
+    `f"{tenant}/{domain}/{name}"` (see `control.identity.identity_for`), a
+    single-tenant crawler may use `"example.com"`, and neither shape is
+    privileged.
+
+    This replaced `IdentityKey(tenant, domain, name)`, whose `.slug()` rendered
+    the SaaS tenancy model directly as the on-disk profile layout -- so the
+    library's storage *was* the billing model (plan D10). The rendered slug is
+    byte-identical across that change, so existing profile dirs and vault
+    entries stay valid; only the owner of the composition moved up a layer.
+
+    A profile dir on a node's local disk exists for exactly one `IdentityRef`.
     `.slug()` is the canonical filesystem-safe path fragment for that dir, and
-    is reused by P2's `profile_store.py` path-traversal guard — every segment
-    is validated here, once, rather than re-validated at each call site.
+    every segment is validated here, once, rather than at each call site.
     """
 
-    tenant: str
-    domain: str
-    name: str
+    key: str
     kind: ProfileKind = field(default=ProfileKind.TEMPORARY)
 
     def slug(self) -> str:
-        return "/".join(
-            _sanitize_segment(part) for part in (self.tenant, self.domain, self.name)
-        )
+        return "/".join(_sanitize_segment(part) for part in self.key.split("/"))
+
+    @property
+    def scope_root(self) -> str:
+        """The first slug segment -- the containment root a profile dir may not
+        escape. Generic on purpose: the browser layer must not know that the
+        platform happens to put a tenant there."""
+
+        return self.slug().split("/", 1)[0]
 
     @property
     def is_temporary(self) -> bool:

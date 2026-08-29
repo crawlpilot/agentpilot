@@ -10,9 +10,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.gateway.routes.sessions import list_sessions
 from agentpilot.gateway.wiring import Session
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 
@@ -45,15 +46,15 @@ class _FakeWiring:
         self.api_keys = _FakeApiKeys()
 
 
-def _identity(tenant: str, name: str) -> IdentityKey:
-    return IdentityKey(tenant=tenant, domain="example.com", name=name)
+def _identity(tenant: str, name: str) -> IdentityRef:
+    return identity_for(tenant, "example.com", name)
 
 
-def _ctx(identity: IdentityKey, pid: int | None = None) -> ContextRef:
+def _ctx(identity: IdentityRef, pid: int | None = None) -> ContextRef:
     return ContextRef(context_id="ctx-1", identity=identity, state=ContextState.ACTIVE, pid=pid)
 
 
-def _lease(identity: IdentityKey, ctx: ContextRef, lease_id: str) -> Lease:
+def _lease(identity: IdentityRef, ctx: ContextRef, lease_id: str) -> Lease:
     return Lease(
         lease_id=LeaseId(lease_id),
         identity=identity,
@@ -64,7 +65,7 @@ def _lease(identity: IdentityKey, ctx: ContextRef, lease_id: str) -> Lease:
     )
 
 
-def _session(session_id: str, identity: IdentityKey, ctx: ContextRef, lease_id: str) -> Session:
+def _session(session_id: str, identity: IdentityRef, ctx: ContextRef, lease_id: str) -> Session:
     return Session(
         session_id=session_id,
         identity=identity,

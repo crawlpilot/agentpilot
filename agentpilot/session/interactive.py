@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from agentpilot.config import DEFAULTS, BrowserConfig
+from agentpilot.control.identity import identity_for
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
     resolve_profile_dir,
@@ -44,7 +45,7 @@ from agentpilot.session.rotation import RotationConfig, RotationPolicy, should_r
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey, ProfileKind
+from agentpilot.spi.identity import IdentityRef, ProfileKind
 from agentpilot.spi.lease import ContextRef, LeaseId
 from agentpilot.tiers import TierPolicy
 
@@ -69,7 +70,7 @@ catalog of its own (plan D10)."""
 @dataclass
 class InteractiveSession:
     session_id: str
-    identity: IdentityKey
+    identity: IdentityRef
     ctx: ContextRef
     lease_id: LeaseId
     tier: str
@@ -105,7 +106,7 @@ async def open_interactive_session(
     docstring. `ephemeral.py`'s one-shot scrape identities are the case that
     wants the actual `TEMPORARY` default instead."""
 
-    identity = IdentityKey(tenant=tenant, domain=domain, name=name, kind=ProfileKind.DEFAULT)
+    identity = identity_for(tenant, domain, name, kind=ProfileKind.DEFAULT)
     owner = f"{tenant}:{name}"
 
     async def _opener() -> ContextRef:

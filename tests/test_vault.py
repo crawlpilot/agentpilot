@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from cryptography.fernet import Fernet
 
+from agentpilot.control.identity import identity_for
 from agentpilot.identity.vault import Vault
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
-IDENTITY = IdentityKey(tenant="acme", domain="example.com", name="alice")
+IDENTITY = identity_for("acme", "example.com", "alice")
 
 STATE = StorageState(
     cookies=[{"name": "sid", "value": "abc123", "domain": "example.com"}],

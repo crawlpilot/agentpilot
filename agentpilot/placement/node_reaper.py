@@ -27,12 +27,12 @@ from redis.asyncio import Redis
 from redis.asyncio.lock import Lock
 from redis.exceptions import LockError
 
+from agentpilot.control.identity import identity_for
 from agentpilot.observability.metrics import (
     node_reaper_nodes_reaped_total,
     node_reaper_sessions_reclaimed_total,
 )
 from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.identity import IdentityKey
 
 log = structlog.get_logger(__name__)
 
@@ -111,11 +111,7 @@ class NodeReaper:
         for session_id in session_ids:
             raw = await self._redis.hgetall(f"session:{session_id}")
             if raw:
-                identity = IdentityKey(
-                    tenant=_decode(raw.get(b"tenant", b"")),
-                    domain=_decode(raw.get(b"domain", b"")),
-                    name=_decode(raw.get(b"name", b"")),
-                )
+                identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
                 await self._registry.evict(identity)
                 await self._clear_stale_affinity(
                     keys=[f"affinity:{identity.slug()}"], args=[node_id]

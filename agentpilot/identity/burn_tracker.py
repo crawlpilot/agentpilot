@@ -20,7 +20,7 @@ and clearing this counter, so its next open is a clean first-visit browser.
 from __future__ import annotations
 
 from agentpilot.policy import StateStore
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 
 MAX_WARNINGS = 8
 """Retire threshold -- Pulsar's `PRIVACY_MAX_WARNINGS`. Must stay in step with
@@ -43,13 +43,13 @@ class BurnTracker:
     def __init__(self, store: StateStore) -> None:
         self._store = store
 
-    def _key(self, identity: IdentityKey) -> str:
+    def _key(self, identity: IdentityRef) -> str:
         return f"{_KEY_PREFIX}{identity.slug()}"
 
-    def _minor_key(self, identity: IdentityKey) -> str:
+    def _minor_key(self, identity: IdentityRef) -> str:
         return f"{_KEY_PREFIX}{identity.slug()}:minor"
 
-    async def record_block(self, identity: IdentityKey, weight: int) -> int:
+    async def record_block(self, identity: IdentityRef, weight: int) -> int:
         """Add a block's weight; returns the new warning total."""
         if weight <= 0:
             return await self.warnings(identity)
@@ -58,7 +58,7 @@ class BurnTracker:
         await self._store.expire(key, _TTL_SECONDS)
         return total
 
-    async def record_minor_block(self, identity: IdentityKey) -> int:
+    async def record_minor_block(self, identity: IdentityRef) -> int:
         """Record a soft (CRAWL-scope) failure as a minor warning. Every
         `MINOR_WARNING_FACTOR` minor warnings convert to one real warning
         (resetting the minor counter). Returns the current real-warning total."""
@@ -70,7 +70,7 @@ class BurnTracker:
             return await self.record_block(identity, 1)
         return await self.warnings(identity)
 
-    async def record_success(self, identity: IdentityKey) -> int:
+    async def record_success(self, identity: IdentityRef) -> int:
         """Self-heal: decrement one warning, floored at zero."""
         key = self._key(identity)
         total = await self._store.incr_by(key, -1)
@@ -81,11 +81,11 @@ class BurnTracker:
             await self._store.expire(key, _TTL_SECONDS)
         return total
 
-    async def warnings(self, identity: IdentityKey) -> int:
+    async def warnings(self, identity: IdentityRef) -> int:
         return await self._store.get_int(self._key(identity)) or 0
 
-    async def is_burned(self, identity: IdentityKey) -> bool:
+    async def is_burned(self, identity: IdentityRef) -> bool:
         return await self.warnings(identity) >= MAX_WARNINGS
 
-    async def reset(self, identity: IdentityKey) -> None:
+    async def reset(self, identity: IdentityRef) -> None:
         await self._store.delete(self._key(identity), self._minor_key(identity))

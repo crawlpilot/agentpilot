@@ -24,6 +24,6 @@ class ProxyEndpoint:
     declares it. Used to keep the pinned fingerprint's timezone/locale
     consistent with the egress geo (`identity.fingerprint.generate(region=...)`)."""
     sticky_key: Hashable | None = None
-    """Defaults to the owning IdentityKey at assignment time (explicit form of
+    """Defaults to the owning IdentityRef at assignment time (explicit form of
     the same get-or-create sticky-proxy-pinning pattern used by a prior
     internal system)."""

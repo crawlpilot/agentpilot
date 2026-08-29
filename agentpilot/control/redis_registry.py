@@ -36,9 +36,10 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from agentpilot.control.identity import identity_for
 from agentpilot.session.registry import Opener
 from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
@@ -48,12 +49,12 @@ def _load(name: str) -> str:
     return (_LUA_DIR / name).read_text()
 
 
-def active_key(identity: IdentityKey) -> str:
+def active_key(identity: IdentityRef) -> str:
     return f"active:{identity.slug()}"
 
 
 def _to_context_ref(
-    identity: IdentityKey, context_id: str, pid_raw: str, node_id: str, state: ContextState
+    identity: IdentityRef, context_id: str, pid_raw: str, node_id: str, state: ContextState
 ) -> ContextRef:
     pid = int(pid_raw) if pid_raw else None
     return ContextRef(
@@ -72,7 +73,7 @@ class RedisRegistry:
         self._evict = redis.register_script(_load("evict.lua"))
 
     async def acquire(
-        self, identity: IdentityKey, owner: str, ttl_seconds: float, opener: Opener
+        self, identity: IdentityRef, owner: str, ttl_seconds: float, opener: Opener
     ) -> tuple[ContextRef, Lease]:
         key = active_key(identity)
         now = time.time()
@@ -149,11 +150,7 @@ class RedisRegistry:
             raise KeyError(f"lease {lease_id!r} was reclaimed") from exc
 
         raw = await self._redis.hgetall(key)
-        identity = IdentityKey(
-            tenant=_decode(raw.get(b"tenant", b"")),
-            domain=_decode(raw.get(b"domain", b"")),
-            name=_decode(raw.get(b"name", b"")),
-        )
+        identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
         ctx = _to_context_ref(
             identity,
             _decode(raw.get(b"context_id", b"")),
@@ -177,17 +174,13 @@ class RedisRegistry:
             return
         await self._release(keys=[_decode(key_raw)], args=[lease_id, time.time()])
 
-    async def snapshot(self) -> list[tuple[IdentityKey, ContextRef, Lease | None, float | None]]:
-        results: list[tuple[IdentityKey, ContextRef, Lease | None, float | None]] = []
+    async def snapshot(self) -> list[tuple[IdentityRef, ContextRef, Lease | None, float | None]]:
+        results: list[tuple[IdentityRef, ContextRef, Lease | None, float | None]] = []
         async for key in self._redis.scan_iter(match="active:*"):
             raw = await self._redis.hgetall(key)
             if not raw:
                 continue
-            identity = IdentityKey(
-                tenant=_decode(raw.get(b"tenant", b"")),
-                domain=_decode(raw.get(b"domain", b"")),
-                name=_decode(raw.get(b"name", b"")),
-            )
+            identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
             state = ContextState(_decode(raw.get(b"state", b"idle")))
             ctx = _to_context_ref(
                 identity,
@@ -214,7 +207,7 @@ class RedisRegistry:
             results.append((identity, ctx, lease, released_at))
         return results
 
-    async def evict(self, identity: IdentityKey) -> ContextRef | None:
+    async def evict(self, identity: IdentityRef) -> ContextRef | None:
         key = active_key(identity)
         context_id, pid_raw, node_id = await self._evict(keys=[key])
         context_id = _decode(context_id)
@@ -224,7 +217,7 @@ class RedisRegistry:
             identity, context_id, _decode(pid_raw), _decode(node_id), ContextState.IDLE
         )
 
-    async def force_release(self, identity: IdentityKey) -> None:
+    async def force_release(self, identity: IdentityRef) -> None:
         await self._force_release(keys=[active_key(identity)], args=[time.time()])
 
 

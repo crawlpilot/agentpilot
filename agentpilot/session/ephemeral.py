@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import structlog
 
 from agentpilot.config import DEFAULTS, BrowserConfig
+from agentpilot.control.identity import identity_for
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import (
@@ -49,7 +50,7 @@ from agentpilot.spi.actions import ActionResult, ExtractFormat
 from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.identity import IdentityKey, ProfileKind
+from agentpilot.spi.identity import IdentityRef, ProfileKind
 from agentpilot.spi.lease import ContextRef
 from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 from agentpilot.tiers import TierPolicy
@@ -224,17 +225,15 @@ async def run_ephemeral_scrape(
     warm = session_name is not None
     owner = f"{tenant}:scrape"
 
-    def _make_identity() -> IdentityKey:
+    def _make_identity() -> IdentityRef:
         # A fresh throwaway identity per attempt (new proxy pick + fingerprint);
         # a warm identity is fixed by session_name and reused across visits.
         if warm:
             assert session_name is not None  # narrows for the type checker
-            return IdentityKey(
-                tenant=tenant, domain=domain, name=session_name, kind=ProfileKind.DEFAULT
-            )
-        return IdentityKey(tenant=tenant, domain=domain, name=f"scrape-{uuid.uuid4().hex}")
+            return identity_for(tenant, domain, session_name, kind=ProfileKind.DEFAULT)
+        return identity_for(tenant, domain, f"scrape-{uuid.uuid4().hex}")
 
-    async def _opener(identity: IdentityKey, attempt_tier: str) -> ContextRef:
+    async def _opener(identity: IdentityRef, attempt_tier: str) -> ContextRef:
         # Protected rungs want a residential exit (datacenter IPs are the
         # dominant Akamai edge-block); the proxy config resolves that per-tenant
         # with a fallback to whatever pool is configured.
@@ -351,7 +350,7 @@ async def run_ephemeral_scrape(
     block_resource_types = tuple(sorted(_block_types)) or None
     block_hosts = tuple(options.block_hosts) or None
 
-    async def _http_attempt(identity: IdentityKey) -> ActionResult:
+    async def _http_attempt(identity: IdentityRef) -> ActionResult:
         # The `basic` rung: a plain HTTP GET, no browser. Coherent UA + Client
         # Hints from a pinned fingerprint (httpx's default UA is an instant
         # block); proxy resolved the same way the browser path would. Raises
@@ -393,7 +392,7 @@ async def run_ephemeral_scrape(
             timeout_ms=options.timeout_ms,
         )
 
-    async def _attempt(identity: IdentityKey, attempt_tier: str) -> tuple[ActionResult, str]:
+    async def _attempt(identity: IdentityRef, attempt_tier: str) -> tuple[ActionResult, str]:
         # One acquire -> execute -> teardown. Raises `ChallengeDetected` (from
         # the driver's post-navigate body check) straight through the finally,
         # so the caller can escalate. Returns `(result, node_id)`.
@@ -423,7 +422,7 @@ async def run_ephemeral_scrape(
                 if not warm:
                     delete_profile_dir(profiles_root, identity)
 
-    async def _retire_warm(identity: IdentityKey) -> None:
+    async def _retire_warm(identity: IdentityRef) -> None:
         # A burned warm identity is started fresh: drop its cookies/profile,
         # clear its warning counter, AND rotate its pinned egress IP so the next
         # open is a clean first visit from a *different* exit -- Pulsar's PRIVACY
@@ -449,7 +448,7 @@ async def run_ephemeral_scrape(
     used_tier = tier
     used_node_id = "unknown"
     last_challenge: ChallengeDetected | None = None
-    used_identity: IdentityKey | None = None
+    used_identity: IdentityRef | None = None
     # Two nested loops mirror Pulsar's retry-scope split: the outer loop climbs
     # the tier ladder on a hard PRIVACY wall (fresh identity => new proxy +
     # fingerprint); the inner loop retries the *same* tier on a soft CRAWL-scope

@@ -12,7 +12,7 @@ import hashlib
 
 from agentpilot.identity.proxy_health import ProxyHealth
 from agentpilot.policy import ProxyProvider, StateStore, StaticProxies
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxy:"
@@ -35,7 +35,7 @@ def _serialize(proxy: ProxyEndpoint) -> str:
     )
 
 
-def _deserialize(raw: str, identity: IdentityKey) -> ProxyEndpoint:
+def _deserialize(raw: str, identity: IdentityRef) -> ProxyEndpoint:
     # Tolerate the pre-tier 6-field format alongside the current 8-field one so
     # a pin written before this change still deserializes.
     parts = raw.split(_SEP)
@@ -77,11 +77,11 @@ class ProxyPinner:
 
         return self._config.all_endpoints()
 
-    def _pick_from(self, identity: IdentityKey, pool: list[ProxyEndpoint]) -> ProxyEndpoint:
+    def _pick_from(self, identity: IdentityRef, pool: list[ProxyEndpoint]) -> ProxyEndpoint:
         digest = hashlib.sha256(identity.slug().encode()).hexdigest()
         return pool[int(digest, 16) % len(pool)]
 
-    def _pick(self, identity: IdentityKey, tier: str | None = None) -> ProxyEndpoint:
+    def _pick(self, identity: IdentityRef, tier: str | None = None) -> ProxyEndpoint:
         """Deterministic hash-based pick from the pool resolved for this
         identity's tenant + requested `tier`, not round-robin: needs no shared
         counter, and concurrent first-assignments for *different* identities
@@ -90,7 +90,7 @@ class ProxyPinner:
 
         return self._pick_from(identity, self._config.endpoints_for(identity, tier))
 
-    async def _healthy_pick(self, identity: IdentityKey, tier: str | None) -> ProxyEndpoint:
+    async def _healthy_pick(self, identity: IdentityRef, tier: str | None) -> ProxyEndpoint:
         """Pick, but skip retired proxies (`ProxyHealth`). Falls back to the
         full pool if every candidate is retired -- a burned exit beats no exit."""
 
@@ -102,7 +102,7 @@ class ProxyPinner:
         return self._pick_from(identity, pool)
 
     async def get_or_assign(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> ProxyEndpoint:
         key = f"{_KEY_PREFIX}{identity.slug()}"
         # If a previously pinned proxy has since retired, drop the pin so a fresh
@@ -123,7 +123,7 @@ class ProxyPinner:
         return _deserialize(raw, identity)
 
     async def rotate(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> ProxyEndpoint | None:
         """Rotate a warm identity's pinned egress to a *different* endpoint --
         the piece that makes a FRESH/burn rotation actually change the exit IP
@@ -151,13 +151,13 @@ class ProxyPinner:
         await self._store.hset(key, _FIELD, new_ser)
         return _deserialize(new_ser, identity)
 
-    async def release(self, identity: IdentityKey) -> None:
+    async def release(self, identity: IdentityRef) -> None:
         """Drop a warm identity's proxy pin entirely (next `get_or_assign`
         re-picks from the pool). Used when an identity is torn down for good."""
         await self._store.delete(f"{_KEY_PREFIX}{identity.slug()}")
 
     async def pick_ephemeral(
-        self, identity: IdentityKey, tier: str | None = None
+        self, identity: IdentityRef, tier: str | None = None
     ) -> ProxyEndpoint:
         """For a one-shot identity (`identity.is_temporary`, e.g.
         `routes/scrape.py`'s per-call minted identity) only -- `get_or_assign`

@@ -1,9 +1,9 @@
-"""Resolves an `IdentityKey` to its on-disk profile directory, with a
-defense-in-depth path-traversal check independent of `IdentityKey.slug()`'s
+"""Resolves an `IdentityRef` to its on-disk profile directory, with a
+defense-in-depth path-traversal check independent of `IdentityRef.slug()`'s
 own per-segment sanitization.
 
 `slug()` already rejects `..`/`/`/`\\` in any single segment at
-*construction* time, so a crafted `IdentityKey` can't produce a `../`
+*construction* time, so a crafted `IdentityRef` can't produce a `../`
 escape today. This module is the second gate, checked again at the point a
 profile dir is actually resolved for disk I/O -- the standard "validate at
 the boundary, verify at the point of use" pattern, so a future change that
@@ -19,7 +19,7 @@ from pathlib import Path
 import structlog
 
 from agentpilot import config
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 
 log = structlog.get_logger(__name__)
 
@@ -28,7 +28,7 @@ class PathTraversalError(ValueError):
     pass
 
 
-def resolve_profile_dir(profiles_root: Path, identity: IdentityKey) -> Path:
+def resolve_profile_dir(profiles_root: Path, identity: IdentityRef) -> Path:
     tenant_root = (profiles_root / identity.tenant).resolve()
     resolved = (profiles_root / identity.slug()).resolve()
     try:
@@ -120,7 +120,7 @@ def seed_profile_dir(profile_dir: Path, prototype: Path) -> bool:
     return True
 
 
-def delete_profile_dir(profiles_root: Path, identity: IdentityKey) -> None:
+def delete_profile_dir(profiles_root: Path, identity: IdentityRef) -> None:
     """For an ephemeral (`/v1/scrape`) identity only, right after
     `registry.evict()` + `driver.close()`: a warm/interactive identity's
     profile dir is meant to outlive its context (that's the entire point of

@@ -37,7 +37,7 @@ def _unique_name(label: str) -> str:
     reopen, and the reaper eventually destroys genuinely idle ones -- so a
     fixed name is no longer unsafe. Kept anyway: a fresh identity per run
     means concurrent/repeated test runs against the same long-lived compose
-    stack never contend for the same `IdentityKey`'s <=1-ACTIVE lock.
+    stack never contend for the same `IdentityRef`'s <=1-ACTIVE lock.
     """
 
     return f"{label}-{uuid.uuid4().hex[:8]}"

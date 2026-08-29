@@ -8,6 +8,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from agentpilot.control.identity import identity_for
 from agentpilot.session.registry import Registry
 from agentpilot.session.warm_pool import KeepaliveLoop, WarmPool, tier_key
 from agentpilot.spi.lease import ContextRef, ContextState
@@ -152,11 +153,10 @@ async def test_drain_destroys_ready(tmp_path: Path) -> None:
 
 
 async def test_keepalive_evicts_dead_idle_registry_context(tmp_path: Path) -> None:
-    from agentpilot.spi.identity import IdentityKey
 
     driver = FakeDriver()
     registry = Registry()
-    identity = IdentityKey(tenant="t", domain="d", name="n")
+    identity = identity_for("t", "d", "n")
 
     async def opener() -> ContextRef:
         return await driver.open(identity, tmp_path, None, False, None)
@@ -173,11 +173,10 @@ async def test_keepalive_evicts_dead_idle_registry_context(tmp_path: Path) -> No
 
 
 async def test_keepalive_keeps_live_idle_context(tmp_path: Path) -> None:
-    from agentpilot.spi.identity import IdentityKey
 
     driver = FakeDriver()
     registry = Registry()
-    identity = IdentityKey(tenant="t", domain="d", name="n")
+    identity = identity_for("t", "d", "n")
 
     async def opener() -> ContextRef:
         return await driver.open(identity, tmp_path, None, False, None)

@@ -31,7 +31,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
         "ScrollAction", "NewTabAction", "CloseTabAction", "SwitchTabAction",
         "ListTabsAction", "TabInfo", "ActionResult",
     ),
-    "agentpilot.spi.identity": ("ProfileKind", "IdentityKey"),
+    "agentpilot.spi.identity": ("ProfileKind", "IdentityRef"),
     "agentpilot.spi.lease": ("ContextState", "ContextRef", "Lease"),
     "agentpilot.spi.scrape": ("ExtractConfig", "ScrapeOptions", "DocumentMetadata", "Document"),
     "agentpilot.spi.egress": ("EgressPolicy",),

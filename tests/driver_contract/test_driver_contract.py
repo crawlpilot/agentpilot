@@ -17,6 +17,7 @@ import pytest
 import websockets
 from pytest_httpserver import HTTPServer
 
+from agentpilot.control.identity import identity_for
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.spi.actions import (
     ClickAction,
@@ -28,7 +29,6 @@ from agentpilot.spi.actions import (
 )
 from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.errors import StaleRefError
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef
 
 ARTICLE_HTML = """<html><body>
@@ -320,7 +320,7 @@ async def test_export_restore_round_trips_cookies_and_multi_origin_localstorage(
 
 
 async def test_close_is_idempotent(driver: PatchrightDriver, tmp_path) -> None:
-    identity = IdentityKey(tenant="t", domain="example.com", name="idempotent-close")
+    identity = identity_for("t", "example.com", "idempotent-close")
     ctx = await driver.open(
         identity, tmp_path / "profile", None, headful=False, egress=EgressPolicy()
     )
@@ -330,7 +330,7 @@ async def test_close_is_idempotent(driver: PatchrightDriver, tmp_path) -> None:
 
 
 async def test_health_reflects_a_crashed_context(driver: PatchrightDriver, tmp_path) -> None:
-    identity = IdentityKey(tenant="t", domain="example.com", name="crash-test")
+    identity = identity_for("t", "example.com", "crash-test")
     ctx = await driver.open(
         identity, tmp_path / "profile", None, headful=False, egress=EgressPolicy()
     )

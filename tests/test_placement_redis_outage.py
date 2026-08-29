@@ -8,10 +8,10 @@ from __future__ import annotations
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
+from agentpilot.control.identity import identity_for
 from agentpilot.placement.placer import SessionPlacer
-from agentpilot.spi.identity import IdentityKey
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
+IDENTITY = identity_for("t", "example.com", "a")
 
 
 class _UnreachableRedis:

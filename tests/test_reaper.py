@@ -9,9 +9,10 @@ import asyncio
 import pytest
 
 import agentpilot.session.reaper as reaper_module
+from agentpilot.control.identity import identity_for
 from agentpilot.session.reaper import Reaper
 from agentpilot.session.registry import Registry
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, ContextState
 
 
@@ -23,12 +24,12 @@ class FakeDriver:
         self.closed.append(ctx.context_id)
 
 
-def _identity(name: str) -> IdentityKey:
-    return IdentityKey(tenant="t", domain="example.com", name=name)
+def _identity(name: str) -> IdentityRef:
+    return identity_for("t", "example.com", name)
 
 
 async def _make_idle_entry(
-    registry: Registry, identity: IdentityKey, pid: int | None = None
+    registry: Registry, identity: IdentityRef, pid: int | None = None
 ) -> ContextRef:
     async def opener() -> ContextRef:
         return ContextRef(

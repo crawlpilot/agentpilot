@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import Registry
 from agentpilot.spi.errors import ContextCrashed, LeaseConflict
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 
-_IDENTITY = IdentityKey(tenant="t", domain="d", name="n")
+_IDENTITY = identity_for("t", "d", "n")
 
 
 class FakeDriver:

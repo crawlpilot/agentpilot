@@ -22,10 +22,10 @@ import urllib.parse
 
 import pytest_asyncio
 
+from agentpilot.control.identity import identity_for
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.identity.fingerprint import generate
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef
 
 IDENTITY_SLUG = "t/example.com/fingerprint-test"
@@ -58,7 +58,7 @@ async def fingerprinted_ctx(driver: PatchrightDriver, tmp_path) -> ContextRef:
     """A context opened the way a protected tier opens one."""
 
     fp = generate(IDENTITY_SLUG)
-    identity = IdentityKey(tenant="t", domain="example.com", name="fingerprint-test")
+    identity = identity_for("t", "example.com", "fingerprint-test")
     ctx = await driver.open(
         identity,
         tmp_path / "profile",

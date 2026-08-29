@@ -6,10 +6,10 @@ to already be `en-US`/`America/*` can't make this pass by accident."""
 
 from __future__ import annotations
 
+from agentpilot.control.identity import identity_for
 from agentpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.spi.actions import ExecuteJsAction
 from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityKey
 
 _PROBE = (
     "() => [navigator.language, "
@@ -18,7 +18,7 @@ _PROBE = (
 
 
 async def test_open_applies_locale_and_timezone(driver: PatchrightDriver, tmp_path) -> None:
-    identity = IdentityKey(tenant="t", domain="example.com", name="loc-test")
+    identity = identity_for("t", "example.com", "loc-test")
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir()
     ctx = await driver.open(
@@ -46,7 +46,7 @@ async def test_open_without_overrides_leaves_browser_defaults(
     reports whatever the browser/host naturally is, and (critically) doesn't
     error on the omitted-kwarg path."""
 
-    identity = IdentityKey(tenant="t", domain="example.com", name="default-loc")
+    identity = identity_for("t", "example.com", "default-loc")
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir()
     ctx = await driver.open(identity, profile_dir, None, headful=False, egress=EgressPolicy())

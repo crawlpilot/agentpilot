@@ -13,12 +13,12 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.lease import ContextRef, Lease, LeaseId
 
 
 def new_lease(
-    identity: IdentityKey, owner: str, ttl_seconds: float, context_ref: ContextRef
+    identity: IdentityRef, owner: str, ttl_seconds: float, context_ref: ContextRef
 ) -> Lease:
     return Lease(
         lease_id=LeaseId(str(uuid.uuid4())),

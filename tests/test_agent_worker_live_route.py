@@ -7,8 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from agentpilot.control.identity import identity_for
 from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 
 
 @dataclass
@@ -19,7 +20,7 @@ class _Ctx:
 @dataclass
 class _Session:
     ctx: _Ctx
-    identity: IdentityKey
+    identity: IdentityRef
 
 
 class _RecordingPlacer:
@@ -32,7 +33,7 @@ class _RecordingPlacer:
         self,
         session_id: str,
         node_id: str,
-        identity: IdentityKey,
+        identity: IdentityRef,
         tier: str,
         ttl_seconds: float,
     ) -> None:
@@ -61,7 +62,7 @@ def _loop(placer: Any) -> AgentWorkerLoop:
 def _session() -> _Session:
     return _Session(
         ctx=_Ctx(node_id="node-a"),
-        identity=IdentityKey(tenant="t", domain="example.com", name="agent-run-1"),
+        identity=identity_for("t", "example.com", "agent-run-1"),
     )
 
 

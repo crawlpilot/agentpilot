@@ -19,7 +19,7 @@ from typing import Any
 
 from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
-from agentpilot.spi.identity import IdentityKey
+from agentpilot.spi.identity import IdentityRef
 from agentpilot.spi.proxy import ProxyEndpoint
 from agentpilot.tiers import TierPolicy
 
@@ -43,7 +43,7 @@ class StealthProfile:
 
 
 def resolve(
-    identity: IdentityKey,
+    identity: IdentityRef,
     tier: str,
     *,
     proxy: ProxyEndpoint | None = None,

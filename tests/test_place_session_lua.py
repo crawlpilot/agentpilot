@@ -8,11 +8,11 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.placement.placer import SessionPlacer
 from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
-from agentpilot.spi.identity import IdentityKey
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
+IDENTITY = identity_for("t", "example.com", "a")
 
 
 @pytest.fixture

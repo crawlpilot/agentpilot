@@ -6,13 +6,13 @@ from __future__ import annotations
 import fakeredis
 import pytest
 
+from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_registry import RedisRegistry
 from agentpilot.placement.node_registry import NodeRegistry
-from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.lease import ContextRef, ContextState
 
-IDENTITY = IdentityKey(tenant="t", domain="example.com", name="a")
-OTHER_IDENTITY = IdentityKey(tenant="t", domain="example.com", name="b")
+IDENTITY = identity_for("t", "example.com", "a")
+OTHER_IDENTITY = identity_for("t", "example.com", "b")
 
 
 @pytest.fixture
