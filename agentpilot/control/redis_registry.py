@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
@@ -52,7 +54,7 @@ def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:
     return parts.tenant, parts.domain, parts.name
 
 
-def _identity_from_hash(raw: dict[bytes, bytes]) -> IdentityRef:
+def _identity_from_hash(raw: Mapping[Any, Any]) -> IdentityRef:
     """Rebuild an identity from the persisted hash fields -- the inverse of
     `_identity_fields`, and the only place this registry knows the key is a
     `tenant/domain/name` triple."""

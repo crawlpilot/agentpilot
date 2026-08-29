@@ -30,7 +30,6 @@ from pathlib import Path
 
 import structlog
 
-from agentpilot.control.identity import identity_for
 from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
 from agentpilot.session.reaper import read_meminfo_used_pct
 from agentpilot.session.registry import RegistryProtocol
@@ -190,7 +189,11 @@ class WarmPool:
 
     async def _open(self, proxy: ProxyEndpoint | None) -> _Pooled | None:
         host = proxy.host if proxy is not None else "direct"
-        identity = identity_for(_WARM_SCOPE, host, uuid.uuid4().hex, kind=ProfileKind.TEMPORARY
+        # Composed directly rather than through the control plane: a pooled
+        # context belongs to no caller, so there is no tenant to compose from.
+        # `_WARM_SCOPE` keeps these under their own profile-dir subtree.
+        identity = IdentityRef(
+            key=f"{_WARM_SCOPE}/{host}/{uuid.uuid4().hex}", kind=ProfileKind.TEMPORARY
         )
         profile_dir = resolve_profile_dir(self._profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)
