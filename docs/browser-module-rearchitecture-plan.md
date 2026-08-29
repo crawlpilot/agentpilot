@@ -867,9 +867,42 @@ Judgement calls:
 13, both at baseline. `include_external_packages = true` was needed for
 import-linter to see external edges.
 
-**Still outstanding in Phase 3:** 3b (`ProxyProvider`/`PrototypeProvider`) and 3c
-(`IdentityKey` → opaque `IdentityRef`, including moving tenant auth off the
-identity object).
+**3b status: done.** Both provider seams exist, with inert defaults, and the
+implementations moved to the control plane.
+
+| Moved | To | Why |
+|---|---|---|
+| `identity/proxy_config.py` (`ProxyConfig`, keyed `(tenant, tier)`) | `control/proxy_config.py`, now a `ProxyProvider` | A tenant is a customer — billing and segmentation, not browsing (D10) |
+| `profile_store.prototype_dir_for` (per-origin directory scan) | `control/prototypes.DirectoryPrototypes`, a `PrototypeProvider` | It is a *catalog*: it knows prototypes are directories on a filesystem named after origins. That is the consumer's data model |
+
+`policy/providers.py` defines `ProxyProvider` and `PrototypeProvider` plus the
+shipped defaults `StaticProxies` (a flat, tenant-blind endpoint list) and
+`NullPrototypes` (seeding off). `profile_store` keeps only the mechanics — the
+path-traversal guard and the directory copy.
+
+Judgement calls:
+
+- **`ProxyProvider.endpoints_for` takes the whole identity, not a tenant
+  string.** The browser layer must not know an identity *has* a tenant; the
+  control-plane implementation reads it off there. This deleted three of the
+  eight `identity.tenant` accesses in the codebase, so 3c is now smaller than
+  sizing suggested.
+- **`ProxyPinner` accepts any `ProxyProvider` or a plain list**, wrapped in
+  `StaticProxies`. The old `isinstance(config, ProxyConfig)` branch is gone —
+  it could not have survived the split, since `ProxyConfig` is no longer
+  something the browser layer can name.
+- **A new contract forbids the browser layer importing `agentpilot.control`
+  at all**, so the tenant table and the prototype catalog cannot be reached
+  around the seam.
+
+**Gates:** 783 passed / 65 skipped (was 780); **20 contracts kept, 0 broken**
+(+1); mypy 11 at baseline; ruff **12**, one *below* baseline — the pre-existing
+unsorted import block in `jobs/recipe_worker_loop.py` was fixed as a side effect
+of editing that file's imports for the provider threading, which is legitimate
+since the file is part of this change.
+
+**Still outstanding in Phase 3:** 3c (`IdentityKey` → opaque `IdentityRef`,
+including moving tenant auth off the identity object).
 
 ### Phase 4 — Extension system (D12)
 

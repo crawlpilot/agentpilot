@@ -33,13 +33,13 @@ from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
-    prototype_dir_for,
     resolve_profile_dir,
     seed_profile_dir,
 )
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.llm import schema_extract
 from agentpilot.llm.client import LLMConfig
+from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.session import browser_headers, stealth_profile
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
@@ -55,6 +55,10 @@ from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
 from agentpilot.tiers import TierPolicy
 
 log = structlog.get_logger(__name__)
+
+_NO_PROTOTYPES = NullPrototypes()
+"""Seeding is off unless a caller supplies a catalog -- the library ships no
+catalog of its own (plan D10)."""
 
 # The `basic` HTTP fast-path fetcher seam (dependency-injected for tests). Must
 # match `http_fetch.fetch_via_http`'s keyword signature.
@@ -197,6 +201,7 @@ async def run_ephemeral_scrape(
     retry_delay_base_s: float = _DEFAULT_RETRY_DELAY_S,
     http_fetcher: HttpFetcher | None = None,
     browser_config: BrowserConfig = DEFAULTS,
+    prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -274,7 +279,7 @@ async def run_ephemeral_scrape(
         # throwaway identity is born with a plausible history instead of being
         # the cookieless first-visit browser this module's docstring flags as
         # a bot signal. No-op when unset.
-        prototype = prototype_dir_for(domain, root=browser_config.profiles.prototype_root)
+        prototype = prototype_provider.prototype_for(domain)
         if prototype is not None and seed_profile_dir(profile_dir, prototype):
             log.info("ephemeral.profile_seeded", domain=domain, prototype=str(prototype))
         # Shared with `session/interactive.py` so a tier means the same thing on

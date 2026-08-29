@@ -43,7 +43,10 @@ def resolve_profile_dir(profiles_root: Path, identity: IdentityKey) -> Path:
 
 PROTOTYPE_ENV = config.PROTOTYPE_ENV
 """Re-exported for callers that still name it here. The variable is *read* by
-`config.ProfileConfig.from_env()` at a composition root, never by this module."""
+`config.ProfileConfig.from_env()` at a composition root, never by this module.
+The prototype *catalog* it points at is resolved by
+`control.prototypes.DirectoryPrototypes`, behind `policy.PrototypeProvider` --
+this module keeps only the mechanics (path-traversal guard, directory copy)."""
 """Root holding hand-warmed Chrome profiles to seed new identities from.
 
 Layout, checked most-specific first:
@@ -84,29 +87,6 @@ _SKIP_ENTRIES = frozenset(
         "GraphiteDawnCache",
     }
 )
-
-
-def prototype_dir_for(domain: str, *, root: Path | None = None) -> Path | None:
-    """The prototype profile to seed a `domain` identity from, if any.
-
-    Per-site first, then `default/`. A per-site prototype is what makes this
-    worth doing at all: the cookies that matter (`_abck`, `datadome`) are
-    origin-scoped, so a profile warmed on one retailer carries nothing useful
-    for another -- only the generic "this browser has a history" signal.
-
-    `root=None` disables seeding, exactly as an unset `PROTOTYPE_ENV` did
-    before. The environment is now read once by `config.ProfileConfig
-    .from_env()` at a composition root instead of here, so an embedding caller
-    can point at its own prototype tree without mutating process state.
-    """
-
-    if root is None:
-        return None
-
-    for candidate in (root / domain, root / "default"):
-        if candidate.is_dir():
-            return candidate
-    return None
 
 
 def seed_profile_dir(profile_dir: Path, prototype: Path) -> bool:

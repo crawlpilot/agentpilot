@@ -31,12 +31,12 @@ import structlog
 from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
-    prototype_dir_for,
     resolve_profile_dir,
     seed_profile_dir,
 )
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.observability.metrics import context_rotations_total
+from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.session import stealth_profile
 from agentpilot.session.acquire import acquire_validated
 from agentpilot.session.registry import RegistryProtocol
@@ -60,6 +60,10 @@ if TYPE_CHECKING:
     from agentpilot.identity.vault import Vault
 
 log = structlog.get_logger(__name__)
+
+_NO_PROTOTYPES = NullPrototypes()
+"""Seeding is off unless a caller supplies a catalog -- the library ships no
+catalog of its own (plan D10)."""
 
 
 @dataclass
@@ -93,6 +97,7 @@ async def open_interactive_session(
     locale: str | None = None,
     timezone_id: str | None = None,
     browser_config: BrowserConfig = DEFAULTS,
+    prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
 ) -> InteractiveSession:
     """`kind=ProfileKind.DEFAULT` (not the dataclass's own `TEMPORARY`
     default): an interactive, caller-named identity is kept warm across
@@ -115,7 +120,7 @@ async def open_interactive_session(
         # has its own earned cookies, and overwriting them with the
         # prototype's would discard exactly the reputation this is for.
         if is_fresh:
-            prototype = prototype_dir_for(domain, root=browser_config.profiles.prototype_root)
+            prototype = prototype_provider.prototype_for(domain)
             if prototype is not None and seed_profile_dir(profile_dir, prototype):
                 log.info(
                     "interactive_session.profile_seeded",

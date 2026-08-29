@@ -34,6 +34,7 @@ import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
+from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
 _ANY = "*"
@@ -68,6 +69,15 @@ class ProxyConfig:
     @property
     def is_empty(self) -> bool:
         return not any(self.pools.values())
+
+    def endpoints_for(
+        self, identity: IdentityKey, tier: str | None = None
+    ) -> list[ProxyEndpoint]:
+        """`policy.ProxyProvider`. The tenant is read off the identity *here*,
+        in the control plane, so the browser layer never has to know an identity
+        has one (plan D10)."""
+
+        return self.resolve(identity.tenant, tier)
 
     def resolve(self, tenant: str, tier: str | None) -> list[ProxyEndpoint]:
         """The candidate pool to pin from, most-specific first. Falls back

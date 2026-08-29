@@ -28,6 +28,7 @@ from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import ClaimedAgentRun, PostgresAgentStore
 from agentpilot.llm.client import LLMConfig
+from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.session.interactive import open_interactive_session, release_interactive_session
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.rotation import RotationConfig
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from agentpilot.session.interactive import Session
 
 log = structlog.get_logger(__name__)
+
+_NO_PROTOTYPES = NullPrototypes()
 
 
 class AgentWorkerLoop:
@@ -63,12 +66,14 @@ class AgentWorkerLoop:
         sessions: dict[str, Session] | None = None,
         placer: SessionPlacer | None = None,
         browser_config: BrowserConfig = DEFAULTS,
+        prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
         self._browser_config = browser_config
+        self._prototype_provider = prototype_provider
         self._proxy_pinner = proxy_pinner
         self._lease_ttl_seconds = lease_ttl_seconds
         # Live-view plumbing: `sessions` is the same in-process dict
@@ -128,6 +133,7 @@ class AgentWorkerLoop:
         live_session_id = f"agent-run-{run.run_id}"
         session = await open_interactive_session(
             browser_config=self._browser_config,
+            prototype_provider=self._prototype_provider,
             session_id=live_session_id,
             tenant=run.tenant,
             domain=run.domain,

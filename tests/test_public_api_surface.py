@@ -63,14 +63,20 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
     # Phase 3a: the shared-state seam. `InMemoryStateStore` is the shipped
     # default; `control.redis_store.RedisStateStore` is the injected one.
-    "agentpilot.policy": ("StateStore", "InMemoryStateStore"),
+    "agentpilot.policy": (
+        "StateStore", "InMemoryStateStore",
+        "ProxyProvider", "PrototypeProvider", "StaticProxies", "NullPrototypes",
+    ),
     # Phase 2: the only module in the browser layer that reads the environment.
     "agentpilot.config": (
         "BrowserConfig", "FingerprintConfig", "ProfileConfig",
         "ProxyHealthConfig", "EgressConfig", "ContentConfig", "DEFAULTS",
     ),
-    "agentpilot.identity.profile_store": ("resolve_profile_dir", "prototype_dir_for"),
-    "agentpilot.identity.proxy_config": ("ProxyConfig",),
+    # Phase 3b: `profile_store` keeps the mechanics; the prototype *catalog* and
+    # the tenant-keyed proxy table moved to `agentpilot.control`, behind the
+    # `policy` provider seams. Deliberate public-API edits, per this file's
+    # maintenance contract.
+    "agentpilot.identity.profile_store": ("resolve_profile_dir", "seed_profile_dir"),
 }
 
 _CASES = [(mod, name) for mod, names in PUBLIC_SURFACE.items() for name in names]

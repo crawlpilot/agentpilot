@@ -15,11 +15,8 @@ from pathlib import Path
 import pytest
 
 from agentpilot.config import ProfileConfig
-from agentpilot.identity.profile_store import (
-    PROTOTYPE_ENV,
-    prototype_dir_for,
-    seed_profile_dir,
-)
+from agentpilot.control.prototypes import DirectoryPrototypes
+from agentpilot.identity.profile_store import PROTOTYPE_ENV, seed_profile_dir
 from agentpilot.session.ephemeral import _build_batch, _site_root
 from agentpilot.spi.actions import NavigateAction
 from agentpilot.spi.scrape import ScrapeOptions
@@ -34,7 +31,7 @@ def _no_ambient_prototype(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_no_prototype_configured_is_a_no_op() -> None:
-    assert prototype_dir_for("www.zara.com") is None
+    assert DirectoryPrototypes(None).prototype_for("www.zara.com") is None
 
 
 def test_per_site_prototype_wins_over_default(tmp_path: Path) -> None:
@@ -44,17 +41,17 @@ def test_per_site_prototype_wins_over_default(tmp_path: Path) -> None:
     (tmp_path / "www.zara.com").mkdir()
     (tmp_path / "default").mkdir()
 
-    assert prototype_dir_for("www.zara.com", root=tmp_path) == tmp_path / "www.zara.com"
+    assert DirectoryPrototypes(tmp_path).prototype_for("www.zara.com") == tmp_path / "www.zara.com"
 
 
 def test_falls_back_to_default(tmp_path: Path) -> None:
     (tmp_path / "default").mkdir()
 
-    assert prototype_dir_for("www.hm.com", root=tmp_path) == tmp_path / "default"
+    assert DirectoryPrototypes(tmp_path).prototype_for("www.hm.com") == tmp_path / "default"
 
 
 def test_missing_root_resolves_to_nothing(tmp_path: Path) -> None:
-    assert prototype_dir_for("www.zara.com", root=tmp_path / "absent") is None
+    assert DirectoryPrototypes(tmp_path / "absent").prototype_for("www.zara.com") is None
 
 
 def test_env_var_drives_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,7 +64,7 @@ def test_env_var_drives_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     root = ProfileConfig.from_env().prototype_root
     assert root == tmp_path
-    assert prototype_dir_for("anything.test", root=root) == tmp_path / "default"
+    assert DirectoryPrototypes(root).prototype_for("anything.test") == tmp_path / "default"
 
 
 def test_blank_env_var_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,7 +80,7 @@ def test_no_root_disables_seeding() -> None:
     """`root=None` is the library default now: seeding is off unless a caller
     supplies a tree, rather than depending on the host's exported env."""
 
-    assert prototype_dir_for("www.zara.com") is None
+    assert DirectoryPrototypes(None).prototype_for("www.zara.com") is None
 
 
 # --- seeding ----------------------------------------------------------

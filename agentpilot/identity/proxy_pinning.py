@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import hashlib
 
-from agentpilot.identity.proxy_config import ProxyConfig
 from agentpilot.identity.proxy_health import ProxyHealth
-from agentpilot.policy import StateStore
+from agentpilot.policy import ProxyProvider, StateStore, StaticProxies
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
 
@@ -59,12 +58,12 @@ class ProxyPinner:
     def __init__(
         self,
         store: StateStore,
-        config: ProxyConfig | list[ProxyEndpoint],
+        config: ProxyProvider | list[ProxyEndpoint],
         health: ProxyHealth | None = None,
     ) -> None:
-        # Accept a `ProxyConfig` (tier/tenant-aware) or a plain endpoint list
-        # (back-compat -- wrapped as the `("*","*")` default pool).
-        cfg = config if isinstance(config, ProxyConfig) else ProxyConfig.from_flat(config)
+        # Accept any `ProxyProvider` (the platform's tenant/tier-aware one) or a
+        # plain endpoint list, wrapped in the tenant-blind default.
+        cfg = config if not isinstance(config, list) else StaticProxies(config)
         if cfg.is_empty:
             raise ValueError("ProxyPinner requires a non-empty proxy config")
         self._store = store
@@ -89,13 +88,13 @@ class ProxyPinner:
         never contend since each only ever touches its own Redis key. Ignores
         retirement -- use `_healthy_pick` for the health-aware path."""
 
-        return self._pick_from(identity, self._config.resolve(identity.tenant, tier))
+        return self._pick_from(identity, self._config.endpoints_for(identity, tier))
 
     async def _healthy_pick(self, identity: IdentityKey, tier: str | None) -> ProxyEndpoint:
         """Pick, but skip retired proxies (`ProxyHealth`). Falls back to the
         full pool if every candidate is retired -- a burned exit beats no exit."""
 
-        pool = self._config.resolve(identity.tenant, tier)
+        pool = self._config.endpoints_for(identity, tier)
         if self._health is not None:
             healthy = [p for p in pool if not await self._health.is_retired(p)]
             if healthy:
@@ -136,7 +135,7 @@ class ProxyPinner:
         exists there's nothing to rotate to, so the pin is left as-is."""
 
         key = f"{_KEY_PREFIX}{identity.slug()}"
-        pool = self._config.resolve(identity.tenant, tier)
+        pool = self._config.endpoints_for(identity, tier)
         if not pool:
             return None
         if self._health is not None:

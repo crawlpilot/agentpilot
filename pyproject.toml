@@ -298,6 +298,28 @@ type = "forbidden"
 source_modules = ["agentpilot.policy"]
 forbidden_modules = ["agentpilot.control"]
 
+# Phase 3b: the browser layer asks the control plane questions through
+# `agentpilot.policy`; it must never reach the implementations directly. The
+# tenant-keyed proxy table and the prototype catalog both live in
+# `agentpilot.control` now, and a direct import from a browser-layer module
+# would put a customer concept (a tenant) and a storage layout (a directory
+# tree of prototypes) back inside the library.
+[[tool.importlinter.contracts]]
+name = "the browser layer never imports the control plane"
+type = "forbidden"
+source_modules = [
+    "agentpilot.spi",
+    "agentpilot.driver",
+    "agentpilot.identity",
+    "agentpilot.egress",
+    "agentpilot.extraction",
+    "agentpilot.dom",
+    "agentpilot.session",
+    "agentpilot.tiers",
+    "agentpilot.config",
+]
+forbidden_modules = ["agentpilot.control"]
+
 [[tool.importlinter.contracts]]
 name = "tiers and config are pure leaves"
 type = "forbidden"

@@ -50,10 +50,11 @@ if TYPE_CHECKING:
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
 from agentpilot.config import BrowserConfig
+from agentpilot.control.prototypes import DirectoryPrototypes
+from agentpilot.control.proxy_config import ProxyConfig
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.burn_tracker import BurnTracker
-from agentpilot.identity.proxy_config import ProxyConfig
 from agentpilot.identity.proxy_health import ProxyHealth
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
@@ -121,6 +122,12 @@ class Wiring:
         # proxy pinning (Phase 3). Redis-backed when configured; process-local
         # otherwise. `InMemoryStateStore` is correct for a single process ONLY
         # -- see `_assert_shared_state_for_worker()`.
+        # The prototype catalog: a platform-owned directory tree, injected as a
+        # `policy.PrototypeProvider`. The browser layer ships no catalog.
+        self.prototype_provider = DirectoryPrototypes(
+            self.browser_config.profiles.prototype_root
+        )
+
         self.state_store: StateStore = (
             RedisStateStore(self.redis) if self.redis is not None else InMemoryStateStore()
         )

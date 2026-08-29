@@ -13,6 +13,19 @@ its weighted-warning scoring, `ProxyHealth` keeps its jittered retirement cap,
 and `HSETNX` calls, which now go through `StateStore`.
 """
 
+from agentpilot.policy.providers import (
+    NullPrototypes,
+    PrototypeProvider,
+    ProxyProvider,
+    StaticProxies,
+)
 from agentpilot.policy.stores import InMemoryStateStore, StateStore
 
-__all__ = ["InMemoryStateStore", "StateStore"]
+__all__ = [
+    "InMemoryStateStore",
+    "NullPrototypes",
+    "PrototypeProvider",
+    "ProxyProvider",
+    "StateStore",
+    "StaticProxies",
+]

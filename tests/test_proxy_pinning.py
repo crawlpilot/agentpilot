@@ -109,7 +109,7 @@ async def test_pick_ephemeral_never_writes_a_pin() -> None:
 
 
 async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
-    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.control.proxy_config import ProxyConfig
 
     res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="US")
     dc = ProxyEndpoint(scheme="http", host="dc", port=2, tier="datacenter")
@@ -125,7 +125,7 @@ async def test_tier_aware_pick_selects_the_requested_tier_pool() -> None:
 
 
 async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:
-    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.control.proxy_config import ProxyConfig
 
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())
     res = ProxyEndpoint(scheme="http", host="res", port=1, tier="residential", country="IN")
@@ -137,7 +137,7 @@ async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:
 
 
 async def test_retired_proxy_is_skipped_and_a_pin_is_repinned() -> None:
-    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.control.proxy_config import ProxyConfig
     from agentpilot.identity.proxy_health import ProxyHealth
 
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())
@@ -157,7 +157,7 @@ async def test_retired_proxy_is_skipped_and_a_pin_is_repinned() -> None:
 
 
 async def test_pick_ephemeral_avoids_retired_proxies() -> None:
-    from agentpilot.identity.proxy_config import ProxyConfig
+    from agentpilot.control.proxy_config import ProxyConfig
     from agentpilot.identity.proxy_health import ProxyHealth
 
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())

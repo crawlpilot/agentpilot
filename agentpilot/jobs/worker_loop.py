@@ -38,6 +38,7 @@ from agentpilot.crawl.robots import fetch as fetch_robots
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_options
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
+from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.session.ephemeral import run_ephemeral_scrape
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.session.warm_pool import WarmPool
@@ -47,6 +48,8 @@ from agentpilot.spi.egress import EgressPolicy
 from agentpilot.spi.scrape import Document
 
 log = structlog.get_logger(__name__)
+
+_NO_PROTOTYPES = NullPrototypes()
 
 
 def _origin(url: str) -> str:
@@ -70,12 +73,14 @@ class CrawlWorkerLoop:
         stale_after_seconds: float = 120.0,
         warm_pool: WarmPool | None = None,
         browser_config: BrowserConfig = DEFAULTS,
+        prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
         self._browser_config = browser_config
+        self._prototype_provider = prototype_provider
         self._proxy_pinner = proxy_pinner
         self._warm_pool = warm_pool
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -152,6 +157,7 @@ class CrawlWorkerLoop:
 
         document, _screenshot = await run_ephemeral_scrape(
             browser_config=self._browser_config,
+            prototype_provider=self._prototype_provider,
             tenant=job.tenant,
             domain=domain,
             url=task.url,

@@ -21,9 +21,10 @@ from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore, RecipeOut
 from agentpilot.llm.client import LLMConfig
+from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.recipe.build import DEFAULT_BUILD_MAX_STEPS, build_recipe
-from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.codegen import generate_scraper_code
+from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.heal import check_and_heal
 from agentpilot.recipe.models import Recipe, RecipeRunResult
 from agentpilot.recipe.replay import replay_recipe
@@ -36,6 +37,8 @@ from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi.driver import BrowserDriver
 
 log = structlog.get_logger(__name__)
+
+_NO_PROTOTYPES = NullPrototypes()
 
 
 def _domain_from_url(url: str) -> str:
@@ -78,12 +81,14 @@ class RecipeWorkerLoop:
         stale_after_seconds: float = 120.0,
         build_max_steps: int = DEFAULT_BUILD_MAX_STEPS,
         browser_config: BrowserConfig = DEFAULTS,
+        prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
         self._browser_config = browser_config
+        self._prototype_provider = prototype_provider
         self._proxy_pinner = proxy_pinner
         self._lease_ttl_seconds = lease_ttl_seconds
         self._batch_size = batch_size
@@ -170,6 +175,7 @@ class RecipeWorkerLoop:
 
         session = await open_interactive_session(
             browser_config=self._browser_config,
+            prototype_provider=self._prototype_provider,
             session_id=f"recipe-run-{run.run_id}",
             tenant=run.tenant,
             domain=_domain_from_url(run.recipe.url_pattern),

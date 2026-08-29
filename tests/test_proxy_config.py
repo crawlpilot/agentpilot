@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from agentpilot.identity.proxy_config import ProxyConfig
+from agentpilot.control.proxy_config import ProxyConfig
 from agentpilot.spi.proxy import ProxyEndpoint
 
 
