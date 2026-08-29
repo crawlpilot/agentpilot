@@ -177,7 +177,7 @@ class RecipeWorkerLoop:
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
             session_id=f"recipe-run-{run.run_id}",
-            tenant=run.tenant,
+            scope=run.tenant,
             domain=_domain_from_url(run.recipe.url_pattern),
             name=f"recipe-run-{run.run_id}",
             tier="auto",

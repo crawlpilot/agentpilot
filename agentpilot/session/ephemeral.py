@@ -29,7 +29,6 @@ from urllib.parse import urlsplit
 import structlog
 
 from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.control.identity import identity_for
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import (
@@ -183,7 +182,7 @@ def _build_batch(
 
 async def run_ephemeral_scrape(
     *,
-    tenant: str,
+    scope: str,
     domain: str,
     url: str,
     options: ScrapeOptions,
@@ -217,25 +216,33 @@ async def run_ephemeral_scrape(
     deleted on teardown -- a cookie-less, first-visit browser every time,
     which is itself a bot signal to WAFs like Akamai. When a caller passes a
     stable `session_name`, the scrape instead reuses a *warm, persistent*
-    identity `(tenant, domain, session_name)` whose profile dir (cookies,
+    identity `(scope, domain, session_name)` whose profile dir (cookies,
     Chrome's own state) survives across calls -- so repeat scrapes of the
     same site look like a returning visitor. `locale`/`timezone_id` flow
     straight through to `driver.open()` for locale/timezone consistency."""
 
     warm = session_name is not None
-    owner = f"{tenant}:scrape"
+    owner = f"{scope}:scrape"
 
     def _make_identity() -> IdentityRef:
         # A fresh throwaway identity per attempt (new proxy pick + fingerprint);
         # a warm identity is fixed by session_name and reused across visits.
+        #
+        # `scope` is an opaque caller-supplied prefix, not a tenant: this layer
+        # composes `f"{scope}/{domain}/{name}"` only because that is the shape
+        # the caller asked for by passing a prefix. The multi-tenant platform
+        # passes its tenant; a single-tenant crawler passes anything stable.
+        # The rendered slug is unchanged either way.
         if warm:
             assert session_name is not None  # narrows for the type checker
-            return identity_for(tenant, domain, session_name, kind=ProfileKind.DEFAULT)
-        return identity_for(tenant, domain, f"scrape-{uuid.uuid4().hex}")
+            return IdentityRef(
+                key=f"{scope}/{domain}/{session_name}", kind=ProfileKind.DEFAULT
+            )
+        return IdentityRef(key=f"{scope}/{domain}/scrape-{uuid.uuid4().hex}")
 
     async def _opener(identity: IdentityRef, attempt_tier: str) -> ContextRef:
         # Protected rungs want a residential exit (datacenter IPs are the
-        # dominant Akamai edge-block); the proxy config resolves that per-tenant
+        # dominant Akamai edge-block); the proxy provider resolves that
         # with a fallback to whatever pool is configured.
         proxy_tier = TierPolicy.for_tier(attempt_tier).proxy_tier
         if warm:

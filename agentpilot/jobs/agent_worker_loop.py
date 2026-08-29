@@ -135,7 +135,7 @@ class AgentWorkerLoop:
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
             session_id=live_session_id,
-            tenant=run.tenant,
+            scope=run.tenant,
             domain=run.domain,
             name=live_session_id,
             tier=run.tier,

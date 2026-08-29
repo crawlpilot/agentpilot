@@ -115,7 +115,7 @@ async def scrape(
         document, screenshot_bytes = await run_ephemeral_scrape(
             browser_config=wiring.browser_config,
             prototype_provider=wiring.prototype_provider,
-            tenant=req.tenant,
+            scope=req.tenant,
             domain=domain,
             url=req.url,
             options=options,

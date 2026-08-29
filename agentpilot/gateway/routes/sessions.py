@@ -132,7 +132,7 @@ async def open_session(
             browser_config=wiring.browser_config,
             prototype_provider=wiring.prototype_provider,
             session_id=session_id,
-            tenant=req.tenant,
+            scope=req.tenant,
             domain=req.domain,
             name=req.name,
             tier=req.tier,

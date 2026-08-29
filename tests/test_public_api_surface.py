@@ -158,3 +158,45 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
                 if isinstance(node, ast.Attribute) and node.attr in ("environ", "getenv"):
                     offenders.append(f"{rel}:{node.lineno}")
     assert not offenders, f"ambient environment reads: {offenders}"
+
+
+def test_browser_layer_has_no_tenancy_vocabulary() -> None:
+    """The browser layer must not know that an identity has a tenant (plan D10).
+
+    Phase 3c made `IdentityRef.key` opaque and moved composition/decomposition
+    to `agentpilot.control.identity`. This asserts the vocabulary did not survive
+    in any *code* -- an attribute access, parameter, variable or field named for
+    a tenant would put a customer concept back into a library whose whole purpose
+    is to be usable by callers that have no customers.
+
+    Deliberately AST-based rather than a text grep: the docstrings in
+    `spi.identity` and `policy.providers` discuss tenancy at length, explaining
+    precisely why it is *absent*, and that prose is worth keeping.
+
+    `control`, `gateway`, `placement`, `jobs` and `auth` are platform code and
+    are not scanned -- knowing about tenants is their job.
+    """
+
+    import ast
+    import pathlib
+
+    offenders: list[str] = []
+    for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
+                "session", "tiers", "config", "policy"):
+        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                names: list[str] = []
+                if isinstance(node, ast.Attribute):
+                    names = [node.attr]
+                elif isinstance(node, ast.Name):
+                    names = [node.id]
+                elif isinstance(node, ast.arg):
+                    names = [node.arg]
+                elif isinstance(node, ast.keyword) and node.arg:
+                    names = [node.arg]
+                for name in names:
+                    if "tenant" in name.lower():
+                        rel = path.relative_to("agentpilot")
+                        offenders.append(f"{rel}:{node.lineno}: {name}")
+    assert not offenders, "tenancy leaked back into the browser layer:\n" + "\n".join(offenders)

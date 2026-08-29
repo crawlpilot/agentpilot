@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING
 import structlog
 
 from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.control.identity import identity_for
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
     resolve_profile_dir,
@@ -82,7 +81,7 @@ class InteractiveSession:
 async def open_interactive_session(
     *,
     session_id: str,
-    tenant: str,
+    scope: str,
     domain: str,
     name: str,
     tier: str,
@@ -106,8 +105,11 @@ async def open_interactive_session(
     docstring. `ephemeral.py`'s one-shot scrape identities are the case that
     wants the actual `TEMPORARY` default instead."""
 
-    identity = identity_for(tenant, domain, name, kind=ProfileKind.DEFAULT)
-    owner = f"{tenant}:{name}"
+    # `scope` is an opaque caller-supplied prefix, not a tenant -- see
+    # `ephemeral.run_ephemeral_scrape` for the same reasoning. The rendered
+    # slug is unchanged from the pre-Phase-3c `IdentityKey(tenant, domain, name)`.
+    identity = IdentityRef(key=f"{scope}/{domain}/{name}", kind=ProfileKind.DEFAULT)
+    owner = f"{scope}:{name}"
 
     async def _opener() -> ContextRef:
         profile_dir = resolve_profile_dir(profiles_root, identity)

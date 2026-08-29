@@ -158,7 +158,7 @@ class CrawlWorkerLoop:
         document, _screenshot = await run_ephemeral_scrape(
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
-            tenant=job.tenant,
+            scope=job.tenant,
             domain=domain,
             url=task.url,
             options=scrape_options,
