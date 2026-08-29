@@ -90,7 +90,7 @@ async def test_run_agent_loop_clicks_button_and_calls_done(
     registry = Registry()
     session = await open_interactive_session(
         session_id="test-agent-run",
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         name="agent-loop-test",
         tier="auto",
@@ -189,7 +189,7 @@ async def test_run_agent_loop_recovers_from_hallucinated_ref(
     registry = Registry()
     session = await open_interactive_session(
         session_id="test-agent-hallucinated-ref",
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         name="agent-loop-test",
         tier="auto",

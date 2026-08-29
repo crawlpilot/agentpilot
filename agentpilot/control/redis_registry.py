@@ -36,7 +36,7 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from agentpilot.control.identity import parts_of
+from agentpilot.control.identity import identity_for, parts_of
 from agentpilot.session.registry import Opener
 from agentpilot.spi.errors import LeaseConflict
 from agentpilot.spi.identity import IdentityRef
@@ -57,7 +57,11 @@ def _identity_from_hash(raw: dict[bytes, bytes]) -> IdentityRef:
     `_identity_fields`, and the only place this registry knows the key is a
     `tenant/domain/name` triple."""
 
-    return _identity_from_hash(raw)
+    return identity_for(
+        _decode(raw.get(b"tenant", b"")),
+        _decode(raw.get(b"domain", b"")),
+        _decode(raw.get(b"name", b"")),
+    )
 
 
 def _load(name: str) -> str:

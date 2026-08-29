@@ -122,7 +122,7 @@ class _FakeDriver:
 
 async def _scrape(driver: _FakeDriver, profiles_root: Path, **kwargs: object) -> None:
     await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -189,7 +189,7 @@ async def test_basic_tier_uses_http_fast_path_not_the_browser(tmp_path: Path) ->
         return ActionResult(extracts=["# http"], page_title="HTTP", status_code=200)
 
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -219,7 +219,7 @@ async def test_basic_tier_escalates_to_stealth_browser_on_http_block(tmp_path: P
         raise ChallengeDetected("robot_check at https://example.com/blocked (http)")
 
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -279,7 +279,7 @@ async def test_resource_blocking_is_off_by_default(tmp_path: Path) -> None:
 async def test_block_images_expands_to_the_safe_media_set(tmp_path: Path) -> None:
     driver = _FakeDriver()
     await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",), block_images=True, block_hosts=("track.co",)),
@@ -330,7 +330,7 @@ class _BlockThenPassDriver(_FakeDriver):
 async def test_auto_escalates_on_challenge_to_a_fresh_identity(tmp_path: Path) -> None:
     driver = _BlockThenPassDriver()
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -363,7 +363,7 @@ async def test_auto_raises_when_every_rung_is_blocked(tmp_path: Path) -> None:
     driver = _AlwaysBlock()
     with pytest.raises(ChallengeDetected):
         await run_ephemeral_scrape(
-            tenant="acme",
+            scope="acme",
             domain="example.com",
             url="https://example.com/",
             options=ScrapeOptions(formats=("markdown",)),
@@ -399,7 +399,7 @@ class _SoftThenCleanDriver(_FakeDriver):
 async def test_soft_verdict_retries_same_tier_then_accepts(tmp_path: Path) -> None:
     driver = _SoftThenCleanDriver()
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -429,7 +429,7 @@ async def test_soft_verdict_exhausts_retries_then_returns_content(tmp_path: Path
 
     driver = _AlwaysSoft()
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -457,7 +457,7 @@ async def test_soft_verdict_does_not_escalate_the_tier(tmp_path: Path) -> None:
 
     driver = _AlwaysSoft()
     document, _ = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),
@@ -541,7 +541,7 @@ async def test_protected_tier_requests_residential_and_aligns_geo(tmp_path: Path
     pinner = _FakeProxyPinner(proxy)
     driver = _FakeDriver()
     await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="example.com",
         url="https://example.com/",
         options=ScrapeOptions(formats=("markdown",)),

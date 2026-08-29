@@ -36,7 +36,7 @@ async def test_run_ephemeral_scrape_returns_markdown_and_no_screenshot_by_defaul
     registry = Registry()
 
     document, screenshot_bytes = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/"),
         options=ScrapeOptions(),
@@ -61,7 +61,7 @@ async def test_run_ephemeral_scrape_captures_a_screenshot_when_requested(
     registry = Registry()
 
     _document, screenshot_bytes = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/"),
         options=ScrapeOptions(screenshot=True),
@@ -83,7 +83,7 @@ async def test_run_ephemeral_scrape_supports_multiple_formats_in_one_call(
     registry = Registry()
 
     document, _screenshot = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/"),
         options=ScrapeOptions(formats=("markdown", "html")),
@@ -134,7 +134,7 @@ async def test_run_ephemeral_scrape_populates_extract_via_stubbed_llm(
     registry = Registry()
 
     document, _screenshot = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/"),
         options=ScrapeOptions(
@@ -173,7 +173,7 @@ async def test_run_ephemeral_scrape_sets_extract_error_when_llm_not_configured(
     registry = Registry()
 
     document, _screenshot = await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/"),
         options=ScrapeOptions(extract=ExtractConfig(prompt="Extract anything.")),

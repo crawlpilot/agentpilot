@@ -140,7 +140,7 @@ async def test_build_and_replay_accordion_json_ld_case(
     registry = Registry()
     session = await open_interactive_session(
         session_id="recipe-build-hydration",
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         name="recipe-build-hydration",
         tier="auto",
@@ -243,7 +243,7 @@ async def test_build_and_replay_size_variant_loop_case(
     registry = Registry()
     session = await open_interactive_session(
         session_id="recipe-build-variants",
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         name="recipe-build-variants",
         tier="auto",
@@ -358,7 +358,7 @@ async def test_heal_repairs_a_group_whose_css_locator_stops_resolving(
     registry = Registry()
     session = await open_interactive_session(
         session_id="recipe-heal",
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         name="recipe-heal",
         tier="auto",

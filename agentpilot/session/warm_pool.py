@@ -42,7 +42,7 @@ from agentpilot.spi.proxy import ProxyEndpoint
 
 log = structlog.get_logger(__name__)
 
-_WARM_TENANT = "_warm"
+_WARM_SCOPE = "_warm"
 """Reserved tenant for pooled contexts' throwaway identities -- keeps their
 profile dirs namespaced under `profiles_root/_warm/...`, away from real tenants."""
 
@@ -190,7 +190,7 @@ class WarmPool:
 
     async def _open(self, proxy: ProxyEndpoint | None) -> _Pooled | None:
         host = proxy.host if proxy is not None else "direct"
-        identity = identity_for(_WARM_TENANT, host, uuid.uuid4().hex, kind=ProfileKind.TEMPORARY
+        identity = identity_for(_WARM_SCOPE, host, uuid.uuid4().hex, kind=ProfileKind.TEMPORARY
         )
         profile_dir = resolve_profile_dir(self._profiles_root, identity)
         profile_dir.mkdir(parents=True, exist_ok=True)

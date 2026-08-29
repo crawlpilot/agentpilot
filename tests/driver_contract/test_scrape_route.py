@@ -224,7 +224,7 @@ async def test_protected_scrape_warms_up_on_the_site_root_first(
     httpserver.expect_request("/deep/product").respond_with_handler(_record)
 
     await run_ephemeral_scrape(
-        tenant="acme",
+        scope="acme",
         domain="127.0.0.1",
         url=httpserver.url_for("/deep/product"),
         options=ScrapeOptions(formats=("markdown",)),
