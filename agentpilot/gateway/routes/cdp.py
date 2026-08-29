@@ -38,6 +38,7 @@ import websockets
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
 
+from agentpilot.control.identity import tenant_of
 from agentpilot.gateway.auth_deps import bearer_token, optional_authed_tenant, resolve_query_api_key
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
 from agentpilot.spi.cdp import CdpEndpointCapable
@@ -76,7 +77,7 @@ async def cdp_json_version(
 ) -> dict[str, Any]:
     session = _get_session(wiring, session_id)
     authed = await optional_authed_tenant(request, wiring)
-    if authed is not None and authed.tenant != session.identity.tenant:
+    if authed is not None and authed.tenant != tenant_of(session.identity):
         raise HTTPException(status_code=403, detail="tenant mismatch")
 
     driver = wiring.driver
@@ -134,7 +135,7 @@ async def cdp_relay(websocket: WebSocket, session_id: str, api_key: str | None =
 
     if api_key is not None:
         authed = await resolve_query_api_key(wiring, api_key)
-        if authed is None or authed.tenant != session.identity.tenant:
+        if authed is None or authed.tenant != tenant_of(session.identity):
             await websocket.close(code=_UNAUTHORIZED, reason="invalid api key")
             return
 

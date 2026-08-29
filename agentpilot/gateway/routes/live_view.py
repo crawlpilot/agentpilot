@@ -31,6 +31,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from agentpilot.control.identity import tenant_of
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.wiring import get_wiring
 from agentpilot.spi.streaming import (
@@ -124,7 +125,7 @@ async def live_view(
 
     if api_key is not None:
         authed = await resolve_query_api_key(wiring, api_key)
-        if authed is None or authed.tenant != session.identity.tenant:
+        if authed is None or authed.tenant != tenant_of(session.identity):
             await websocket.close(code=_UNAUTHORIZED, reason="invalid api key")
             return
 

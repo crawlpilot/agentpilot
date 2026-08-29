@@ -15,6 +15,7 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from agentpilot.control.identity import parts_of
 from agentpilot.observability.metrics import placement_decisions_total
 from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
 from agentpilot.spi.identity import IdentityRef
@@ -86,9 +87,9 @@ class SessionPlacer:
                 f"session:{session_id}",
                 mapping={
                     "node_id": node_id,
-                    "tenant": identity.tenant,
-                    "domain": identity.domain,
-                    "name": identity.name,
+                    "tenant": parts.tenant,
+                    "domain": parts.domain,
+                    "name": parts.name,
                     "tier": tier,
                     "state": "active",
                     "created_at": time.time(),

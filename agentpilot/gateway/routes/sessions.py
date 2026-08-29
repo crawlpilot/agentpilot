@@ -19,6 +19,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from agentpilot.control.identity import parts_of, tenant_of
 from agentpilot.dom.serializer import serialize
 from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
@@ -187,16 +188,16 @@ async def list_sessions(
 
     out = []
     for session_id, session in wiring.sessions.items():
-        if effective_tenant is not None and session.identity.tenant != effective_tenant:
+        if effective_tenant is not None and tenant_of(session.identity) != effective_tenant:
             continue
         lease = lease_by_id.get(session.lease_id)
         rss_mb = _read_pid_rss_mb(session.ctx.pid) if session.ctx.pid is not None else None
         out.append(
             SessionOut(
                 session_id=session_id,
-                tenant=session.identity.tenant,
-                domain=session.identity.domain,
-                name=session.identity.name,
+                tenant=parts.tenant,
+                domain=parts.domain,
+                name=parts.name,
                 tier=session.tier,
                 headful=session.headful,
                 enable_cdp=session.enable_cdp,
@@ -217,7 +218,7 @@ async def execute_session(
     session_id: str, req: ExecuteRequest, wiring: Wiring = Depends(get_wiring)
 ) -> ActionResultOut:
     session = _get_session(wiring, session_id)
-    requests_total.labels(tenant=session.identity.tenant, route="execute_session").inc()
+    requests_total.labels(tenant=tenant_of(session.identity), route="execute_session").inc()
 
     actions = [to_spi_action(a) for a in req.actions]
     try:
@@ -239,7 +240,7 @@ async def release_session(
     session_id: str, wiring: Wiring = Depends(get_wiring)
 ) -> dict[str, bool | str]:
     session = _get_session(wiring, session_id)
-    requests_total.labels(tenant=session.identity.tenant, route="release_session").inc()
+    requests_total.labels(tenant=tenant_of(session.identity), route="release_session").inc()
 
     # Checkpoint on release-to-IDLE (not only at destroy) bounds node-loss
     # staleness to one session's delta -- plan.md's vault trigger #2.

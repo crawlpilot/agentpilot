@@ -36,6 +36,16 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
+from agentpilot.control.identity import identity_for, parts_of
+
+
+def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:
+    """The three Lua/hash fields this registry has always persisted. Read back
+    through the control plane's own parser now that the browser layer's identity
+    is opaque."""
+
+    parts = parts_of(identity)
+    return parts.tenant, parts.domain, parts.name
 from agentpilot.control.identity import identity_for
 from agentpilot.session.registry import Opener
 from agentpilot.spi.errors import LeaseConflict
@@ -87,9 +97,7 @@ class RedisRegistry:
                     ttl_seconds,
                     lease_id,
                     now,
-                    identity.tenant,
-                    identity.domain,
-                    identity.name,
+                    *_identity_fields(identity),
                 ],
             )
         except ResponseError as exc:

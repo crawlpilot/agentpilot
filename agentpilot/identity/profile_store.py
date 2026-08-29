@@ -29,14 +29,24 @@ class PathTraversalError(ValueError):
 
 
 def resolve_profile_dir(profiles_root: Path, identity: IdentityRef) -> Path:
-    tenant_root = (profiles_root / identity.tenant).resolve()
+    """Defense-in-depth: `IdentityRef.slug()` already rejects `..`, `/` and `\\`
+    in every segment, so traversal should be impossible before we get here.
+
+    The containment root is the slug's first segment (`identity.scope_root`),
+    named generically because the browser layer must not know that the platform
+    happens to put a tenant there. For a platform-composed
+    `"tenant/domain/name"` key this is byte-identical to the previous
+    `profiles_root / identity.tenant` check.
+    """
+
+    scope_root = (profiles_root / identity.scope_root).resolve()
     resolved = (profiles_root / identity.slug()).resolve()
     try:
-        resolved.relative_to(tenant_root)
+        resolved.relative_to(scope_root)
     except ValueError as exc:
         raise PathTraversalError(
             f"identity {identity.slug()!r} resolves to {resolved}, "
-            f"outside its tenant root {tenant_root}"
+            f"outside its scope root {scope_root}"
         ) from exc
     return resolved
 
