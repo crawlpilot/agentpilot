@@ -13,12 +13,12 @@ by whatever provisions it) still can't walk a tenant out of its own root.
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
 import structlog
 
+from agentpilot import config
 from agentpilot.spi.identity import IdentityKey
 
 log = structlog.get_logger(__name__)
@@ -41,7 +41,9 @@ def resolve_profile_dir(profiles_root: Path, identity: IdentityKey) -> Path:
     return resolved
 
 
-PROTOTYPE_ENV = "AGENTPILOT_PROTOTYPE_PROFILE_DIR"
+PROTOTYPE_ENV = config.PROTOTYPE_ENV
+"""Re-exported for callers that still name it here. The variable is *read* by
+`config.ProfileConfig.from_env()` at a composition root, never by this module."""
 """Root holding hand-warmed Chrome profiles to seed new identities from.
 
 Layout, checked most-specific first:
@@ -91,13 +93,15 @@ def prototype_dir_for(domain: str, *, root: Path | None = None) -> Path | None:
     worth doing at all: the cookies that matter (`_abck`, `datadome`) are
     origin-scoped, so a profile warmed on one retailer carries nothing useful
     for another -- only the generic "this browser has a history" signal.
+
+    `root=None` disables seeding, exactly as an unset `PROTOTYPE_ENV` did
+    before. The environment is now read once by `config.ProfileConfig
+    .from_env()` at a composition root instead of here, so an embedding caller
+    can point at its own prototype tree without mutating process state.
     """
 
     if root is None:
-        configured = os.environ.get(PROTOTYPE_ENV)
-        if not configured or not configured.strip():
-            return None
-        root = Path(configured.strip())
+        return None
 
     for candidate in (root / domain, root / "default"):
         if candidate.is_dir():

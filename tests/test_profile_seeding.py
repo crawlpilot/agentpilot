@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from agentpilot.config import ProfileConfig
 from agentpilot.identity.profile_store import (
     PROTOTYPE_ENV,
     prototype_dir_for,
@@ -57,10 +58,16 @@ def test_missing_root_resolves_to_nothing(tmp_path: Path) -> None:
 
 
 def test_env_var_drives_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 2 moved the env read out of `prototype_dir_for` (which consulted it
+    at call time) into `config.ProfileConfig.from_env()`, read once at a
+    composition root. The resolution it drives is unchanged."""
+
     (tmp_path / "default").mkdir()
     monkeypatch.setenv(PROTOTYPE_ENV, str(tmp_path))
 
-    assert prototype_dir_for("anything.test") == tmp_path / "default"
+    root = ProfileConfig.from_env().prototype_root
+    assert root == tmp_path
+    assert prototype_dir_for("anything.test", root=root) == tmp_path / "default"
 
 
 def test_blank_env_var_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,6 +75,13 @@ def test_blank_env_var_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> N
     string, which must not be read as a path."""
 
     monkeypatch.setenv(PROTOTYPE_ENV, "   ")
+
+    assert ProfileConfig.from_env().prototype_root is None
+
+
+def test_no_root_disables_seeding() -> None:
+    """`root=None` is the library default now: seeding is off unless a caller
+    supplies a tree, rather than depending on the host's exported env."""
 
     assert prototype_dir_for("www.zara.com") is None
 

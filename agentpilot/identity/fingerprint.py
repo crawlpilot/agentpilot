@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
+
+from agentpilot.config import DEFAULT_CHROME_VERSION
 
 
 @dataclass(frozen=True)
@@ -198,12 +199,15 @@ class Fingerprint:
 # (Akamai) that cross-check UA against Client Hints. Keep this aligned with the
 # deployed Chrome via AGENTPILOT_CHROME_VERSION; the default tracks a recent
 # stable so a fresh install and the pinned value already agree.
-_CHROME_FULL_VERSION = os.environ.get("AGENTPILOT_CHROME_VERSION", "131.0.6778.86").strip()
-_CHROME_MAJOR = _CHROME_FULL_VERSION.split(".", 1)[0]
 # Chrome freezes the UA string's minor/build/patch to `.0.0.0` (the UA-reduction
-# rollout); only the major is real there. The full version is carried by the
-# high-entropy Client Hints (uaFullVersion / fullVersionList) instead.
-_CHROME_VER = f"{_CHROME_MAJOR}.0.0.0"
+# rollout); only the major is real there. The full version rides on the
+# high-entropy Client Hints (uaFullVersion / fullVersionList) instead. The
+# concrete version is supplied per call by `config.FingerprintConfig`, not read
+# from the environment here -- reading it at module scope froze the value on
+# first import, so a caller that was not the process owner could not change it.
+def _ua_version(full_version: str) -> str:
+    return f"{full_version.split('.', 1)[0]}.0.0.0"
+
 
 # Sec-CH-UA GREASE brand. The greasy `"Not_A Brand";v="24"` pair is stable for
 # this Chromium era; the real major rides on the Chromium / Google Chrome
@@ -264,8 +268,8 @@ class _DevicePreset:
 
 _WINDOWS_INTEL_US = _DevicePreset(
     user_agent=(
-        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
     ),
     screen=ScreenParameters(1920, 1080, 1920, 1040, color_depth=24, device_pixel_ratio=1.0),
     hardware=HardwareParameters(8, 8, platform="Win32"),
@@ -283,8 +287,8 @@ _WINDOWS_INTEL_US = _DevicePreset(
 
 _MAC_APPLE_UK = _DevicePreset(
     user_agent=(
-        f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
     ),
     screen=ScreenParameters(2560, 1600, 2560, 1495, color_depth=30, device_pixel_ratio=2.0),
     hardware=HardwareParameters(8, 16, platform="MacIntel", vendor="Apple Computer, Inc."),
@@ -302,8 +306,8 @@ _MAC_APPLE_UK = _DevicePreset(
 
 _LINUX_NVIDIA_IN = _DevicePreset(
     user_agent=(
-        f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{_CHROME_VER} Safari/537.36"
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
     ),
     screen=ScreenParameters(1366, 768, 1366, 728, color_depth=24, device_pixel_ratio=1.0),
     hardware=HardwareParameters(4, 8, platform="Linux x86_64"),
@@ -328,7 +332,12 @@ _PRESETS_BY_REGION: dict[str, _DevicePreset] = {
 }
 
 
-def generate(identity_slug: str, *, region: str | None = None) -> Fingerprint:
+def generate(
+    identity_slug: str,
+    *,
+    region: str | None = None,
+    chrome_version: str = DEFAULT_CHROME_VERSION,
+) -> Fingerprint:
     """Deterministically pin one coherent fingerprint to an identity. Same slug
     -> same fingerprint for life (the pinning contract). When `region` is given
     (e.g. from the proxy exit-IP country), prefer a family whose timezone/locale
@@ -343,14 +352,14 @@ def generate(identity_slug: str, *, region: str | None = None) -> Fingerprint:
     # A per-identity canvas seed drives deterministic canvas noise (CanvasParameters).
     canvas_seed = digest[8:24]
     return Fingerprint(
-        user_agent=preset.user_agent,
+        user_agent=preset.user_agent.format(chrome_ver=_ua_version(chrome_version)),
         screen=preset.screen,
         hardware=preset.hardware,
         webgl=preset.webgl,
         geo=preset.geo,
         canvas_seed=canvas_seed,
-        chrome_full_version=_CHROME_FULL_VERSION,
-        chrome_major=_CHROME_MAJOR,
+        chrome_full_version=chrome_version,
+        chrome_major=chrome_version.split(".", 1)[0],
         ch_platform=preset.ch_platform,
         ch_platform_version=preset.ch_platform_version,
         ch_architecture=preset.ch_architecture,

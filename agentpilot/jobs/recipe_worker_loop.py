@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import structlog
 
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore, RecipeOut
 from agentpilot.llm.client import LLMConfig
@@ -76,11 +77,13 @@ class RecipeWorkerLoop:
         poll_interval_seconds: float = 2.0,
         stale_after_seconds: float = 120.0,
         build_max_steps: int = DEFAULT_BUILD_MAX_STEPS,
+        browser_config: BrowserConfig = DEFAULTS,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
+        self._browser_config = browser_config
         self._proxy_pinner = proxy_pinner
         self._lease_ttl_seconds = lease_ttl_seconds
         self._batch_size = batch_size
@@ -166,6 +169,7 @@ class RecipeWorkerLoop:
                 return
 
         session = await open_interactive_session(
+            browser_config=self._browser_config,
             session_id=f"recipe-run-{run.run_id}",
             tenant=run.tenant,
             domain=_domain_from_url(run.recipe.url_pattern),

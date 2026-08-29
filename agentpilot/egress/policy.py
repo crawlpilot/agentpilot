@@ -42,11 +42,9 @@ a browser session installs the rules, not just the browser's egress.
 from __future__ import annotations
 
 import ipaddress
-import os
 import shutil
 import socket
 import subprocess
-from urllib.parse import urlparse
 
 import structlog
 
@@ -83,37 +81,21 @@ def _resolve_host_to_cidrs(host: str) -> list[str]:
     return sorted({f"{info[4][0]}/32" for info in infos})
 
 
-def _llm_endpoint_host() -> str | None:
-    """Host of `AGENTPILOT_LLM_BASE_URL`, or `None` when unset/unparseable.
-
-    The worker's own LLM call shares the container's netns with the browser,
-    so the container-wide baseline (see module docstring) would sever it too
-    whenever the LLM lives on an RFC1918 address -- e.g. a local Ollama reached
-    via `host.docker.internal` (the Docker Desktop host gateway sits in the
-    blocked `192.168.0.0/16`). Exempting the configured endpoint keeps that
-    control-plane egress alive while the browser stays fenced off the rest of
-    the private ranges."""
-
-    # `ANTHROPIC_BASE_URL` is the fallback the Bedrock provider resolves its
-    # endpoint from (`LLMConfig._bedrock_from_env`), so read it here too rather
-    # than silently losing the exemption when only that one is set. Read from
-    # the environment rather than importing `agentpilot.llm`: egress is not
-    # modelled above llm in the import-linter layer contracts.
-    base = os.environ.get("AGENTPILOT_LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
-    if not base:
-        return None
-    return urlparse(base).hostname
-
-
 def _allow_cidrs(policy: EgressPolicy) -> list[str]:
     """IPv4 CIDRs to ACCEPT ahead of the private-range REJECT: the container's
-    own connected subnet(s), the operator-supplied `allow_hosts`, and the
-    worker's own LLM endpoint. De-duplicated, order preserved."""
+    own connected subnet(s) and the operator-supplied `allow_hosts`.
+    De-duplicated, order preserved.
+
+    The worker's own LLM endpoint must be among `allow_hosts` -- the browser is
+    fenced off RFC1918 but a local LLM often lives there (Ollama via
+    `host.docker.internal` sits in 192.168/16), so without the exemption this
+    baseline severs the control plane too. It used to be read from
+    `AGENTPILOT_LLM_BASE_URL` here; it is now resolved once by
+    `config.EgressConfig.from_env()` and passed in by whoever builds the
+    policy, so this module needs no environment and no `agentpilot.llm` import
+    (which the layer contracts forbid anyway)."""
 
     hosts = [*policy.allow_hosts]
-    llm_host = _llm_endpoint_host()
-    if llm_host:
-        hosts.append(llm_host)
 
     cidrs = list(_own_connected_subnets())
     for host in hosts:

@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
+from agentpilot.config import BrowserConfig
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.proxy_config import ProxyConfig
@@ -103,6 +104,13 @@ class Wiring:
         self.recipe_store: PostgresRecipeStore | None = None
         """Same connect/role rules as `jobs_store`/`agent_store` -- see
         `_connect_recipe_store()`."""
+
+        # Every environment-derived browser knob, resolved once here. Leaf
+        # modules take values as arguments now (Phase 2 of the browserpilot
+        # extraction) -- `identity.fingerprint` used to read the pinned Chrome
+        # version at *import* time, so it froze on first import and no embedding
+        # caller could change it.
+        self.browser_config = BrowserConfig.from_env()
 
         if self.role == "gateway":
             self._init_gateway()
@@ -285,7 +293,9 @@ class Wiring:
             # ±25% jitter) or lost too many connections, and skip retired ones
             # when picking / re-pin a warm identity off a retired exit.
             self.proxy_pinner = ProxyPinner(
-                self.redis, proxy_config, ProxyHealth(self.redis)
+                self.redis,
+                proxy_config,
+                ProxyHealth(self.redis, self.browser_config.proxy_health.max_success),
             )
 
         # Per-identity burn accounting (retire a warm identity that keeps

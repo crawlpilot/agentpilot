@@ -17,11 +17,11 @@ durability rationale as `ProxyPinner`/`BurnTracker`.
 
 from __future__ import annotations
 
-import os
 import random
 
 from redis.asyncio import Redis
 
+from agentpilot.config import DEFAULT_PROXY_MAX_SUCCESS
 from agentpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxyhealth:"
@@ -42,11 +42,9 @@ def _proxy_id(proxy: ProxyEndpoint) -> str:
 
 
 class ProxyHealth:
-    def __init__(self, redis: Redis, max_success: int | None = None) -> None:
+    def __init__(self, redis: Redis, max_success: int = DEFAULT_PROXY_MAX_SUCCESS) -> None:
         self._redis = redis
-        self._max_success = max_success or int(
-            os.environ.get("AGENTPILOT_PROXY_MAX_SUCCESS", "100")
-        )
+        self._max_success = max_success
 
     def _key(self, proxy: ProxyEndpoint) -> str:
         return f"{_KEY_PREFIX}{_proxy_id(proxy)}"

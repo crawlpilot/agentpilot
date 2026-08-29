@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.spi.identity import IdentityKey
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -49,6 +50,7 @@ def resolve(
     locale: str | None = None,
     timezone_id: str | None = None,
     detect_blocks: bool = True,
+    config: BrowserConfig = DEFAULTS,
 ) -> StealthProfile:
     """The stealth kwargs for `identity` on `tier`.
 
@@ -79,7 +81,11 @@ def resolve(
         return StealthProfile(locale=locale, timezone_id=timezone_id)
 
 
-    fp = generate_fingerprint(identity.slug(), region=proxy.country if proxy else None)
+    fp = generate_fingerprint(
+        identity.slug(),
+        region=proxy.country if proxy else None,
+        chrome_version=config.fingerprint.chrome_version,
+    )
     return StealthProfile(
         locale=locale or fp.geo.locale,
         timezone_id=timezone_id or fp.geo.timezone_id,

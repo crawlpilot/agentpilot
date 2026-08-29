@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 import structlog
 
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import (
@@ -195,6 +196,7 @@ async def run_ephemeral_scrape(
     crawl_retry_max: int = _DEFAULT_CRAWL_RETRY_MAX,
     retry_delay_base_s: float = _DEFAULT_RETRY_DELAY_S,
     http_fetcher: HttpFetcher | None = None,
+    browser_config: BrowserConfig = DEFAULTS,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -272,13 +274,18 @@ async def run_ephemeral_scrape(
         # throwaway identity is born with a plausible history instead of being
         # the cookieless first-visit browser this module's docstring flags as
         # a bot signal. No-op when unset.
-        prototype = prototype_dir_for(domain)
+        prototype = prototype_dir_for(domain, root=browser_config.profiles.prototype_root)
         if prototype is not None and seed_profile_dir(profile_dir, prototype):
             log.info("ephemeral.profile_seeded", domain=domain, prototype=str(prototype))
         # Shared with `session/interactive.py` so a tier means the same thing on
         # /v1/scrape, /v1/sessions and agent runs -- see that module's docstring.
         stealth = stealth_profile.resolve(
-            identity, attempt_tier, proxy=proxy, locale=locale, timezone_id=timezone_id
+            identity,
+            attempt_tier,
+            proxy=proxy,
+            locale=locale,
+            timezone_id=timezone_id,
+            config=browser_config,
         )
         # `enhanced` is the top rung: request headful (the driver runs it under
         # Xvfb on the worker, or degrades to headless where no display exists),

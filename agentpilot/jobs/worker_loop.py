@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 
 import structlog
 
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import fetch as fetch_robots
 from agentpilot.identity.proxy_pinning import ProxyPinner
@@ -68,11 +69,13 @@ class CrawlWorkerLoop:
         poll_interval_seconds: float = 2.0,
         stale_after_seconds: float = 120.0,
         warm_pool: WarmPool | None = None,
+        browser_config: BrowserConfig = DEFAULTS,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
+        self._browser_config = browser_config
         self._proxy_pinner = proxy_pinner
         self._warm_pool = warm_pool
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -148,6 +151,7 @@ class CrawlWorkerLoop:
             return
 
         document, _screenshot = await run_ephemeral_scrape(
+            browser_config=self._browser_config,
             tenant=job.tenant,
             domain=domain,
             url=task.url,

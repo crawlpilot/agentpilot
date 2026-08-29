@@ -44,14 +44,18 @@ def test_amazon_captcha_short_page_is_robot_check() -> None:
     ) is Verdict.ROBOT_CHECK
 
 
-def test_amazon_district_check_is_opt_in(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_amazon_district_check_is_opt_in() -> None:
+    """Phase 2 made the expected district constructor state instead of an env
+    read inside `check()`. Empty still disables it, exactly as an unset
+    variable did."""
+
     body = "<div id='glow-ingress-block'>Deliver to Chicago 60601</div>" + _big(300_000)
     url = "https://www.amazon.com/dp/B00TEST"
     # Off by default: no WRONG_GEO even though the district doesn't match.
     assert AmazonChecker().check(html=body, url=url, status=200) is None
     # Opted in with a district the page doesn't mention -> WRONG_GEO.
-    monkeypatch.setenv("AGENTPILOT_AMAZON_EXPECT_DISTRICT", "New York")
-    assert AmazonChecker().check(html=body, url=url, status=200) is Verdict.WRONG_GEO
+    checker = AmazonChecker("New York")
+    assert checker.check(html=body, url=url, status=200) is Verdict.WRONG_GEO
     # ...and satisfied when the page does mention it.
     body_ny = "<div id='glow-ingress-block'>Deliver to New York 10001</div>" + _big(300_000)
-    assert AmazonChecker().check(html=body_ny, url=url, status=200) is None
+    assert checker.check(html=body_ny, url=url, status=200) is None

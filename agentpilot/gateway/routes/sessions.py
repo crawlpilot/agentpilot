@@ -128,6 +128,7 @@ async def open_session(
     started = time.monotonic()
     with session_open_duration_seconds.time():
         session = await open_interactive_session(
+            browser_config=wiring.browser_config,
             session_id=session_id,
             tenant=req.tenant,
             domain=req.domain,

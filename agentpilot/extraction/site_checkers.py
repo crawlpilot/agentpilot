@@ -20,8 +20,6 @@ generic markers in `block_detect.classify_page`. Install the defaults once via
 
 from __future__ import annotations
 
-import os
-
 from agentpilot.extraction.block_detect import (
     Verdict,
     has_known_wall_marker,
@@ -66,7 +64,16 @@ class WalmartChecker:
 class AmazonChecker:
     """Amazon (`AmazonHtmlIntegrityChecker.kt`): the CAPTCHA prompt on a short
     page is a robot check; a `/dp/` item page below the size floor is TOO_SMALL;
-    an optional (env-gated) delivery-district mismatch is WRONG_GEO."""
+    an optional delivery-district mismatch is WRONG_GEO.
+
+    `expect_district` was read from `AGENTPILOT_AMAZON_EXPECT_DISTRICT` inside
+    `check()`; it is constructor state now, supplied by whoever installs the
+    checkers, so this module reads no environment. Empty disables the check,
+    exactly as an unset variable did.
+    """
+
+    def __init__(self, expect_district: str = "") -> None:
+        self.expect_district = expect_district.strip().lower()
 
     def is_relevant(self, url: str) -> bool:
         return "amazon." in url.lower()
@@ -82,7 +89,7 @@ class AmazonChecker:
         # expected district depends on the proxy's exit country. When
         # AGENTPILOT_AMAZON_EXPECT_DISTRICT is set and the delivery block is
         # present but doesn't mention it, the egress geo is wrong (CRAWL retry).
-        expect = os.environ.get("AGENTPILOT_AMAZON_EXPECT_DISTRICT", "").strip().lower()
+        expect = self.expect_district
         if expect and "glow-ingress-block" in lower and expect not in lower:
             return Verdict.WRONG_GEO
         lurl = url.lower()
@@ -185,10 +192,10 @@ def _looks_like_pdp(lurl: str) -> bool:
     )
 
 
-def install_default_site_checkers() -> None:
+def install_default_site_checkers(*, amazon_expect_district: str = "") -> None:
     """Register the built-in Walmart/Amazon/JD/fashion-retail checkers. Called once at import
     from `block_detect`; safe to call again only if the chain was cleared."""
     register_site_checker(WalmartChecker())
-    register_site_checker(AmazonChecker())
+    register_site_checker(AmazonChecker(amazon_expect_district))
     register_site_checker(JdChecker())
     register_site_checker(FashionRetailChecker())

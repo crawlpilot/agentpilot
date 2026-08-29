@@ -256,10 +256,15 @@ layers = ["agentpilot.jobs", "agentpilot.placement", "agentpilot.spi"]
 # be shared if it depends on nothing. This contract is what keeps that true;
 # without it the first `from agentpilot.spi import ...` added here would
 # quietly re-couple the branches.
+#
+# `agentpilot.config` (Phase 2) is here for the same reason and one more: it is
+# the *only* module in the browser layer allowed to read `os.environ`, and it is
+# depended on by leaves in both branches. If it could import back into the tree,
+# the environment would leak into the layer graph through it.
 [[tool.importlinter.contracts]]
-name = "tiers is a pure leaf"
+name = "tiers and config are pure leaves"
 type = "forbidden"
-source_modules = ["agentpilot.tiers"]
+source_modules = ["agentpilot.tiers", "agentpilot.config"]
 forbidden_modules = [
     "agentpilot.spi",
     "agentpilot.driver",

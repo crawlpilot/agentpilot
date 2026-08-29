@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
     prototype_dir_for,
@@ -91,6 +92,7 @@ async def open_interactive_session(
     lease_ttl_seconds: float,
     locale: str | None = None,
     timezone_id: str | None = None,
+    browser_config: BrowserConfig = DEFAULTS,
 ) -> InteractiveSession:
     """`kind=ProfileKind.DEFAULT` (not the dataclass's own `TEMPORARY`
     default): an interactive, caller-named identity is kept warm across
@@ -113,7 +115,7 @@ async def open_interactive_session(
         # has its own earned cookies, and overwriting them with the
         # prototype's would discard exactly the reputation this is for.
         if is_fresh:
-            prototype = prototype_dir_for(domain)
+            prototype = prototype_dir_for(domain, root=browser_config.profiles.prototype_root)
             if prototype is not None and seed_profile_dir(profile_dir, prototype):
                 log.info(
                     "interactive_session.profile_seeded",
@@ -142,6 +144,7 @@ async def open_interactive_session(
             # `ChallengeDetected` with, and an agent legitimately passes
             # through empty/thin intermediate pages all run long.
             detect_blocks=False,
+            config=browser_config,
         )
         ctx = await driver.open(
             identity,

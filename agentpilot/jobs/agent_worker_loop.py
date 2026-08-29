@@ -24,6 +24,7 @@ import structlog
 
 from agentpilot.agent.loop import run_agent_loop
 from agentpilot.agent.state import AgentStepRecord
+from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import ClaimedAgentRun, PostgresAgentStore
 from agentpilot.llm.client import LLMConfig
@@ -61,11 +62,13 @@ class AgentWorkerLoop:
         rotation: RotationConfig | None = None,
         sessions: dict[str, Session] | None = None,
         placer: SessionPlacer | None = None,
+        browser_config: BrowserConfig = DEFAULTS,
     ) -> None:
         self._store = store
         self._registry = registry
         self._driver = driver
         self._profiles_root = profiles_root
+        self._browser_config = browser_config
         self._proxy_pinner = proxy_pinner
         self._lease_ttl_seconds = lease_ttl_seconds
         # Live-view plumbing: `sessions` is the same in-process dict
@@ -124,6 +127,7 @@ class AgentWorkerLoop:
     async def _process_run(self, run: ClaimedAgentRun) -> None:
         live_session_id = f"agent-run-{run.run_id}"
         session = await open_interactive_session(
+            browser_config=self._browser_config,
             session_id=live_session_id,
             tenant=run.tenant,
             domain=run.domain,
