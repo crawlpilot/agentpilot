@@ -901,8 +901,54 @@ unsorted import block in `jobs/recipe_worker_loop.py` was fixed as a side effect
 of editing that file's imports for the provider threading, which is legitimate
 since the file is part of this change.
 
-**Still outstanding in Phase 3:** 3c (`IdentityKey` → opaque `IdentityRef`,
-including moving tenant auth off the identity object).
+**3c status: done. Phase 3 is complete.**
+
+`IdentityKey(tenant, domain, name)` is now `IdentityRef(key)` — opaque, never
+parsed by the browser layer. `control/identity.py` owns both directions:
+`identity_for(tenant, domain, name)` composes, `parts_of()`/`tenant_of()`
+decompose for the platform code that legitimately needs them.
+
+**The slug is byte-identical**, so no profile dir or vault entry orphaned.
+`tests/test_identity_ref_migration.py` (17 tests) pins that against a copy of
+the legacy rendering — including the sanitizer's rewrite rules — rather than
+recomputing it from the code under test.
+
+Where the 17 attribute accesses went:
+
+| Site | Resolution |
+|---|---|
+| `profile_store.resolve_profile_dir` (the only browser-layer one) | `identity.scope_root` — the slug's first segment, named generically. For a platform key that *is* the tenant, so the containment check is unchanged |
+| `gateway/routes/{sessions,cdp,live_view}.py` — 9, incl. 4 authorization checks | `tenant_of(session.identity)` |
+| `control/{proxy_config,redis_registry}.py`, `placement/placer.py` — 7 | `parts_of()` / `tenant_of()` |
+
+Judgement calls:
+
+- **`run_ephemeral_scrape` and `open_interactive_session` take `scope`, not
+  `tenant`.** They were still composing a platform identity themselves. `scope`
+  is an opaque prefix: the SaaS passes its tenant, a crawler passes anything
+  stable, and the slug is unchanged either way.
+- **`parts_of` raises on a key it did not compose** rather than returning
+  partial data. It feeds authorization, so a foreign key must fail loudly
+  instead of silently attributing a session to the wrong tenant.
+- **The guard is AST-based, not a grep.** `spi.identity` and `policy.providers`
+  discuss tenancy at length explaining why it is *absent*, and that prose is
+  worth keeping; only identifiers are checked.
+- **Two documented exemptions, recording a real finding:** `spi/jobs.py::Job
+  .tenant` and `spi/artifact.py::ArtifactRef.tenant` are job-queue and
+  artifact-store types filed in `spi` that describe *platform* concepts. They
+  must leave `contracts/` at Phase 7; listed explicitly so the exemption shrinks
+  rather than hides.
+
+Two bugs the gates caught in my own work, both worth noting because they argue
+for the guardrails: a broad regex rewrote `_identity_from_hash`'s body into a
+call to itself (infinite recursion, caught by `test_redis_registry`), and the
+codemod made `session/warm_pool` import `control.identity` — caught by the
+Phase-3b contract forbidding exactly that. Warm-pool identities now compose
+directly, which is correct: a pooled context belongs to no caller, so there is
+no tenant to compose from.
+
+**Gates:** 801 passed / 65 skipped (was 783); 20 contracts kept, 0 broken; mypy
+11 and ruff 10, both at or below baseline.
 
 ### Phase 4 — Extension system (D12)
 
