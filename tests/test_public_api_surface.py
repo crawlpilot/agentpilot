@@ -61,6 +61,11 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     # fields on `TierPolicy`, which is the single owner. Recorded here as the
     # deliberate public-API edit this file's maintenance contract requires.
     "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
+    # Phase 2: the only module in the browser layer that reads the environment.
+    "agentpilot.config": (
+        "BrowserConfig", "FingerprintConfig", "ProfileConfig",
+        "ProxyHealthConfig", "EgressConfig", "ContentConfig", "DEFAULTS",
+    ),
     "agentpilot.identity.profile_store": ("resolve_profile_dir", "prototype_dir_for"),
     "agentpilot.identity.proxy_config": ("ProxyConfig",),
 }
@@ -109,3 +114,38 @@ def test_browser_layer_carries_no_web_framework_import() -> None:
                     if n in banned:
                         offenders.append(f"{path}: {n}")
     assert not offenders, offenders
+
+
+def test_browser_layer_reads_no_ambient_environment() -> None:
+    """Leaves take configuration as arguments; only a composition root reads
+    the environment (plan D8, Phase 2).
+
+    Two exemptions, both deliberate and both narrow:
+
+    - `driver/process_launcher.py` touches `DISPLAY`, which is the X11
+      protocol's own channel rather than application configuration -- Chrome is
+      launched as a child process and reads it from the inherited environment,
+      so it must genuinely be there.
+    - `identity/proxy_config.py` reads inside a `from_env()` constructor called
+      once from `gateway.wiring`, which is the sanctioned pattern, not a read
+      at the point of use.
+
+    Anything else is a regression: it makes the library unconfigurable by a
+    caller that does not own the process.
+    """
+
+    import ast
+    import pathlib
+
+    allowed = {"driver/process_launcher.py", "identity/proxy_config.py"}
+    offenders: list[str] = []
+    for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom", "session", "tiers"):
+        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+            rel = path.relative_to("agentpilot").as_posix()
+            if rel in allowed:
+                continue
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr in ("environ", "getenv"):
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, f"ambient environment reads: {offenders}"

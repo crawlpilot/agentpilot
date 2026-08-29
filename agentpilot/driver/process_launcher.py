@@ -71,6 +71,13 @@ class ProcessLauncher:
           real window on a dev machine or in tests.
         """
 
+        # `DISPLAY` is deliberately left as a real environment interaction
+        # rather than moved to `agentpilot.config` with the other knobs: it is
+        # not application configuration but the X11 protocol's own channel.
+        # Chrome, launched as a child process, reads `DISPLAY` from its
+        # inherited environment -- so the value must genuinely be *in* the
+        # environment, and exporting it below is how the child is told which
+        # display to use. A config field could not replace that.
         if os.environ.get("DISPLAY"):
             return True
         if sys.platform.startswith("linux"):

@@ -762,7 +762,47 @@ Frozen config dataclasses with `.from_env()`. Remove every `os.environ` read fro
 the eight leaf modules; values arrive as arguments. `gateway/wiring.py` calls
 `.from_env()`.
 
-**Accept:** `grep -rn "os.environ\|getenv" agentpilot/{driver,identity,egress,extraction,session}` is empty.
+**Status: done.** `agentpilot/config.py` is now the only module in the browser
+layer that reads the environment. Five leaves stopped:
+
+| Leaf | Was | Now |
+|---|---|---|
+| `identity/fingerprint.py` | `AGENTPILOT_CHROME_VERSION` at **import** scope — the value froze on first import | `generate(..., chrome_version=…)`; presets carry a `{chrome_ver}` template |
+| `identity/profile_store.py` | env fallback inside `prototype_dir_for` | `root=None` disables seeding; the root is supplied |
+| `identity/proxy_health.py` | env fallback inside `__init__` | `max_success` is a required-with-default argument |
+| `egress/policy.py` | sniffed `AGENTPILOT_LLM_BASE_URL` at apply time | the host arrives via `EgressPolicy.allow_hosts` — using a field that already existed |
+| `extraction/site_checkers.py` | env read inside `check()` | `AmazonChecker(expect_district)` constructor state |
+
+`gateway.wiring` calls `BrowserConfig.from_env()` once and threads it through
+the two session entry points and the three job loops.
+
+Judgement calls:
+
+- **Two env reads deliberately stay, and are now documented in code plus
+  allow-listed in a test.** `driver/process_launcher.py` touches `DISPLAY`,
+  which is the X11 protocol's own channel, not configuration — Chrome is
+  launched as a child and reads it from the inherited environment, so it must
+  genuinely be there and a config field could not replace it.
+  `identity/proxy_config.py` reads inside a `from_env()` constructor called once
+  from the composition root, which is the sanctioned pattern rather than a read
+  at the point of use. The blanket acceptance grep was too blunt to express
+  this; `test_browser_layer_reads_no_ambient_environment` encodes the real rule
+  and will catch any *new* read.
+- **One `BrowserConfig` is threaded, not five loose values.** Phase 5's facade
+  takes this object directly, so this is building that vehicle early rather than
+  churn to be undone.
+- **The parameter is named `browser_config`, not `config`** — `run_ephemeral_scrape`
+  already binds a local `config` (an `LLMConfig`) partway through its body,
+  which would have shadowed a parameter of that name.
+- **Caught a silent config break in review:** the first draft invented
+  `AGENTPILOT_PROFILE_PROTOTYPE_ROOT`; the real variable is
+  `AGENTPILOT_PROTOTYPE_PROFILE_DIR`. Only `AGENTPILOT_PROXY_MAX_SUCCESS` is
+  declared in `.env.example`/`docker-compose.yml`; the rest were undocumented
+  knobs, all now wired through the root so none silently stopped working.
+
+**Gates:** 762 passed / 65 skipped (was 754); 17 contracts kept, 0 broken
+(`config` joined `tiers` in the pure-leaf contract); mypy 11 and ruff 13, both
+at baseline.
 
 ### Phase 3 — De-tenant the core; policy seam; Redis out (D10, D11)
 

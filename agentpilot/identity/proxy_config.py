@@ -103,6 +103,11 @@ class ProxyConfig:
 
     @classmethod
     def from_env(cls) -> ProxyConfig:
+        """Reads the environment, which is allowed *here* because this is a
+        `from_env()` constructor called once from the composition root
+        (`gateway.wiring`), never at the point of use -- the same discipline
+        `agentpilot.config` establishes for the rest of the browser layer."""
+
         pools: dict[tuple[str, str], tuple[ProxyEndpoint, ...]] = {}
 
         flat = os.environ.get("AGENTPILOT_PROXY_POOL")
