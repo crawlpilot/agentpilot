@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from agentpilot.control.identity import parts_of
 from agentpilot.session.ephemeral import run_ephemeral_scrape
 from agentpilot.session.registry import Registry
 from agentpilot.spi.actions import Action, ActionResult
@@ -175,7 +176,7 @@ async def test_warm_identity_uses_default_profile_kind(tmp_path: Path) -> None:
     await _scrape(driver, tmp_path, session_name="s")
     identity = driver.opens[0]["identity"]
     assert isinstance(identity, IdentityRef)
-    assert identity.name == "s"
+    assert parts_of(identity).name == "s"
     assert identity.is_permanent  # ProfileKind.DEFAULT -> warm/persistent
 
 

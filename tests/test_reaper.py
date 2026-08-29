@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 import agentpilot.session.reaper as reaper_module
-from agentpilot.control.identity import identity_for
+from agentpilot.control.identity import identity_for, parts_of
 from agentpilot.session.reaper import Reaper
 from agentpilot.session.registry import Registry
 from agentpilot.spi.identity import IdentityRef
@@ -33,7 +33,10 @@ async def _make_idle_entry(
 ) -> ContextRef:
     async def opener() -> ContextRef:
         return ContextRef(
-            context_id=f"ctx-{identity.name}", identity=identity, state=ContextState.ACTIVE, pid=pid
+            context_id=f"ctx-{parts_of(identity).name}",
+            identity=identity,
+            state=ContextState.ACTIVE,
+            pid=pid,
         )
 
     ctx, lease = await registry.acquire(identity, "owner", 300.0, opener)

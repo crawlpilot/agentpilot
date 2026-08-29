@@ -82,6 +82,7 @@ class SessionPlacer:
         responded with a real session_id -- no Lua needed, a freshly minted
         id has no concurrent writer to race."""
 
+        parts = parts_of(identity)
         async with self._redis.pipeline() as pipe:
             pipe.hset(
                 f"session:{session_id}",

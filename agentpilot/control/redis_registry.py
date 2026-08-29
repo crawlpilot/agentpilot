@@ -36,9 +36,13 @@ from pathlib import Path
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from agentpilot.control.identity import identity_for, parts_of
+from agentpilot.control.identity import parts_of
+from agentpilot.session.registry import Opener
+from agentpilot.spi.errors import LeaseConflict
+from agentpilot.spi.identity import IdentityRef
+from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
-
+_LUA_DIR = Path(__file__).resolve().parent / "lua"
 def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:
     """The three Lua/hash fields this registry has always persisted. Read back
     through the control plane's own parser now that the browser layer's identity
@@ -46,13 +50,14 @@ def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:
 
     parts = parts_of(identity)
     return parts.tenant, parts.domain, parts.name
-from agentpilot.control.identity import identity_for
-from agentpilot.session.registry import Opener
-from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
-_LUA_DIR = Path(__file__).resolve().parent / "lua"
+
+def _identity_from_hash(raw: dict[bytes, bytes]) -> IdentityRef:
+    """Rebuild an identity from the persisted hash fields -- the inverse of
+    `_identity_fields`, and the only place this registry knows the key is a
+    `tenant/domain/name` triple."""
+
+    return _identity_from_hash(raw)
 
 
 def _load(name: str) -> str:
@@ -158,7 +163,7 @@ class RedisRegistry:
             raise KeyError(f"lease {lease_id!r} was reclaimed") from exc
 
         raw = await self._redis.hgetall(key)
-        identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
+        identity = _identity_from_hash(raw)
         ctx = _to_context_ref(
             identity,
             _decode(raw.get(b"context_id", b"")),
@@ -188,7 +193,7 @@ class RedisRegistry:
             raw = await self._redis.hgetall(key)
             if not raw:
                 continue
-            identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
+            identity = _identity_from_hash(raw)
             state = ContextState(_decode(raw.get(b"state", b"idle")))
             ctx = _to_context_ref(
                 identity,

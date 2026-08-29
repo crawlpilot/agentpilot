@@ -111,7 +111,11 @@ class NodeReaper:
         for session_id in session_ids:
             raw = await self._redis.hgetall(f"session:{session_id}")
             if raw:
-                identity = identity_for(_decode(raw.get(b"tenant", b"")), _decode(raw.get(b"domain", b"")), _decode(raw.get(b"name", b"")))
+                identity = identity_for(
+                    _decode(raw.get(b"tenant", b"")),
+                    _decode(raw.get(b"domain", b"")),
+                    _decode(raw.get(b"name", b"")),
+                )
                 await self._registry.evict(identity)
                 await self._clear_stale_affinity(
                     keys=[f"affinity:{identity.slug()}"], args=[node_id]

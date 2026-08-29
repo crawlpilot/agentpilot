@@ -192,6 +192,7 @@ async def list_sessions(
             continue
         lease = lease_by_id.get(session.lease_id)
         rss_mb = _read_pid_rss_mb(session.ctx.pid) if session.ctx.pid is not None else None
+        parts = parts_of(session.identity)
         out.append(
             SessionOut(
                 session_id=session_id,
