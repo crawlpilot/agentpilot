@@ -160,7 +160,7 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
     """Leaves take configuration as arguments; only a composition root reads
     the environment (plan D8, Phase 2).
 
-    Two exemptions, both deliberate and both narrow:
+    Three exemptions, all deliberate and all narrow:
 
     - `driver/process_launcher.py` touches `DISPLAY`, which is the X11
       protocol's own channel rather than application configuration -- Chrome is
@@ -169,6 +169,12 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
     - `identity/proxy_config.py` reads inside a `from_env()` constructor called
       once from `gateway.wiring`, which is the sanctioned pattern, not a read
       at the point of use.
+    - `driver/browser_discovery.py` reads `PLAYWRIGHT_BROWSERS_PATH` and
+      `LOCALAPPDATA`, which are likewise other people's channels, not ours: the
+      first is where Playwright itself was told to unpack browsers, the second
+      is where Windows puts them. The module's job is to find what another tool
+      installed, so it has to look where that tool was told to put it. Its own
+      configuration -- `executable_path`, `channel` -- arrives as arguments.
 
     Anything else is a regression: it makes the library unconfigurable by a
     caller that does not own the process.
@@ -176,7 +182,11 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
 
     import ast
 
-    allowed = {"driver/process_launcher.py", "identity/proxy_config.py"}
+    allowed = {
+        "driver/process_launcher.py",
+        "identity/proxy_config.py",
+        "driver/browser_discovery.py",
+    }
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom", "session", "tiers"):
         for path in _browser_layer_files(pkg):

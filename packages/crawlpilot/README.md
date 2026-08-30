@@ -19,17 +19,41 @@ Chrome driver, an in-process session registry, no proxies, no extensions.
 ## Install
 
 ```bash
-pip install "crawlpilot[engine,markdown]"   # real Chrome + markdown extraction
+pip install "crawlpilot[engine]"   # + a real browser
 ```
 
 | Extra | For |
 |---|---|
-| *(base)* | HTTP fast-path tier and the content pipeline |
-| `engine` | real Chrome (Patchright) |
-| `markdown` | HTML → Markdown / structured data |
+| *(base)* | HTTP fast-path tier and the content pipeline (HTML → Markdown / structured data) |
+| `engine` | driving a real browser (Patchright) |
 | `vault` | encryption-at-rest for saved profiles |
 
 The base install carries no web framework, no database driver and no Redis.
+
+### A browser
+
+`crawlpilot[engine]` installs the automation library, not a browser. It finds one
+in this order:
+
+1. `Browser(executable_path=...)`, if you pass one
+2. `Browser(channel="chrome" | "chromium" | "msedge" | ...)`
+3. Google Chrome, wherever your OS installs it
+4. a Chromium previously fetched by `patchright install chromium`
+
+If none of those turn anything up you get an error naming the install command.
+To pin the browser explicitly:
+
+```bash
+patchright install chrome      # real Google Chrome (x86_64 only)
+patchright install chromium    # bundled Chromium (also works on arm64)
+```
+
+To drive a browser running somewhere else — another container, another host —
+pass its CDP endpoint instead and nothing is launched locally:
+
+```python
+Browser(cdp_url="http://chrome:9222")
+```
 
 ## Two shapes
 

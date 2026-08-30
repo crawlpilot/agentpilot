@@ -34,7 +34,25 @@ Chrome, so a stale pin here while the browser reports a newer build is a hard,
 deterministic bot tell for WAFs that cross-check UA against Client Hints."""
 
 DEFAULT_PROXY_MAX_SUCCESS = 100
-PROTOTYPE_ENV = "AGENTPILOT_PROTOTYPE_PROFILE_DIR"
+PROTOTYPE_ENV = "CRAWLPILOT_PROTOTYPE_PROFILE_DIR"
+"""Canonical name. `AGENTPILOT_PROTOTYPE_PROFILE_DIR` is still honoured -- see
+`_env` -- so an already-deployed service keeps its configuration on upgrade."""
+
+
+def _env(suffix: str, default: str = "") -> str:
+    """Read `CRAWLPILOT_<suffix>`, falling back to `AGENTPILOT_<suffix>`.
+
+    The variables were named for the platform crawlpilot was extracted from, so a
+    standalone user configuring this library had to set `AGENTPILOT_*` in their
+    own environment -- a name that means nothing to them and that leaks a product
+    they are not using. The old names keep working so a deployed service does not
+    break on upgrade; new deployments should use `CRAWLPILOT_*`.
+    """
+
+    value = os.environ.get(f"CRAWLPILOT_{suffix}")
+    if value is None:
+        value = os.environ.get(f"AGENTPILOT_{suffix}")
+    return (value if value is not None else default).strip()
 
 
 @dataclass(frozen=True)
@@ -43,7 +61,7 @@ class FingerprintConfig:
 
     @classmethod
     def from_env(cls) -> FingerprintConfig:
-        raw = os.environ.get("AGENTPILOT_CHROME_VERSION", DEFAULT_CHROME_VERSION).strip()
+        raw = _env("CHROME_VERSION", DEFAULT_CHROME_VERSION)
         return cls(chrome_version=raw or DEFAULT_CHROME_VERSION)
 
 
@@ -55,10 +73,8 @@ class ProfileConfig:
 
     @classmethod
     def from_env(cls) -> ProfileConfig:
-        configured = os.environ.get(PROTOTYPE_ENV)
-        if not configured or not configured.strip():
-            return cls()
-        return cls(prototype_root=Path(configured.strip()))
+        configured = _env("PROTOTYPE_PROFILE_DIR")
+        return cls(prototype_root=Path(configured)) if configured else cls()
 
 
 @dataclass(frozen=True)
@@ -67,11 +83,7 @@ class ProxyHealthConfig:
 
     @classmethod
     def from_env(cls) -> ProxyHealthConfig:
-        return cls(
-            max_success=int(
-                os.environ.get("AGENTPILOT_PROXY_MAX_SUCCESS", str(DEFAULT_PROXY_MAX_SUCCESS))
-            )
-        )
+        return cls(max_success=int(_env("PROXY_MAX_SUCCESS", str(DEFAULT_PROXY_MAX_SUCCESS))))
 
 
 @dataclass(frozen=True)
@@ -87,7 +99,7 @@ class EgressConfig:
         # `ANTHROPIC_BASE_URL` is the fallback the Bedrock provider resolves its
         # endpoint from, so honour it too rather than silently losing the
         # exemption when only that one is set.
-        base = os.environ.get("AGENTPILOT_LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
+        base = _env("LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
         if not base:
             return cls()
         return cls(llm_endpoint_host=urlparse(base).hostname)
@@ -104,9 +116,43 @@ class ContentConfig:
     @classmethod
     def from_env(cls) -> ContentConfig:
         return cls(
-            amazon_expect_district=os.environ.get(
-                "AGENTPILOT_AMAZON_EXPECT_DISTRICT", ""
-            ).strip().lower()
+            amazon_expect_district=_env("AMAZON_EXPECT_DISTRICT").lower()
+        )
+
+
+@dataclass(frozen=True)
+class LaunchConfig:
+    """Which browser to drive, and whether to launch it at all.
+
+    All four default to `None`, meaning "work it out": `driver.browser_discovery`
+    picks a binary, and `ensure_display()` decides headful vs headless. A caller
+    that cares says so; one that does not gets something that works.
+    """
+
+    executable_path: str | None = None
+    """A specific browser binary. Wins over everything else."""
+
+    channel: str | None = None
+    """A Playwright channel (`chrome`, `chromium`, `msedge`, ...), handed to
+    Playwright's own registry rather than resolved here."""
+
+    headless: bool | None = None
+    """`None` means "headful if a display exists, headless otherwise" -- the same
+    tri-state browser-use uses. A bare `False` on a headless box produces a
+    browser that cannot start, which is a worse default than either."""
+
+    cdp_url: str | None = None
+    """Attach to a browser already running somewhere (another container, another
+    host) instead of launching one. When set, nothing local is launched and the
+    profile/fingerprint/proxy settings do not apply -- whoever started that
+    browser chose them."""
+
+    @classmethod
+    def from_env(cls) -> LaunchConfig:
+        return cls(
+            executable_path=_env("BROWSER_PATH") or None,
+            channel=_env("BROWSER_CHANNEL") or None,
+            cdp_url=_env("CDP_URL") or None,
         )
 
 
@@ -120,6 +166,7 @@ class BrowserConfig:
     proxy_health: ProxyHealthConfig = field(default_factory=ProxyHealthConfig)
     egress: EgressConfig = field(default_factory=EgressConfig)
     content: ContentConfig = field(default_factory=ContentConfig)
+    launch: LaunchConfig = field(default_factory=LaunchConfig)
 
     @classmethod
     def from_env(cls) -> BrowserConfig:
@@ -129,6 +176,7 @@ class BrowserConfig:
             proxy_health=ProxyHealthConfig.from_env(),
             egress=EgressConfig.from_env(),
             content=ContentConfig.from_env(),
+            launch=LaunchConfig.from_env(),
         )
 
 

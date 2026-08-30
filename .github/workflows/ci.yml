@@ -60,8 +60,25 @@ jobs:
       - name: Run crawlpilot's own suite
         run: VIRTUAL_ENV=.venv-crawlpilot .venv-crawlpilot/bin/python -m pytest -q packages/crawlpilot/tests
 
+      # Named verbs, not a count: a hardcoded total goes stale on every catalog
+      # edit and fails the one job that proves the standalone install works,
+      # while saying nothing about whether the registry is actually usable.
       - name: Import the public API with nothing else installed
-        run: .venv-crawlpilot/bin/python -c "from crawlpilot import Browser, browser_tools; assert len(browser_tools()) == 17"
+        run: |
+          .venv-crawlpilot/bin/python - <<'PY'
+          from crawlpilot import Browser, browser_tools
+          from crawlpilot.tools import CATALOG
+
+          registry = browser_tools()
+          assert len(registry) == len(CATALOG), (len(registry), len(CATALOG))
+          for verb in ("navigate", "click", "fill", "snapshot", "extract", "select_option"):
+              assert f"browser.{verb}" in registry, verb
+          # The content pipeline is a base-install promise, so it has to import
+          # here -- with no extras beyond what this venv already has.
+          from crawlpilot.extraction.extractor import extract
+          assert extract("<html><body><p>hello</p></body></html>", format="text")
+          print(f"public API ok: {len(registry)} tools")
+          PY
 
   # ---------------------------------------------------------------- job 2
   agentpilot-workspace:
