@@ -442,7 +442,9 @@ version = "0.1.0"
 source = { editable = "packages/crawlpilot" }
 dependencies = [
     { name = "brotli" },
+    { name = "cssselect" },
     { name = "httpx", extra = ["http2"] },
+    { name = "lxml" },
     { name = "pydantic" },
     { name = "structlog" },
     { name = "zstandard" },
@@ -451,18 +453,12 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "cryptography" },
-    { name = "cssselect" },
-    { name = "lxml" },
     { name = "patchright" },
     { name = "re-cdp-patches" },
 ]
 engine = [
     { name = "patchright" },
     { name = "re-cdp-patches" },
-]
-markdown = [
-    { name = "cssselect" },
-    { name = "lxml" },
 ]
 vault = [
     { name = "cryptography" },
@@ -473,11 +469,9 @@ requires-dist = [
     { name = "brotli", specifier = ">=1.1" },
     { name = "cryptography", marker = "extra == 'all'", specifier = ">=43.0" },
     { name = "cryptography", marker = "extra == 'vault'", specifier = ">=43.0" },
-    { name = "cssselect", marker = "extra == 'all'", specifier = ">=1.2.0" },
-    { name = "cssselect", marker = "extra == 'markdown'", specifier = ">=1.2.0" },
+    { name = "cssselect", specifier = ">=1.2.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
-    { name = "lxml", marker = "extra == 'all'", specifier = ">=6.1.1" },
-    { name = "lxml", marker = "extra == 'markdown'", specifier = ">=6.1.1" },
+    { name = "lxml", specifier = ">=6.1.1" },
     { name = "patchright", marker = "extra == 'all'", specifier = ">=1.61.2" },
     { name = "patchright", marker = "extra == 'engine'", specifier = ">=1.61.2" },
     { name = "pydantic", specifier = ">=2.9" },
@@ -486,7 +480,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.4" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["engine", "markdown", "vault", "all"]
+provides-extras = ["engine", "vault", "all"]
 
 [[package]]
 name = "cryptography"

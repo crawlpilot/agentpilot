@@ -426,12 +426,30 @@ async def test_send_keys_delivers_a_shortcut(page, toolbench) -> None:
     assert await _log(page) == "shortcut"
 
 
+@pytest.mark.parametrize("keys", ["Escape", "Shift+Tab", "ctrl+a", "PageDown"])
+async def test_send_keys_accepts_the_spellings_models_emit(page, toolbench, keys: str) -> None:
+    """A shortcut rejected on spelling wastes a step for something whose intent
+    was never ambiguous, so the aliases browser-use accepts are accepted here."""
+
+    await _open(page, toolbench)
+    await page.send_keys(keys)  # must not raise
+
+
 async def test_find_text_reaches_content_below_the_fold(page, toolbench) -> None:
     await _open(page, toolbench)
     assert await page.execute_js("window.scrollY") == 0
 
     await page.find_text("a needle buried")
     assert await page.execute_js("window.scrollY") > 0
+
+
+async def test_find_text_reports_absence_rather_than_failing(page, toolbench) -> None:
+    """"Not found" is an answer the model can act on. Raising would burn the
+    step and tell it nothing about the page."""
+
+    await _open(page, toolbench)
+    result = await page.find_text("no such string anywhere")
+    assert any("was not found" in v for v in result.verifications)
 
 
 async def test_search_page_finds_text_without_an_observation(page, toolbench) -> None:
@@ -456,6 +474,11 @@ async def test_find_elements_reads_repeated_structure(page, toolbench) -> None:
 
     assert "8 match(es)" in readout
     assert "Row 1" in readout and "Row 8" in readout
+
+
+async def test_find_elements_reports_a_selector_that_matches_nothing(page, toolbench) -> None:
+    await _open(page, toolbench)
+    assert "nothing matched" in await page.find_elements(".absent")
 
 
 async def test_scroll_pages_scales_with_the_viewport(page, toolbench) -> None:
