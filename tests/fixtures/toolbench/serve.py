@@ -38,8 +38,9 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     # while `curl` on the same URL is perfectly happy.
     protocol_version = "HTTP/1.1"
 
-    cross_origin: str | None = None
-    """Base URL of the sibling origin, injected into `index.html`."""
+    def __init__(self, *args: object, cross_origin: str | None = None, **kwargs: object) -> None:
+        self.cross_origin = cross_origin
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def log_message(self, *args: object) -> None:  # noqa: D102 - quiet by default
         pass
@@ -85,8 +86,8 @@ class _Server(socketserver.ThreadingTCPServer):
     block_on_close = False
 
 
-def serve(port: int) -> _Server:
-    handler = functools.partial(_Handler, directory=str(ROOT))
+def serve(port: int, cross_origin: str | None = None) -> _Server:
+    handler = functools.partial(_Handler, directory=str(ROOT), cross_origin=cross_origin)
     server = _Server(("0.0.0.0", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -94,7 +95,8 @@ def serve(port: int) -> _Server:
 
 def main() -> None:
     base = int(os.environ.get("PORT", "8091"))
-    primary, secondary = serve(base), serve(base + 1)
+    secondary = serve(base + 1)
+    primary = serve(base, cross_origin=f"http://127.0.0.1:{base + 1}")
     print(f"toolbench on :{base} (primary) and :{base + 1} (cross-origin)", file=sys.stderr)
     try:
         threading.Event().wait()

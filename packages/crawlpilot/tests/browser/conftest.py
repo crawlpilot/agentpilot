@@ -43,12 +43,11 @@ class Toolbench:
 
     @property
     def index(self) -> str:
-        """The main page, wired to load its cross-origin iframe from the sibling
-        origin. Without the parameter the page drops that iframe entirely, so a
-        test that forgets it fails on a missing element rather than silently
-        passing against a same-origin stand-in."""
+        """The main page. Its cross-origin iframe already points at the sibling
+        origin -- the server substitutes it into the markup, so the `src` is a
+        real attribute at parse time."""
 
-        return self.url("index.html", crossOrigin=self.secondary)
+        return self.url("index.html")
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -59,8 +58,9 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     # while `curl` on the same URL is perfectly happy.
     protocol_version = "HTTP/1.1"
 
-    cross_origin: str | None = None
-    """Base URL of the sibling origin, injected into `index.html`."""
+    def __init__(self, *args: object, cross_origin: str | None = None, **kwargs: object) -> None:
+        self.cross_origin = cross_origin
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     def log_message(self, *args: object) -> None:
         pass
@@ -104,8 +104,10 @@ class _Server(socketserver.ThreadingTCPServer):
     block_on_close = False
 
 
-def _serve() -> tuple[_Server, str]:
-    handler = functools.partial(_Handler, directory=str(FIXTURE_ROOT))
+def _serve(cross_origin: str | None = None) -> tuple[_Server, int]:
+    handler = functools.partial(
+        _Handler, directory=str(FIXTURE_ROOT), cross_origin=cross_origin
+    )
     server = _Server(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1]
@@ -121,12 +123,14 @@ def toolbench() -> Iterator[Toolbench]:
     """
 
     assert FIXTURE_ROOT.is_dir(), f"toolbench fixture missing at {FIXTURE_ROOT}"
-    primary, primary_port = _serve()
+    # The sibling has to exist before the primary can be told about it.
     secondary, secondary_port = _serve()
+    secondary_url = f"http://127.0.0.1:{secondary_port}"
+    primary, primary_port = _serve(cross_origin=secondary_url)
     try:
         yield Toolbench(
             primary=f"http://localhost:{primary_port}",
-            secondary=f"http://127.0.0.1:{secondary_port}",
+            secondary=secondary_url,
         )
     finally:
         primary.shutdown()
