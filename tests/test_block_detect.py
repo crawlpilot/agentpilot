@@ -3,8 +3,19 @@ HtmlIntegrity block classifier and burn weights. Pure, no browser."""
 
 from __future__ import annotations
 
+from agentpilot.control.retail_extension import RetailExtension
+from agentpilot.extensions import ExtensionRegistry
 from agentpilot.extraction import block_detect
 from agentpilot.extraction.block_detect import Scope, Verdict
+
+# The retail checkers are no longer auto-installed at import (plan D12): they are
+# an ordinary extension the platform wires in. These tests exercise the same
+# guarantees through that seam, which is also what proves the wiring works.
+_RETAIL_HOOKS = ExtensionRegistry([RetailExtension()]).blocks
+
+
+def _classify(**kwargs: object) -> Verdict:
+    return block_detect.classify_page(hooks=_RETAIL_HOOKS, **kwargs)  # type: ignore[arg-type]
 
 
 def _big(body: str) -> str:
@@ -17,43 +28,43 @@ def test_akamai_access_denied_is_forbidden_even_on_200() -> None:
         "<h1>Access Denied</h1> You don't have permission to access "
         "on this server. Reference #18.6d882c31 errors.edgesuite.net"
     )
-    assert block_detect.classify_page(html=body, url="https://zara.com/x", status=200) is (
+    assert _classify(html=body, url="https://zara.com/x", status=200) is (
         Verdict.FORBIDDEN
     )
 
 
 def test_cloudflare_interstitial_is_robot_check() -> None:
     body = _big("<title>Just a moment...</title> /cdn-cgi/challenge-platform")
-    assert block_detect.classify_page(html=body, url="https://x.com", status=200) is (
+    assert _classify(html=body, url="https://x.com", status=200) is (
         Verdict.ROBOT_CHECK
     )
 
 
 def test_amazon_short_captcha_is_robot_check() -> None:
     body = "<html>Type the characters you see in this image</html>"
-    assert block_detect.classify_page(html=body, url="https://amazon.com", status=200) is (
+    assert _classify(html=body, url="https://amazon.com", status=200) is (
         Verdict.ROBOT_CHECK
     )
 
 
 def test_blocked_url_and_403_body_markers() -> None:
-    assert block_detect.classify_page(
+    assert _classify(
         html=_big("ok"), url="https://x.com/blocked", status=200
     ) is Verdict.ROBOT_CHECK
-    assert block_detect.classify_page(
+    assert _classify(
         html=_big("403 Forbidden"), url="https://x.com", status=200
     ) is Verdict.FORBIDDEN
 
 
 def test_status_signals() -> None:
-    assert block_detect.classify_page(html=_big("ok"), url="u", status=403) is Verdict.FORBIDDEN
-    assert block_detect.classify_page(html=_big("ok"), url="u", status=429) is Verdict.RATE_LIMITED
+    assert _classify(html=_big("ok"), url="u", status=403) is Verdict.FORBIDDEN
+    assert _classify(html=_big("ok"), url="u", status=429) is Verdict.RATE_LIMITED
 
 
 def test_walmart_blocked_url_is_heaviest_robot_check() -> None:
     # The Walmart site checker upgrades a landed /blocked wall to ROBOT_CHECK_3
     # (weight 3) vs the generic ROBOT_CHECK (weight 1) a non-Walmart host gets.
-    v = block_detect.classify_page(
+    v = _classify(
         html=_big("ok"),
         url="https://www.walmart.com/blocked?url=abc",
         status=200,
@@ -64,7 +75,7 @@ def test_walmart_blocked_url_is_heaviest_robot_check() -> None:
 
 def test_walmart_undersized_item_is_too_small() -> None:
     # A short /ip/ product page (well under the 300 KB floor) is a stub/wall.
-    v = block_detect.classify_page(
+    v = _classify(
         html=_big("some thin product markup"),
         url="https://www.walmart.com/ip/Thing/12345",
         status=200,
@@ -74,30 +85,30 @@ def test_walmart_undersized_item_is_too_small() -> None:
 
 def test_walmart_full_item_is_ok() -> None:
     big_page = "<html><a href='#'>x</a>" + ("y" * 350_000) + "</html>"
-    v = block_detect.classify_page(
+    v = _classify(
         html=big_page, url="https://www.walmart.com/ip/Thing/12345", status=200
     )
     assert v is Verdict.OK
 
 
 def test_amazon_undersized_dp_is_too_small() -> None:
-    v = block_detect.classify_page(
+    v = _classify(
         html=_big("thin"), url="https://www.amazon.com/dp/B00TEST", status=200
     )
     assert v is Verdict.TOO_SMALL
-    assert block_detect.classify_page(html=_big("ok"), url="u", status=404) is Verdict.NOT_FOUND
+    assert _classify(html=_big("ok"), url="u", status=404) is Verdict.NOT_FOUND
 
 
 def test_empty_and_too_small() -> None:
-    assert block_detect.classify_page(html="", url="u", status=200) is Verdict.EMPTY
-    assert block_detect.classify_page(html="   ", url="u", status=200) is Verdict.EMPTY
+    assert _classify(html="", url="u", status=200) is Verdict.EMPTY
+    assert _classify(html="   ", url="u", status=200) is Verdict.EMPTY
     # no anchor + tiny -> EMPTY; has anchor + tiny -> TOO_SMALL.
-    assert block_detect.classify_page(html="<div>hi</div>", url="u", status=200) is Verdict.EMPTY
-    assert block_detect.classify_page(html="<a>hi</a>", url="u", status=200) is Verdict.TOO_SMALL
+    assert _classify(html="<div>hi</div>", url="u", status=200) is Verdict.EMPTY
+    assert _classify(html="<a>hi</a>", url="u", status=200) is Verdict.TOO_SMALL
 
 
 def test_ok_page() -> None:
-    assert block_detect.classify_page(
+    assert _classify(
         html=_big("<html><body>real content</body></html>"), url="u", status=200
     ) is Verdict.OK
 
@@ -146,7 +157,7 @@ def test_datadome_interstitial_is_a_robot_check() -> None:
         "</body></html>"
     )
 
-    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+    verdict = _classify(html=body, url="https://example.test/x", status=200)
 
     assert verdict in block_detect._ROBOT_CHECKS
 
@@ -154,7 +165,7 @@ def test_datadome_interstitial_is_a_robot_check() -> None:
 def test_perimeterx_block_is_a_robot_check() -> None:
     body = _big("<div id='px-captcha'></div> Please verify you are a human")
 
-    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+    verdict = _classify(html=body, url="https://example.test/x", status=200)
 
     assert verdict in block_detect._ROBOT_CHECKS
 
@@ -162,7 +173,7 @@ def test_perimeterx_block_is_a_robot_check() -> None:
 def test_turnstile_is_a_robot_check() -> None:
     body = _big("<div class='cf-turnstile' data-sitekey='x'></div>")
 
-    verdict = block_detect.classify_page(html=body, url="https://example.test/x", status=200)
+    verdict = _classify(html=body, url="https://example.test/x", status=200)
 
     assert verdict in block_detect._ROBOT_CHECKS
 
@@ -171,7 +182,7 @@ def test_datadome_block_header_is_a_robot_check_even_on_a_plausible_body() -> No
     """A challenge can be visually indistinguishable from a thin real page; the
     header is not ambiguous."""
 
-    verdict = block_detect.classify_page(
+    verdict = _classify(
         html=_big("<h1>Products</h1><a href='/x'>x</a>"),
         url="https://example.test/x",
         status=403,
@@ -182,7 +193,7 @@ def test_datadome_block_header_is_a_robot_check_even_on_a_plausible_body() -> No
 
 
 def test_perimeterx_block_header_is_a_robot_check() -> None:
-    verdict = block_detect.classify_page(
+    verdict = _classify(
         html=_big("<h1>hi</h1><a href='/x'>x</a>"),
         url="https://example.test/x",
         status=403,
@@ -197,7 +208,7 @@ def test_a_datadome_protected_site_serving_real_content_is_not_a_block() -> None
     header alone must not be read as a refusal, or every successful scrape of
     a protected site burns its identity."""
 
-    verdict = block_detect.classify_page(
+    verdict = _classify(
         html=_big("<h1>Product</h1><a href='/x'>x</a>"),
         url="https://example.test/x",
         status=200,
@@ -209,7 +220,7 @@ def test_a_datadome_protected_site_serving_real_content_is_not_a_block() -> None
 
 def test_headers_are_optional() -> None:
     assert (
-        block_detect.classify_page(
+        _classify(
             html=_big("<h1>hi</h1><a href='/x'>x</a>"), url="https://x.test/", status=200
         )
         is Verdict.OK

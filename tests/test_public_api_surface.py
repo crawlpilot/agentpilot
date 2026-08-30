@@ -63,6 +63,13 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
     # Phase 3a: the shared-state seam. `InMemoryStateStore` is the shipped
     # default; `control.redis_store.RedisStateStore` is the injected one.
+    # Phase 4: the extension seam.
+    "agentpilot.extensions": (
+        "ExtensionRegistry", "ExtensionManifest", "Extension", "Resolution",
+        "BrowseHooks", "ContentHooks", "BlockHooks",
+        "BrowseMount", "ContentMount", "BlockMount",
+        "HookChain", "check_compatibility", "discover_extensions", "API_VERSION",
+    ),
     "agentpilot.policy": (
         "StateStore", "InMemoryStateStore",
         "ProxyProvider", "PrototypeProvider", "StaticProxies", "NullPrototypes",
@@ -211,3 +218,52 @@ def test_browser_layer_has_no_tenancy_vocabulary() -> None:
                             continue
                         offenders.append(f"{rel}:{node.lineno}: {name}")
     assert not offenders, "tenancy leaked back into the browser layer:\n" + "\n".join(offenders)
+
+
+# The browser-layer modules that import `observability` (and so, transitively,
+# `prometheus_client`). This is a **ratchet, not an approval**: the plan's §3.3
+# promises the browser wheel's dependency closure contains no prometheus, and
+# these three contradict it. Pinning the current set means the problem cannot
+# grow while it waits for Phase 7, where metrics need to move behind an
+# injected recorder the way `policy.StateStore` handles shared state.
+_OBSERVABILITY_DEBT = {
+    "driver/patchright_driver.py",
+    "session/interactive.py",
+    "session/reaper.py",
+    "extensions/hooks.py",
+}
+
+
+def test_observability_coupling_does_not_grow() -> None:
+    """Known debt, pinned so it shrinks rather than spreads.
+
+    `extensions/hooks.py` was added to this set deliberately in Phase 4: it
+    follows the existing precedent rather than inventing a second, divergent
+    metrics pattern for one module. All four move together when the recorder is
+    injected.
+    """
+
+    import ast
+    import pathlib
+
+    found: set[str] = set()
+    for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
+                "session", "tiers", "config", "policy", "extensions"):
+        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                mod = ""
+                if isinstance(node, ast.ImportFrom):
+                    mod = node.module or ""
+                elif isinstance(node, ast.Import):
+                    mod = node.names[0].name
+                if mod.startswith("agentpilot.observability"):
+                    found.add(path.relative_to("agentpilot").as_posix())
+
+    new = found - _OBSERVABILITY_DEBT
+    assert not new, (
+        "new browser-layer dependency on observability (and so prometheus): "
+        f"{sorted(new)}. Inject a recorder instead, or add it here with a reason."
+    )
+    gone = _OBSERVABILITY_DEBT - found
+    assert not gone, f"debt paid down -- remove from _OBSERVABILITY_DEBT: {sorted(gone)}"

@@ -35,6 +35,7 @@ import structlog
 from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import fetch as fetch_robots
+from agentpilot.extensions.mounts import BlockHooks
 from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_options
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
@@ -74,6 +75,7 @@ class CrawlWorkerLoop:
         warm_pool: WarmPool | None = None,
         browser_config: BrowserConfig = DEFAULTS,
         prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
+        block_hooks: BlockHooks | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -81,6 +83,7 @@ class CrawlWorkerLoop:
         self._profiles_root = profiles_root
         self._browser_config = browser_config
         self._prototype_provider = prototype_provider
+        self._block_hooks = block_hooks
         self._proxy_pinner = proxy_pinner
         self._warm_pool = warm_pool
         self._lease_ttl_seconds = lease_ttl_seconds
@@ -158,6 +161,7 @@ class CrawlWorkerLoop:
         document, _screenshot = await run_ephemeral_scrape(
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
+            block_hooks=self._block_hooks,
             scope=job.tenant,
             domain=domain,
             url=task.url,

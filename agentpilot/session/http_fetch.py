@@ -21,6 +21,7 @@ import re
 import httpx
 
 from agentpilot.egress.httpx_guard import assert_host_allowed
+from agentpilot.extensions.mounts import BlockHooks
 from agentpilot.extraction import block_detect
 from agentpilot.extraction.extractor import extract
 from agentpilot.spi.actions import ActionResult, ExtractFormat
@@ -58,6 +59,7 @@ async def fetch_via_http(
     timeout_ms: int = 30_000,
     client: httpx.AsyncClient | None = None,
     egress: EgressPolicy | None = None,
+    block_hooks: BlockHooks | None = None,
 ) -> ActionResult:
     """GET `url` over HTTP, classify the response, and extract the requested
     formats -- returning an `ActionResult` matching the browser path's shape
@@ -101,7 +103,9 @@ async def fetch_via_http(
     status = resp.status_code
     final_url = str(resp.url)
 
-    verdict = block_detect.classify_page(html=html, url=final_url, status=status)
+    verdict = block_detect.classify_page(
+        html=html, url=final_url, status=status, hooks=block_hooks
+    )
     weight = block_detect.warning_weight(verdict)
     scope = block_detect.retry_scope(verdict)
     if scope is block_detect.Scope.PRIVACY:

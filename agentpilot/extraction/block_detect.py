@@ -25,6 +25,8 @@ import re
 from collections.abc import Mapping
 from typing import Protocol
 
+from agentpilot.extensions.mounts import BlockHooks
+
 
 class Verdict(enum.Enum):
     OK = "ok"
@@ -107,7 +109,7 @@ _DATADOME_HEADERS = ("x-datadome", "x-datadome-cid")
 _PERIMETERX_HEADERS = ("x-px-block", "x-px-request-id")
 
 # Amazon-style CAPTCHA and other site-specific tells now live in
-# `agentpilot.extraction.site_checkers` (installed into the chain at the bottom
+# `agentpilot.control.retail_extension` (contributed through the extension
 # of this module), not inline here.
 
 # Below this, a "rendered" page is almost certainly a stub/wall, not content
@@ -169,24 +171,26 @@ class SiteChecker(Protocol):
     def check(self, *, html: str | None, url: str, status: int | None) -> Verdict | None: ...
 
 
-_SITE_CHECKERS: list[SiteChecker] = []
+def _site_verdict(
+    hooks: BlockHooks | None, html: str | None, url: str, status: int | None
+) -> Verdict | None:
+    """First non-OK verdict from a relevant extension, or `None` if none has an
+    opinion (`ChainedHtmlIntegrityChecker.kt:90-96`).
 
+    The chain is *passed in*, not read from module state. It used to be a
+    module-level `_SITE_CHECKERS` list populated by an
+    `install_default_site_checkers()` call at import time, which made merely
+    importing this module register three retailers' policy globally and made
+    behaviour depend on import order (plan D12).
+    """
 
-def register_site_checker(checker: SiteChecker) -> None:
-    """Append a per-site checker to the chain (Pulsar `ChainedHtmlIntegrityChecker
-    .addLast`). Idempotent per instance is not enforced -- callers install once."""
-    _SITE_CHECKERS.append(checker)
-
-
-def _site_verdict(html: str | None, url: str, status: int | None) -> Verdict | None:
-    """First non-OK verdict from a relevant site checker, or `None` if none has
-    an opinion (`ChainedHtmlIntegrityChecker.kt:90-96`)."""
-    for checker in _SITE_CHECKERS:
-        if not checker.is_relevant(url):
-            continue
-        verdict = checker.check(html=html, url=url, status=status)
-        if verdict is not None and verdict is not Verdict.OK:
-            return verdict
+    if hooks is None:
+        return None
+    verdict: Verdict | None = hooks.classify.first_result(
+        html=html, url=url, status=status
+    )
+    if verdict is not None and verdict is not Verdict.OK:
+        return verdict
     return None
 
 
@@ -225,6 +229,7 @@ def classify_page(
     url: str,
     status: int | None,
     headers: Mapping[str, str] | None = None,
+    hooks: BlockHooks | None = None,
 ) -> Verdict:
     """Pure classifier: `(html, url, status, headers) -> Verdict`. Status is the
     primary signal when present, but body markers win for the 200-body walls
@@ -259,7 +264,7 @@ def classify_page(
     # Per-site checkers (Pulsar addFirst): host-aware redirect/captcha/undersize
     # tells that the generic markers can't see (silent redirects to a block URL,
     # per-page-type minimum content size).
-    site_verdict = _site_verdict(html, url, status)
+    site_verdict = _site_verdict(hooks, html, url, status)
     if site_verdict is not None:
         return site_verdict
 
@@ -350,10 +355,3 @@ def is_blocked(verdict: Verdict) -> bool:
 
     return retry_scope(verdict) is Scope.PRIVACY
 
-
-# Install the built-in per-site checkers into the chain. Done at the bottom so
-# every name `site_checkers` imports from this module is already defined; the
-# import is deferred here (not at the top) to avoid a circular import.
-from agentpilot.extraction import site_checkers as _site_checkers  # noqa: E402
-
-_site_checkers.install_default_site_checkers()

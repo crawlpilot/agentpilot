@@ -14,17 +14,23 @@ source. Two signals the generic classifier can't see:
      site's floor the page is `TOO_SMALL` (a CRAWL-scope soft retry).
 
 Checkers return `None` to defer (no opinion) so the chain falls through to the
-generic markers in `block_detect.classify_page`. Install the defaults once via
-`install_default_site_checkers()` (block_detect does this at import).
+generic markers in `block_detect.classify_page` -- the convention the extension
+hook chain preserved exactly, which is why this port was mechanical.
+
+**This lives in `agentpilot.control`, not in the browser layer.** A library that
+ships `_WALMART_ITEM_MIN` cannot be a general browser platform (plan D10/D12):
+these are four retailers' policy, which is the platform's knowledge about the
+sites *it* crawls. It is wired in through `extensions.BlockMount` exactly as any
+third-party extension package would be -- no privileged path, which is what
+makes it the reference example rather than a bundled exception.
 """
 
 from __future__ import annotations
 
-from agentpilot.extraction.block_detect import (
-    Verdict,
-    has_known_wall_marker,
-    register_site_checker,
-)
+from collections.abc import Callable
+
+from agentpilot.extensions import BlockHooks, ExtensionManifest
+from agentpilot.extraction.block_detect import SiteChecker, Verdict, has_known_wall_marker
 
 # Amazon CAPTCHA prompt (AmazonHtmlIntegrityChecker.kt:120): a *short* page
 # carrying this exact prompt is a robot check.
@@ -192,10 +198,42 @@ def _looks_like_pdp(lurl: str) -> bool:
     )
 
 
-def install_default_site_checkers(*, amazon_expect_district: str = "") -> None:
-    """Register the built-in Walmart/Amazon/JD/fashion-retail checkers. Called once at import
-    from `block_detect`; safe to call again only if the chain was cleared."""
-    register_site_checker(WalmartChecker())
-    register_site_checker(AmazonChecker(amazon_expect_district))
-    register_site_checker(JdChecker())
-    register_site_checker(FashionRetailChecker())
+class RetailExtension:
+    """The four built-in retail checkers, as an ordinary extension.
+
+    Ordering is `addLast` within this extension and matches the previous
+    install order, so a page that two checkers both have an opinion on resolves
+    the same way it did before.
+    """
+
+    def __init__(self, amazon_expect_district: str = "") -> None:
+        self.manifest = ExtensionManifest(
+            name="retail",
+            version="1.0",
+            description="Walmart / Amazon / JD / fashion-retail block detection",
+            requires=("blocks",),
+        )
+        self._amazon_expect_district = amazon_expect_district
+
+    def configure_blocks(self, hooks: BlockHooks) -> None:
+        checkers = (
+            WalmartChecker(),
+            AmazonChecker(self._amazon_expect_district),
+            JdChecker(),
+            FashionRetailChecker(),
+        )
+        for checker in checkers:
+            hooks.classify.add_last(_as_handler(checker))
+
+
+def _as_handler(checker: SiteChecker) -> Callable[..., Verdict | None]:
+    """Adapt a `SiteChecker` to the hook signature: gate on `is_relevant`, then
+    defer with `None` exactly as the chain expects."""
+
+    def handler(*, html: str | None, url: str, status: int | None) -> Verdict | None:
+        if not checker.is_relevant(url):
+            return None
+        verdict: Verdict | None = checker.check(html=html, url=url, status=status)
+        return verdict
+
+    return handler

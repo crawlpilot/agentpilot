@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import structlog
 
 from agentpilot.config import DEFAULTS, BrowserConfig
+from agentpilot.extensions.mounts import BlockHooks, Resolution
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.fingerprint import generate as generate_fingerprint
 from agentpilot.identity.profile_store import (
@@ -202,6 +203,7 @@ async def run_ephemeral_scrape(
     http_fetcher: HttpFetcher | None = None,
     browser_config: BrowserConfig = DEFAULTS,
     prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
+    block_hooks: BlockHooks | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -397,6 +399,7 @@ async def run_ephemeral_scrape(
             headers=headers,
             proxy=proxy,
             timeout_ms=options.timeout_ms,
+            block_hooks=block_hooks,
         )
 
     async def _attempt(identity: IdentityRef, attempt_tier: str) -> tuple[ActionResult, str]:
@@ -460,7 +463,10 @@ async def run_ephemeral_scrape(
     # the tier ladder on a hard PRIVACY wall (fresh identity => new proxy +
     # fingerprint); the inner loop retries the *same* tier on a soft CRAWL-scope
     # verdict (thin/rate-limited page that still rendered) before accepting it.
+    break_all = False
     for attempt_tier in attempts:
+        if break_all:
+            break
         crawl_tries = 0
         while True:
             attempt_identity = _make_identity()
@@ -468,13 +474,30 @@ async def run_ephemeral_scrape(
                 attempt_result, node_id = await _attempt(attempt_identity, attempt_tier)
             except ChallengeDetected as exc:
                 last_challenge = exc
+                # Give extensions a chance to *act* on the wall before the
+                # ladder does (plan D12's `resolve`). Site knowledge could
+                # previously only say "this is a wall"; now it can clear one and
+                # say what should follow. `None` from every handler means no
+                # extension had an opinion, which is the previous behaviour.
+                resolution = None
+                if block_hooks is not None:
+                    resolution = await block_hooks.resolve.first_result_async(exc.verdict)
                 log.info(
                     "ephemeral_scrape.challenge_escalate",
                     url=url,
                     tier=attempt_tier,
                     scope=exc.scope,
                     detail=str(exc),
+                    resolution=resolution.value if resolution is not None else None,
                 )
+                if resolution is Resolution.SOLVED and crawl_tries < crawl_retry_max:
+                    # Cleared in place: retry this tier rather than burning a
+                    # rung of the ladder on a wall that is no longer there.
+                    crawl_tries += 1
+                    continue
+                if resolution is Resolution.GIVE_UP:
+                    break_all = True
+                    break
                 break  # hard wall -> next tier with a fresh identity
             if attempt_result.soft_verdict and crawl_tries < crawl_retry_max:
                 crawl_tries += 1

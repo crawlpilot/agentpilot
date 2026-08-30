@@ -970,7 +970,64 @@ no tenant to compose from.
 > Protocol here, wire it in Phase 6, keep the reference extension's tool
 > contribution behind that.
 
-**Accept:** the reference extension exercises every mount and passes in CI; a newer-major `api_version` is refused and an older one loads with a warning; a deliberately-throwing extension does not fail a scrape; a fresh import of the content pipeline leaves the registry empty; `tests/test_block_detect.py`'s retailer fixtures still classify correctly through the extension path; `grep -rniE "walmart|amazon|_abck"` over the browser packages returns nothing.
+**Status: done.** `agentpilot/extensions/` is the seam; `block_detect`'s
+module-level `_SITE_CHECKERS` and its import-time `install_default_site_checkers()`
+call are **gone**.
+
+| Piece | Where |
+|---|---|
+| `ExtensionManifest` + the compatibility verdict table | `extensions/manifest.py` |
+| Typed hook chains, dispatch rules, isolation, timeouts, metrics | `extensions/hooks.py` |
+| `BrowseMount` / `ContentMount` / `BlockMount`, `Resolution` | `extensions/mounts.py` |
+| Per-instance registry, disable-by-config, opt-in entry-point discovery | `extensions/registry.py` |
+| Walmart / Amazon / JD / fashion checkers, ported out of the library | `control/retail_extension.py` |
+
+`RetailExtension` is wired in `gateway.wiring` through exactly the seam a
+third-party package would use — no privileged path, which is what makes it the
+reference example rather than a bundled exception.
+`AGENTPILOT_DISABLED_EXTENSIONS` turns one off without uninstalling it.
+
+Judgement calls:
+
+- **`resolve` is connected to the ladder, not just defined.** On a
+  `ChallengeDetected`, `ephemeral` now asks extensions first: `SOLVED` retries
+  the same tier rather than burning a rung on a wall that is no longer there,
+  `GIVE_UP` stops the outer loop, and `None` from every handler is exactly the
+  previous behaviour. This is the capability that did not exist before — site
+  knowledge could only *say* "this is a wall", never act on it.
+- **The port was mechanical because the defer convention was preserved.**
+  `None` still means "no opinion", so `SiteChecker.check` bodies moved unchanged
+  behind a small adapter.
+- **The reference extension lives in the test suite and exercises every mount.**
+  Browser4 ships `browser4-pdk-test-plugin` for the same reason: an SPI nobody
+  builds against rots.
+- **`classify` stayed synchronous.** Making it async would have rippled through
+  `classify_page`, which is a pure function that a caller can use with no event
+  loop. `resolve` is async because it drives a browser.
+
+**A regression this deleted, and the test that catches it:** removing the
+import-time install silently disabled Walmart/Amazon detection in production —
+both `classify_page` call sites (`patchright_driver`, `http_fetch`) were passing
+no hooks. `test_retail_detection_survives_the_port` asserts the retail verdict
+through the wired registry *and* asserts the generic classifier alone says `OK`
+on the same page, so the wiring cannot rot without failing.
+
+**A pre-existing finding, now ratcheted:** `driver/patchright_driver.py`,
+`session/interactive.py` and `session/reaper.py` already import
+`observability.metrics`, so **prometheus is transitively a browser-layer
+dependency today** — contradicting §3.3's promise about the wheel's closure. The
+earlier direct-import test missed it. `extensions/hooks.py` follows that
+precedent deliberately rather than inventing a second metrics pattern for one
+module, and `test_observability_coupling_does_not_grow` pins the set of four so
+it shrinks rather than spreads. All four move together when metrics go behind an
+injected recorder, the way `policy.StateStore` handles shared state.
+
+**Deferred as planned:** `ToolMount` — its Protocol is defined but wiring waits
+on Phase 6's tool registry.
+
+**Gates:** 834 passed / 65 skipped (was 801); 20 contracts kept, 0 broken
+(`extensions` joined the browser-layer forbidden contracts); mypy 11 at
+baseline; ruff 11, two below.
 
 ### Phase 5 — The facade (D2, D9)
 

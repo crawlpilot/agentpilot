@@ -112,3 +112,17 @@ context_rotations_total = Counter(
     "Contexts retired + rotated due to degraded health, by policy",
     ["policy"],  # restart | fresh
 )
+
+
+extension_hook_calls_total = Counter(
+    "agentpilot_extension_hook_calls_total",
+    "Extension hook invocations, by extension, hook and outcome.",
+    ["extension", "hook", "outcome"],
+)
+"""`outcome` is one of `handled` / `deferred` / `error` / `timeout`.
+
+Labelled by extension so a misbehaving one is diagnosable from production
+rather than from a reproduction: a chain that silently defers everything, or an
+extension whose `error` rate climbs after a site changes its markup, is
+invisible without this.
+"""

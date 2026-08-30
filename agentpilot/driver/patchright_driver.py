@@ -57,6 +57,7 @@ from agentpilot.driver.live_view import (
 from agentpilot.driver.process_launcher import ProcessLauncher
 from agentpilot.driver.ref_cache import RefCache
 from agentpilot.egress.policy import apply_baseline
+from agentpilot.extensions.mounts import BlockHooks
 from agentpilot.extraction import block_detect
 from agentpilot.extraction.extractor import extract
 from agentpilot.observability.metrics import (
@@ -375,10 +376,15 @@ class PatchrightDriver:
         launcher: ProcessLauncher,
         max_tabs_per_session: int = DEFAULT_MAX_TABS_PER_SESSION,
         node_id: str = "local",
+        block_hooks: BlockHooks | None = None,
     ) -> None:
         self._launcher = launcher
         self._max_tabs_per_session = max_tabs_per_session
         self._node_id = node_id
+        # Per-site block detection is contributed by extensions now, not
+        # auto-installed at import (plan D12). `None` means the generic
+        # classifier only -- correct for a caller that registered nothing.
+        self._block_hooks = block_hooks
         self._contexts: dict[str, _Context] = {}
 
     def _require_context(self, ctx: ContextRef) -> _Context:
@@ -1006,7 +1012,11 @@ class PatchrightDriver:
             # is visually indistinguishable from a thin real page.
             headers = response.headers if response is not None else None
             verdict = block_detect.classify_page(
-                html=html, url=live.page.url, status=status, headers=headers
+                html=html,
+                url=live.page.url,
+                status=status,
+                headers=headers,
+                hooks=self._block_hooks,
             )
             weight = block_detect.warning_weight(verdict)
             scope = block_detect.retry_scope(verdict)

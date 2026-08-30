@@ -1,10 +1,10 @@
-"""Unit tests for `agentpilot.extraction.site_checkers` -- per-site
+"""Unit tests for `agentpilot.control.retail_extension` -- per-site
 block/integrity checkers. Pure, no browser."""
 
 from __future__ import annotations
 
 from agentpilot.extraction.block_detect import Verdict
-from agentpilot.extraction.site_checkers import AmazonChecker, JdChecker, WalmartChecker
+from agentpilot.control.retail_extension import AmazonChecker, JdChecker, WalmartChecker
 
 
 def _big(n: int) -> str:

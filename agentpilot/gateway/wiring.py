@@ -53,6 +53,8 @@ from agentpilot.config import BrowserConfig
 from agentpilot.control.prototypes import DirectoryPrototypes
 from agentpilot.control.proxy_config import ProxyConfig
 from agentpilot.control.redis_store import RedisStateStore
+from agentpilot.control.retail_extension import RetailExtension
+from agentpilot.extensions import ExtensionRegistry
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.identity.burn_tracker import BurnTracker
 from agentpilot.identity.proxy_health import ProxyHealth
@@ -122,6 +124,22 @@ class Wiring:
         # proxy pinning (Phase 3). Redis-backed when configured; process-local
         # otherwise. `InMemoryStateStore` is correct for a single process ONLY
         # -- see `_assert_shared_state_for_worker()`.
+        # Site knowledge is contributed as an extension, never auto-installed
+        # at import (plan D12). `RetailExtension` is agentpilot's own -- wired
+        # through exactly the same seam a third-party package would use, which
+        # is what makes it the reference example rather than a special case.
+        # `AGENTPILOT_DISABLED_EXTENSIONS` lets an operator turn one off without
+        # uninstalling it.
+        disabled = [
+            n.strip()
+            for n in os.environ.get("AGENTPILOT_DISABLED_EXTENSIONS", "").split(",")
+            if n.strip()
+        ]
+        self.extensions = ExtensionRegistry(
+            [RetailExtension(self.browser_config.content.amazon_expect_district)],
+            disabled=disabled,
+        )
+
         # The prototype catalog: a platform-owned directory tree, injected as a
         # `policy.PrototypeProvider`. The browser layer ships no catalog.
         self.prototype_provider = DirectoryPrototypes(
@@ -276,6 +294,7 @@ class Wiring:
             self.launcher,
             max_tabs_per_session=int(os.environ.get("AGENTPILOT_MAX_TABS_PER_SESSION", "10")),
             node_id=self.node_id,
+            block_hooks=self.extensions.blocks,
         )
         assert isinstance(self.driver, BrowserDriver)
 
@@ -412,6 +431,9 @@ class Wiring:
             self.proxy_pinner,
             lease_ttl_seconds=self.lease_ttl_seconds,
             warm_pool=self.warm_pool,
+            browser_config=self.browser_config,
+            prototype_provider=self.prototype_provider,
+            block_hooks=self.extensions.blocks,
         )
         self.crawl_worker_loop.start()
 

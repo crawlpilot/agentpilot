@@ -285,6 +285,7 @@ source_modules = [
     "agentpilot.session",
     "agentpilot.tiers",
     "agentpilot.config",
+    "agentpilot.extensions",
     "agentpilot.policy",
 ]
 forbidden_modules = ["redis"]
@@ -317,6 +318,7 @@ source_modules = [
     "agentpilot.session",
     "agentpilot.tiers",
     "agentpilot.config",
+    "agentpilot.extensions",
 ]
 forbidden_modules = ["agentpilot.control"]
 
