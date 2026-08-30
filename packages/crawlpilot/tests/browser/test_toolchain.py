@@ -31,45 +31,64 @@ async def _log(page) -> str:
     return await page.execute_js("document.getElementById('log').textContent")
 
 
-async def _offered(page) -> dict[str, str]:
-    """`{element id: ref}` for the elements a model would actually be offered.
+# Two different questions, kept apart on purpose.
+#
+# *Addressable* is what the driver can act on: every element the capture walked
+# over, which is what a ref resolves against. *Offered* is the narrower set the
+# serializer decides to show a model -- occluded elements dropped, nested
+# duplicates deduped. Conflating them makes a test either miss a real
+# regression (asserting a hidden-but-usable element is "offered") or assert a
+# guarantee that was never made.
 
-    Runs the snapshot through `dom.serialize`, which is the same pipeline the
-    agent's observation is built from -- so this reflects the *editorial*
-    decisions too (occluded elements dropped, nested duplicates deduped), not
-    merely everything the capture walked over. Asserting against the raw tree
-    would pass for elements the model is never shown.
+
+async def _refs(page) -> dict[str, str]:
+    """`{element id: ref}` for everything the driver can address."""
+
+    from crawlpilot.spi.dom_tree import iter_elements
+
+    tree = await page.snapshot()
+    assert tree is not None, "snapshot returned no tree"
+    found: dict[str, str] = {}
+    for node in iter_elements(tree):
+        element_id = node.attributes.get("id")
+        # First wins, in document order: `dup` appears twice and the pair is
+        # tested separately through `_all_refs`.
+        if element_id and element_id not in found:
+            found[element_id] = f"e{node.selector_index}"
+    return found
+
+
+async def _all_refs(page, element_id: str) -> list[str]:
+    """Every addressable ref carrying `element_id`, in document order."""
+
+    from crawlpilot.spi.dom_tree import iter_elements
+
+    tree = await page.snapshot()
+    assert tree is not None
+    return [
+        f"e{n.selector_index}"
+        for n in iter_elements(tree)
+        if n.attributes.get("id") == element_id
+    ]
+
+
+async def _offered(page) -> set[str]:
+    """The element ids a model would actually be shown.
+
+    The serializer's `selector_map`, which is the same pipeline the agent's
+    observation is built from -- so it reflects the editorial stages (paint-order
+    occlusion, containment dedup) that the raw tree does not.
     """
 
     from crawlpilot.dom.serializer import serialize
 
     tree = await page.snapshot()
-    assert tree is not None, "snapshot returned no tree"
-    found: dict[str, str] = {}
-    for index, node in serialize(tree).selector_map.items():
-        element_id = node.attributes.get("id")
-        # First wins: `dup` appears twice and the pair is tested separately.
-        if element_id and element_id not in found:
-            found[element_id] = f"e{index}"
-    return found
-
-
-async def _refs(page) -> dict[str, str]:
-    return await _offered(page)
-
-
-async def _all_refs(page, element_id: str) -> list[str]:
-    """Every offered ref carrying `element_id`, in document order."""
-
-    from crawlpilot.dom.serializer import serialize
-
-    tree = await page.snapshot()
     assert tree is not None
-    return [
-        f"e{index}"
-        for index, node in sorted(serialize(tree).selector_map.items())
-        if node.attributes.get("id") == element_id
-    ]
+    return {
+        node.attributes["id"]
+        for node in serialize(tree).selector_map.values()
+        if node.attributes.get("id")
+    }
 
 
 # ------------------------------------------------------------------ navigation
@@ -133,6 +152,11 @@ async def test_every_interactive_element_is_indexed(page, toolbench) -> None:
     for element_id in ("dup", "picker", "seeded", "submit", "uploader", "same-tab"):
         assert element_id in refs, f"#{element_id} was not indexed"
 
+    # ...and the ones a model needs are also the ones it is shown.
+    offered = await _offered(page)
+    for element_id in ("dup", "picker", "seeded", "submit", "same-tab"):
+        assert element_id in offered, f"#{element_id} was not offered"
+
 
 async def test_duplicate_ids_are_individually_addressable(page, toolbench) -> None:
     """The case that broke the old selector cascade: `[id="dup"]` matches two
@@ -154,9 +178,10 @@ async def test_an_occluded_button_is_not_offered(page, toolbench) -> None:
     changes nothing."""
 
     await page.navigate(toolbench.index)
-    refs = await _refs(page)
 
-    assert "covered-button" not in refs, "a button under an opaque overlay was offered"
+    assert "covered-button" not in await _offered(page), (
+        "a button under an opaque overlay was offered to the model"
+    )
     assert await _log(page) == "idle"
 
 
