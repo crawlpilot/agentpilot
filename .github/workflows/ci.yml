@@ -33,12 +33,16 @@ jobs:
       # A clean venv with ONLY crawlpilot: no workspace, no agentpilot, no dev
       # group. If the browser layer has re-acquired a platform dependency, this
       # is where it fails.
+      #
+      # `[all]` rather than a subset: this is the library testing itself, so
+      # every extra it advertises has to actually work. `[vault]` in particular
+      # is easy to forget -- `test_vault.py` needs `cryptography`.
       - name: Build and install crawlpilot alone
         run: |
           uv build --package crawlpilot
           uv venv .venv-crawlpilot
           VIRTUAL_ENV=.venv-crawlpilot uv pip install \
-            "$(ls dist/crawlpilot-*.whl)[engine,markdown]" \
+            --find-links dist "crawlpilot[all]" \
             pytest pytest-asyncio pytest-httpserver
 
       - name: Assert the dependency closure stays clean
@@ -123,7 +127,7 @@ jobs:
           VIRTUAL_ENV=.venv-published uv pip install \
             --no-sources \
             --find-links localindex/crawlpilot \
-            "./packages/agentpilot[postgres]" \
+            "./packages/agentpilot[driver,postgres]" \
             pytest pytest-asyncio pytest-httpserver fakeredis lupa
 
       - name: Assert crawlpilot came from the index, not the source tree
