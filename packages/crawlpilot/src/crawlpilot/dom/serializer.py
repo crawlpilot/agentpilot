@@ -25,7 +25,12 @@ from dataclasses import dataclass, field
 from crawlpilot.dom import render
 from crawlpilot.dom.clickable_elements import is_interactive
 from crawlpilot.dom.paint_order import PaintEntry, compute_occluded
-from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import (
+    DOMSelectorMap,
+    EnhancedDOMTreeNode,
+    NodeType,
+    iter_elements,
+)
 from crawlpilot.spi.geometry import BoundingBox
 
 # Tags with no useful content for the agent -- pruned entirely.
@@ -128,35 +133,62 @@ def _iter_simplified(root: SimplifiedNode):
         stack.extend(node.children)
 
 
-def _apply_paint_order(root: SimplifiedNode) -> None:
+def _apply_paint_order(root: SimplifiedNode, full: EnhancedDOMTreeNode) -> None:
+    """Mark interactive nodes hidden behind something opaque painted later.
+
+    Covers are gathered from `full`, the *original* tree, not from the
+    simplified one. Two reasons, and the second is why this was broken: only
+    interactive nodes were considered at all, and the simplified tree has
+    already dropped every childless non-interactive element anyway. Between
+    them, the commonest real occluder could never occlude anything -- a modal
+    scrim, a cookie-banner backdrop and a loading overlay are all empty
+    `<div>`s. The button underneath stayed in the model's list and clicking it
+    did nothing, which is the worst kind of failure because it looks like it
+    worked.
+
+    Only interactive nodes are ever *marked*; everything else is here to cover.
+    """
+
     entries: list[PaintEntry] = []
-    for node in _iter_simplified(root):
-        if not node.is_interactive:
-            continue
-        original = node.original
+    seen: set[int] = set()
+
+    def add(original: EnhancedDOMTreeNode, *, interactive: bool) -> None:
+        if original.backend_node_id in seen:
+            return
         bounds = _bounds(original)
         snapshot = original.snapshot
         if bounds is None or snapshot is None or snapshot.paint_order is None:
-            continue
+            return
         styles = snapshot.computed_styles or {}
         try:
             opacity = float(styles.get("opacity", "1"))
         except (ValueError, TypeError):
             opacity = 1.0
         bg = styles.get("background-color", "rgba(0, 0, 0, 0)")
-        entries.append(
-            PaintEntry(
-                key=original.backend_node_id,
-                x=bounds.x,
-                y=bounds.y,
-                width=bounds.width,
-                height=bounds.height,
-                paint_order=snapshot.paint_order,
-                opacity=opacity,
-                background_transparent=bg in ("rgba(0, 0, 0, 0)", "transparent"),
-                context=(original.session_id, original.frame_id),
-            )
+        entry = PaintEntry(
+            key=original.backend_node_id,
+            x=bounds.x,
+            y=bounds.y,
+            width=bounds.width,
+            height=bounds.height,
+            paint_order=snapshot.paint_order,
+            opacity=opacity,
+            background_transparent=bg in ("rgba(0, 0, 0, 0)", "transparent"),
+            context=(original.session_id, original.frame_id),
         )
+        # An interactive node is here to be *tested*; anything else earns a place
+        # only if it can actually cover something. Keeps the sweep to the nodes
+        # that matter rather than every element on the page.
+        if interactive or entry.is_opaque_cover():
+            seen.add(original.backend_node_id)
+            entries.append(entry)
+
+    for node in _iter_simplified(root):
+        if node.is_interactive:
+            add(node.original, interactive=True)
+    for element in iter_elements(full):
+        add(element, interactive=False)
+
     occluded = compute_occluded(entries)
     for node in _iter_simplified(root):
         if node.is_interactive and node.original.backend_node_id in occluded:
@@ -261,7 +293,7 @@ def serialize(
     if simplified is None:
         return SerializedDOM(selector_map={}, llm_text="(empty page)")
 
-    _apply_paint_order(simplified)
+    _apply_paint_order(simplified, root)
     _apply_containment(simplified)
     selector_map = _assign_indices(simplified, new_backend_ids or set())
     rendered = render.render_tree(
