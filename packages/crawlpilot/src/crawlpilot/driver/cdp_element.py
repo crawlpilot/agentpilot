@@ -334,7 +334,11 @@ async def type_character(cdp: CDPSession, char: str) -> None:
         await press_key(cdp, "Enter")
         return
     descriptor = _key_descriptor(char)
-    await _dispatch_key(cdp, "keyDown", descriptor, 0, text=char)
+    # `keyDown` deliberately carries no `text`: Chrome inserts on *any* key event
+    # that has one, so a `text` here and on the `char` below types every
+    # character twice ("hello" arriving as "hheelllloo"). The `char` event is the
+    # one that inserts; `keyDown`/`keyUp` are what page handlers listen for.
+    await _dispatch_key(cdp, "keyDown", descriptor, 0)
     await _dispatch_key(cdp, "char", descriptor, 0, text=char)
     await _dispatch_key(cdp, "keyUp", descriptor, 0)
 
