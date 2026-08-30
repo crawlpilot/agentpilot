@@ -122,7 +122,9 @@ def test_the_tools_package_imports_no_llm_sdk() -> None:
 
     banned = {"anthropic", "openai", "langchain", "litellm", "cohere", "mistralai", "google"}
     offenders: list[str] = []
-    for path in pathlib.Path("agentpilot/tools").rglob("*.py"):
+    tools_dir = pathlib.Path(__file__).resolve().parents[1] / "packages/crawlpilot/src/crawlpilot/tools"
+    assert tools_dir.is_dir(), tools_dir
+    for path in tools_dir.rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Import):
                 names = [a.name.split(".")[0] for a in node.names]
@@ -216,8 +218,9 @@ def test_adding_a_verb_touches_one_file() -> None:
     """The acceptance criterion, asserted structurally: every surface is derived
     from `CATALOG`, so nothing outside `tools/catalog.py` enumerates verbs."""
 
-    for module in ("agentpilot/gateway/schemas.py", "agentpilot/agent/actions.py"):
-        source = pathlib.Path(module).read_text()
+    root = pathlib.Path(__file__).resolve().parents[1] / "packages/agentpilot/agentpilot"
+    for module in ("gateway/schemas.py", "agent/actions.py"):
+        source = (root / module).read_text()
         assert "class NavigateActionIn" not in source
         assert "class ClickActionIn" not in source
 

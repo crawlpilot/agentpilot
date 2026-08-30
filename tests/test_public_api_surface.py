@@ -21,6 +21,30 @@ import importlib
 
 import pytest
 
+import pathlib
+
+CRAWLPILOT_SRC = pathlib.Path(__file__).resolve().parents[1] / "packages/crawlpilot/src/crawlpilot"
+"""Resolved from this file, not the working directory: these guards walk the
+source tree, and a relative path that silently misses would let every one of
+them pass vacuously -- which is exactly what happened when the packages moved
+in Phase 7."""
+
+
+def _browser_layer_files(*packages: str) -> list[pathlib.Path]:
+    assert CRAWLPILOT_SRC.is_dir(), f"crawlpilot source not found at {CRAWLPILOT_SRC}"
+    out: list[pathlib.Path] = []
+    for pkg in packages:
+        directory = CRAWLPILOT_SRC / pkg
+        module = CRAWLPILOT_SRC / f"{pkg}.py"
+        if directory.is_dir():
+            out += sorted(directory.rglob("*.py"))
+        elif module.is_file():
+            out.append(module)
+        else:
+            raise AssertionError(f"no such crawlpilot package or module: {pkg}")
+    return out
+
+
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     # The driver-agnostic seam -- becomes `browserpilot.contracts`.
     "crawlpilot.spi.driver": ("BrowserDriver",),
@@ -102,9 +126,9 @@ def test_package_ships_a_py_typed_marker() -> None:
     (PEP 561), which for a library whose whole value is a typed seam would be
     a silent regression."""
 
-    import agentpilot
+    import crawlpilot
 
-    root = importlib.resources.files(agentpilot)
+    root = importlib.resources.files(crawlpilot)
     assert (root / "py.typed").is_file()
 
 
@@ -119,7 +143,7 @@ def test_browser_layer_carries_no_web_framework_import() -> None:
     banned = {"fastapi", "starlette", "psycopg", "prometheus_client"}
     offenders: list[str] = []
     for pkg in ("spi", "driver", "extraction", "dom", "egress"):
-        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+        for path in _browser_layer_files(pkg):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
@@ -130,7 +154,7 @@ def test_browser_layer_carries_no_web_framework_import() -> None:
                     continue
                 for n in names:
                     if n in banned:
-                        offenders.append(f"{path}: {n}")
+                        offenders.append(f"{path.name}: {n}")
     assert not offenders, offenders
 
 
@@ -158,8 +182,8 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
     allowed = {"driver/process_launcher.py", "identity/proxy_config.py"}
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom", "session", "tiers"):
-        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
-            rel = path.relative_to("agentpilot").as_posix()
+        for path in _browser_layer_files(pkg):
+            rel = path.relative_to(CRAWLPILOT_SRC).as_posix()
             if rel in allowed:
                 continue
             tree = ast.parse(path.read_text())
@@ -201,7 +225,7 @@ def test_browser_layer_has_no_tenancy_vocabulary() -> None:
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
                 "session", "tiers", "config", "policy"):
-        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+        for path in _browser_layer_files(pkg):
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 names: list[str] = []
@@ -215,7 +239,7 @@ def test_browser_layer_has_no_tenancy_vocabulary() -> None:
                     names = [node.arg]
                 for name in names:
                     if "tenant" in name.lower():
-                        rel = path.relative_to("agentpilot")
+                        rel = path.relative_to(CRAWLPILOT_SRC)
                         if (path.name, name) in exempt:
                             continue
                         offenders.append(f"{rel}:{node.lineno}: {name}")
@@ -240,7 +264,7 @@ def test_the_browser_layer_never_imports_observability() -> None:
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
                 "session", "tiers", "config", "policy", "extensions", "tools"):
-        for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
+        for path in _browser_layer_files(pkg):
             for node in ast.walk(ast.parse(path.read_text())):
                 mod = ""
                 if isinstance(node, ast.ImportFrom):
@@ -248,7 +272,7 @@ def test_the_browser_layer_never_imports_observability() -> None:
                 elif isinstance(node, ast.Import):
                     mod = node.names[0].name
                 if mod.startswith("agentpilot.observability"):
-                    offenders.append(f"{path.relative_to('agentpilot')}:{node.lineno}")
+                    offenders.append(f"{path.relative_to(CRAWLPILOT_SRC)}:{node.lineno}")
 
     assert not offenders, (
         "browser-layer dependency on observability (and so prometheus): "
