@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Target page</title></head>
+  <body style="font: 14px system-ui">
+    <h1 id="target-heading">Target page</h1>
+    <!-- Echoes the query string so a test can tell *how* it got here: a form
+         submit, a plain link, a new tab or a popup all land on this page. -->
+    <p id="via"></p>
+    <a id="back-link" href="index.html">Back to the toolbench</a>
+    <script>
+      document.getElementById('via').textContent =
+        'via=' + (new URLSearchParams(location.search).get('via') || 'direct') +
+        ' q=' + (new URLSearchParams(location.search).get('q') || '');
+    </script>
+  </body>
+</html>

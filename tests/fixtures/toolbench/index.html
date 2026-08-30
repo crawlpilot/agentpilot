@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>crawlpilot toolbench</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 1.5rem; }
+      section { border: 1px solid #ccc; padding: 0.75rem; margin-bottom: 1rem; }
+      h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+      #log { position: fixed; top: 0; right: 0; background: #ffd; border: 1px solid #cc0;
+             padding: 0.4rem 0.6rem; font-family: monospace; z-index: 999; }
+      #overlay-host { position: relative; height: 60px; }
+      #covered-button { position: absolute; inset: 0; width: 200px; }
+      /* Fully opaque and painted later, so the button beneath is genuinely
+         unclickable -- this is what the serializer's paint-order stage must
+         detect, not merely a z-index it could read off an attribute. */
+      #blanket { position: absolute; inset: 0; width: 200px; background: #345; }
+      #scrollbox { height: 120px; overflow-y: scroll; border: 1px solid #999; }
+      #scrollbox li { padding: 0.6rem; }
+      .spacer { height: 1800px; background: linear-gradient(#fff, #eef); }
+    </style>
+  </head>
+  <body>
+    <!-- Every interaction writes here, so a test asserts on what the *page*
+         observed rather than on the action returning without raising. -->
+    <div id="log">idle</div>
+
+    <h1>Toolbench</h1>
+
+    <section>
+      <h2>Duplicate ids</h2>
+      <!-- Invalid HTML and completely ordinary in the wild. A resolver that
+           requires a selector to match exactly one element cannot address
+           either of these. -->
+      <button id="dup" onclick="log('dup-first')">First duplicate</button>
+      <button id="dup" onclick="log('dup-second')">Second duplicate</button>
+    </section>
+
+    <section>
+      <h2>Native select</h2>
+      <select id="picker" onchange="log('picked:' + this.value)">
+        <option value="a">Alpha</option>
+        <option value="b">Beta</option>
+        <option value="c">Gamma</option>
+      </select>
+      <select id="multi" multiple size="3">
+        <option value="x">Ex</option>
+        <option value="y">Why</option>
+        <option value="z">Zed</option>
+      </select>
+    </section>
+
+    <section>
+      <h2>ARIA listbox</h2>
+      <!-- A custom control with no <select> anywhere: the options are divs, so
+           it can only be driven by clicking, never by select_option. -->
+      <div id="aria-listbox" role="listbox" aria-label="Fruit">
+        <div role="option" tabindex="0" onclick="log('aria:apple')">Apple</div>
+        <div role="option" tabindex="0" onclick="log('aria:pear')">Pear</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Text fields</h2>
+      <input type="text" id="seeded" value="seed" oninput="log('typed:' + this.value)" />
+      <input type="text" id="empty" placeholder="Type here" />
+      <textarea id="notes" rows="2"></textarea>
+    </section>
+
+    <section>
+      <h2>Shadow DOM</h2>
+      <div id="shadow-host"></div>
+    </section>
+
+    <section>
+      <h2>Occlusion</h2>
+      <div id="overlay-host">
+        <button id="covered-button" onclick="log('SHOULD-NOT-HAPPEN')">Covered</button>
+        <div id="blanket"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Scroll container</h2>
+      <!-- Its own overflow, so scrolling it is not scrolling the page. -->
+      <ul id="scrollbox">
+        <li id="row-1">Row 1</li><li>Row 2</li><li>Row 3</li><li>Row 4</li>
+        <li>Row 5</li><li>Row 6</li><li>Row 7</li><li id="row-8">Row 8</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Links and tabs</h2>
+      <a id="same-tab" href="form_target.html?via=link">Go to target</a>
+      <a id="new-tab" href="form_target.html?via=blank" target="_blank">Open in new tab</a>
+      <button id="popup" onclick="window.open('form_target.html?via=popup', '_blank')">
+        window.open
+      </button>
+    </section>
+
+    <section>
+      <h2>Form</h2>
+      <form id="form" action="form_target.html" method="get">
+        <input type="text" id="query" name="q" />
+        <input type="file" id="uploader" />
+        <!-- Zero-size but perfectly actionable: the kind of element a
+             visibility gate wrongly rejects as stale. -->
+        <input type="checkbox" id="hidden-box" style="position:absolute;opacity:0" />
+        <button type="submit" id="submit">Submit</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>Frames</h2>
+      <iframe id="same-origin" src="frame_inner.html" width="360" height="120"></iframe>
+      <!-- Rewritten at load time to the sibling origin, so this is a genuine
+           out-of-process frame rather than a same-origin one. -->
+      <iframe id="cross-origin" data-cross-origin="frame_inner.html"
+              width="360" height="120"></iframe>
+    </section>
+
+    <div class="spacer"></div>
+    <p id="deep">a needle buried far below the fold</p>
+
+    <script>
+      function log(message) {
+        document.getElementById('log').textContent = message;
+      }
+
+      // Shadow DOM, open so a piercing CSS query can reach it.
+      const root = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+      root.innerHTML =
+        '<button id="shadow-button">Shadow button</button>' +
+        '<input type="text" id="shadow-field">';
+      root.getElementById('shadow-button').addEventListener('click', () => log('shadow-clicked'));
+
+      // Keyboard shortcut, reachable only via send_keys.
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'k' && (e.ctrlKey || e.metaKey)) log('shortcut');
+        if (e.key === 'Escape') log('escaped');
+      });
+
+      // The cross-origin frame's origin is only known at runtime -- the harness
+      // passes the sibling port in, so the file stays static.
+      const params = new URLSearchParams(location.search);
+      const crossOrigin = params.get('crossOrigin');
+      const frame = document.getElementById('cross-origin');
+      if (crossOrigin) {
+        frame.src = crossOrigin.replace(/\/$/, '') + '/' + frame.dataset.crossOrigin;
+      } else {
+        frame.remove();
+      }
+    </script>
+  </body>
+</html>

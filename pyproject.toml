@@ -25,6 +25,15 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages/crawlpilot/tests", "tests"]
+markers = [
+    "browser: drives a real browser (opt in with `-m browser`)",
+]
+# The real-browser suite is deselected by default. CI job 1 runs
+# `packages/crawlpilot/tests` in a clean venv to prove the standalone wheel
+# works, and that venv has no Chrome -- so the browser tests have to be opt-in
+# to live in that directory at all, which is where they belong: they are the
+# standalone library's own tests.
+addopts = "-m 'not browser'"
 # Two suites: crawlpilot's own (which must pass with only crawlpilot installed --
 # CI job 1 runs it in a clean venv) and agentpilot's, which additionally covers
 # the platform's implementations of crawlpilot's seams.
