@@ -8,11 +8,18 @@ since last step" block, this is both the clearest signal for the agent and the
 biggest per-step token saving (a delta instead of a full re-read).
 
 Identity model (mirrors browser-use's `(session_id, backend_node_id)`
-set-difference for NEW, generalized): elements are matched across steps by the
-CDP `backend_node_id` -- stable within a document -- with `stable_hash`
-(structure + static attrs + accessible name, dynamic CSS classes filtered) as a
-fallback that absorbs the backend-id reassignment a re-render can cause. Only
-after both keys fail to match is an element considered genuinely NEW/REMOVED.
+set-difference for NEW, generalized): elements are matched across steps by that
+same pair -- stable within a document -- with `stable_hash` (structure + static
+attrs + accessible name, dynamic CSS classes filtered) as a fallback that
+absorbs the backend-id reassignment a re-render can cause. Only after both keys
+fail to match is an element considered genuinely NEW/REMOVED.
+
+The `session_id` half is load-bearing once cross-origin iframes are captured:
+`backendNodeId` is unique per renderer, so a bare id would let an element in an
+embedded frame match an unrelated element in the main document and report a real
+change as "unchanged". browser-use makes the same point at
+`dom/serializer/serializer.py:436` -- "CDP node IDs are scoped to a session and
+can be reused by unrelated elements in cross-origin iframe targets".
 
 - **NEW**: a current interactive element that matched nothing in the previous step.
 - **REMOVED**: a previous interactive element that matched nothing now.
@@ -31,6 +38,14 @@ from crawlpilot.dom.clickable_elements import is_interactive
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _STATE_PROPS = ("checked", "expanded", "pressed", "selected", "disabled")
+
+NodeIdentity = tuple[str | None, int]
+"""`(session_id, backend_node_id)` -- see the module docstring on why the bare
+backend id is not enough once more than one renderer is in play."""
+
+
+def _identity(node: EnhancedDOMTreeNode) -> NodeIdentity:
+    return (node.session_id, node.backend_node_id)
 
 
 class ChangeKind(Enum):
@@ -131,35 +146,35 @@ def diff_snapshots(
         return diff
 
     previous_nodes = list(iter_interactive(previous))
-    prev_by_backend = {n.backend_node_id: n for n in previous_nodes}
-    cur_by_backend = {n.backend_node_id: n for n in current_nodes}
+    prev_by_backend = {_identity(n): n for n in previous_nodes}
+    cur_by_backend = {_identity(n): n for n in current_nodes}
 
-    matched_prev: set[int] = set()  # backend ids consumed by a match
-    matched_cur: set[int] = set()
+    matched_prev: set[NodeIdentity] = set()  # identities consumed by a match
+    matched_cur: set[NodeIdentity] = set()
 
-    # Tier 1: match by stable backend_node_id.
-    for backend_id, curr in cur_by_backend.items():
-        prev = prev_by_backend.get(backend_id)
+    # Tier 1: match by stable (session_id, backend_node_id).
+    for identity, curr in cur_by_backend.items():
+        prev = prev_by_backend.get(identity)
         if prev is None:
             continue
-        matched_prev.add(backend_id)
-        matched_cur.add(backend_id)
+        matched_prev.add(identity)
+        matched_cur.add(identity)
         _classify_match(prev, curr, diff)
 
     # Tier 2: absorb backend-id reassignment -- match leftovers by stable_hash.
     prev_by_hash: dict[int, list[EnhancedDOMTreeNode]] = {}
     for n in previous_nodes:
-        if n.backend_node_id not in matched_prev:
+        if _identity(n) not in matched_prev:
             prev_by_hash.setdefault(n.stable_hash(), []).append(n)
 
     still_new: list[EnhancedDOMTreeNode] = []
     for curr in current_nodes:
-        if curr.backend_node_id in matched_cur:
+        if _identity(curr) in matched_cur:
             continue
         bucket = prev_by_hash.get(curr.stable_hash())
         if bucket:
             prev = bucket.pop()
-            matched_prev.add(prev.backend_node_id)
+            matched_prev.add(_identity(prev))
             _classify_match(prev, curr, diff)  # same element, id churned
         else:
             still_new.append(curr)
@@ -169,7 +184,7 @@ def diff_snapshots(
         diff.changes.append(DomChange(ChangeKind.NEW, curr))
         diff.new_backend_ids.add(curr.backend_node_id)
     for prev in previous_nodes:
-        if prev.backend_node_id not in matched_prev:
+        if _identity(prev) not in matched_prev:
             diff.changes.append(DomChange(ChangeKind.REMOVED, prev))
 
     return diff
