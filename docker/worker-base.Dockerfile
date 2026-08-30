@@ -24,14 +24,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
+# Phase 7 split the repo into a uv workspace: `packages/crawlpilot` (the browser
+# platform) and `packages/agentpilot` (this service). The dependency-cache layer
+# must therefore copy *both* manifests plus the workspace root -- a single root
+# `pyproject.toml` no longer describes the dependency graph, and copying only it
+# silently resolved an empty project.
 COPY pyproject.toml uv.lock* ./
+COPY packages/crawlpilot/pyproject.toml packages/crawlpilot/README.md ./packages/crawlpilot/
+COPY packages/agentpilot/pyproject.toml packages/agentpilot/README.md ./packages/agentpilot/
 # postgres extra too: docker-compose gives the worker an AGENTPILOT_DATABASE_URL
 # so it runs the crawl/agent/recipe worker loops, whose PostgresJobStore needs
 # psycopg[pool] -- without it the worker crashes at boot importing psycopg_pool.
 # bedrock extra: the worker is where LLMConfig.from_env() runs, so
 # AGENTPILOT_LLM_PROVIDER=bedrock needs `anthropic` present in this image.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --extra driver --extra postgres --extra bedrock
+    uv sync --no-install-project --extra driver --extra postgres --extra bedrock --package agentpilot
 
 # Chrome + its apt deps depend only on the (already-installed) patchright
 # version. `--no-sync` uses the venv from the step above without trying to

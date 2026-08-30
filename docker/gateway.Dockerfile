@@ -18,13 +18,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
+# Phase 7 split the repo into a uv workspace: `packages/crawlpilot` (the browser
+# platform) and `packages/agentpilot` (this service). The dependency-cache layer
+# must therefore copy *both* manifests plus the workspace root -- a single root
+# `pyproject.toml` no longer describes the dependency graph, and copying only it
+# silently resolved an empty project.
 COPY pyproject.toml uv.lock* ./
+COPY packages/crawlpilot/pyproject.toml packages/crawlpilot/README.md ./packages/crawlpilot/
+COPY packages/agentpilot/pyproject.toml packages/agentpilot/README.md ./packages/agentpilot/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --extra postgres
+    uv sync --no-install-project --extra postgres --package agentpilot
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra postgres
+    uv sync --extra postgres --package agentpilot
 
 EXPOSE 8000
 CMD ["uv", "run", "uvicorn", "agentpilot.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]

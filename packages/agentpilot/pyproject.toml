@@ -115,21 +115,11 @@ name = "gateway -> crawl -> spi"
 type = "layers"
 layers = ["agentpilot.gateway", "agentpilot.crawl", "agentpilot.auth"]
 
-[[tool.importlinter.contracts]]
-name = "only the composition root imports the concrete driver"
-type = "forbidden"
-source_modules = [
-    "agentpilot.gateway.routes",
-    "agentpilot.gateway.schemas",
-    "agentpilot.gateway.app",
-    "agentpilot.jobs",
-    "agentpilot.crawl",
-    "agentpilot.agent",
-    "agentpilot.recipe",
-    "agentpilot.control",
-]
-forbidden_modules = ["crawlpilot.driver"]
-allow_indirect_imports = true
+# The cross-project rule -- "agentpilot may only import crawlpilot's published
+# API, and only the composition root builds a driver" -- cannot live here:
+# import-linter refuses to forbid subpackages of an *external* package, and
+# crawlpilot is external now. `tests/test_project_boundary.py` enforces it
+# instead, which is what the plan anticipated (3.2).
 
 [tool.uv.sources]
 # One declaration, two resolutions: the editable workspace copy during
