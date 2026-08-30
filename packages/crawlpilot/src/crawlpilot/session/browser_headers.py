@@ -21,7 +21,6 @@ Chrome for everything and never construct headers by hand (`NetworkManager
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable
 
 # Chrome's actual top-level-navigation header order *and casing*.
 # `Host`/`Connection` are owned by the HTTP client and are not ours to set.
@@ -133,9 +132,3 @@ def order_headers(values: dict[str, str]) -> dict[str, str]:
         if key.lower() not in _CANONICAL:
             ordered[key] = value
     return ordered
-
-
-def header_order(headers: Iterable[str]) -> list[str]:
-    """The order `headers` would be emitted in -- for assertions."""
-
-    return list(order_headers(dict.fromkeys(headers, "")))

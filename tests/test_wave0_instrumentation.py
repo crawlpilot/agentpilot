@@ -1,24 +1,15 @@
-"""Wave 0 instrumentation unit tests: per-context health arithmetic and the
-agent-loop / context metric objects. Pure -- no browser, no network."""
+"""The platform's Prometheus metric objects: labelled counters and the histogram
+observe path. Pure -- no browser, no network.
+
+The `_ContextHealth` arithmetic this file also used to cover now lives in
+`packages/crawlpilot/tests/test_context_health.py`, beside the type itself:
+reaching across the package boundary for another project's private symbol left
+the standalone wheel shipping that arithmetic untested.
+"""
 
 from __future__ import annotations
 
 from agentpilot.observability import metrics
-from crawlpilot.driver.patchright_driver import _ContextHealth
-
-
-def test_context_health_defaults_are_zero() -> None:
-    h = _ContextHealth()
-    assert (h.tasks, h.successes, h.failures, h.small_pages, h.leak_warnings) == (0, 0, 0, 0, 0)
-    # No tasks yet -> rates are a safe 0.0, never a ZeroDivisionError.
-    assert h.failure_rate == 0.0
-    assert h.success_rate == 0.0
-
-
-def test_context_health_rates() -> None:
-    h = _ContextHealth(tasks=10, successes=7, failures=3)
-    assert h.success_rate == 0.7
-    assert h.failure_rate == 0.3
 
 
 def test_wave0_metrics_exist_and_increment() -> None:

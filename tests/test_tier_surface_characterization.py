@@ -1,23 +1,22 @@
 """Golden table pinning the *complete* tier surface, as one artifact.
 
-Every other tier test in this suite covers one function well
-(`test_stealth_tier.py`, `test_stealth_profile.py`, `test_humanize.py`,
-`test_scrape_tier_guard.py`). None of them pins the surface as a whole, and
-that is what this file is for: the tier vocabulary and its consequences
-currently live in six modules --
+Every other tier test covers one function well (`test_stealth_tier.py`,
+`test_stealth_profile.py`, `test_humanize.py`, `test_scrape_tier_guard.py`).
+None of them pins the surface as a whole, and that is what this file is for.
 
-    spi/actions.py            stealth_from_tier, interact_profile_for_tier
-    session/stealth_profile.py effective_tier, is_protected, PROTECTED_TIERS
-    session/ephemeral.py      _ESCALATION (the ladder)
-    driver/humanize.py        for_tier -> DelayPolicy   (now: by_name(profile))
-    identity/proxy_config.py  tier -> proxy pool
-    gateway/schemas.py        the Literal, declared three times
+It was written as the instrument for the `TierPolicy` consolidation, back when
+the tier vocabulary and its consequences were spread across six modules
+(`spi/actions.py`, `session/stealth_profile.py`, `session/ephemeral.py`,
+`driver/humanize.py`, `identity/proxy_config.py`, `gateway/schemas.py`) and
+adding a tier meant editing all of them. That consolidation has landed:
+`crawlpilot.tiers.TierPolicy.for_tier()` is now the single owner, and two of
+those six modules no longer exist.
 
--- and the planned `TierPolicy` consolidation (docs/browser-module-
-rearchitecture-plan.md, Phase 1) moves all of them behind one type. That
-refactor is meant to be *pure delegation*: identical outputs, one owner. This
-table is the instrument that proves it. If a value here changes during Phase 1,
-the refactor changed behaviour and is wrong.
+The table outlived its occasion, which is why it is still here. What it pins is
+no longer "the refactor did not change behaviour" but "this is what each tier
+*means*" -- six derived values per tier, in one place, so a change to any of
+them is a visible edit to this table rather than a quiet behavioural drift
+across the driver, the escalation ladder and the delay profile at once.
 
 Deliberately asserts literal expected values rather than re-deriving them from
 the modules under test -- a test that computes its own expectation cannot

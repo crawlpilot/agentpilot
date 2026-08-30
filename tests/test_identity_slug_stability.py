@@ -1,18 +1,20 @@
-"""`IdentityRef` must render byte-identically to the `IdentityKey` it replaced.
+"""The identity slug is an on-disk format, and must never change.
 
-Phase 3c made the browser layer's identity opaque: `IdentityKey(tenant, domain,
-name)` became `IdentityRef(key)`, and the platform composes the key
-(`control.identity.identity_for`). The slug is the on-disk profile directory and
-the vault filename, so **any change to it orphans every existing profile and
-every encrypted storage-state blob on every node** -- silently, because a
-missing profile dir just looks like a cold first visit.
+`IdentityRef`'s rendered slug *is* the profile directory name and the vault
+filename, so **any change to it orphans every existing profile and every
+encrypted storage-state blob on every node** -- silently, because a missing
+profile dir just looks like a cold first visit. Nothing errors; sessions simply
+start logged out and burn their warm identities.
 
-The old rendering was:
+The rendering, unchanged since `IdentityKey(tenant, domain, name)` became
+`IdentityRef(key)` in Phase 3c, is:
 
     "/".join(_sanitize_segment(p) for p in (tenant, domain, name))
 
-These tests pin that the new one still produces exactly that, including through
-the sanitizer's rewriting and rejection rules.
+These tests pin exactly that, including the sanitizer's rewriting and rejection
+rules. They were written to verify that one migration and kept because the
+invariant is permanent: this is a data-format guarantee, not a record of a
+completed refactor.
 """
 
 from __future__ import annotations
