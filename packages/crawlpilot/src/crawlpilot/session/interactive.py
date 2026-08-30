@@ -98,6 +98,7 @@ async def open_interactive_session(
     timezone_id: str | None = None,
     browser_config: BrowserConfig = DEFAULTS,
     prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
+    egress: EgressPolicy | None = None,
 ) -> InteractiveSession:
     """`kind=ProfileKind.DEFAULT` (not the dataclass's own `TEMPORARY`
     default): an interactive, caller-named identity is kept warm across
@@ -159,7 +160,7 @@ async def open_interactive_session(
             profile_dir,
             proxy,
             headful,
-            EgressPolicy(),
+            egress if egress is not None else EgressPolicy(),
             block_popups,
             enable_cdp,
             **stealth.as_open_kwargs(),

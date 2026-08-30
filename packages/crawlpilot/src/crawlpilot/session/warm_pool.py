@@ -78,11 +78,13 @@ class WarmPool:
         target_per_tier: int = 0,
         refill_interval_seconds: float = 5.0,
         mem_pressure_watermark_pct: float = 85.0,
+        egress: EgressPolicy | None = None,
     ) -> None:
         self._driver = driver
         # De-duplicate tiers by bucket; `None` (direct) is always a valid tier.
         self._tiers: list[ProxyEndpoint | None] = tiers or [None]
         self._profiles_root = profiles_root
+        self._egress = egress if egress is not None else EgressPolicy()
         self.target_per_tier = target_per_tier
         self.refill_interval_seconds = refill_interval_seconds
         self.mem_pressure_watermark_pct = mem_pressure_watermark_pct
@@ -203,7 +205,7 @@ class WarmPool:
                 profile_dir,
                 proxy,
                 headful=False,
-                egress=EgressPolicy(),
+                egress=self._egress,
                 block_popups=True,
             )
         except Exception:

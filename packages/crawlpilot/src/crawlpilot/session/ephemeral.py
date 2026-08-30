@@ -216,6 +216,7 @@ async def run_ephemeral_scrape(
     prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     block_hooks: BlockHooks | None = None,
     structured_extractor: StructuredExtractor | None = None,
+    egress: EgressPolicy | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -321,7 +322,7 @@ async def run_ephemeral_scrape(
             profile_dir,
             proxy,
             headful=headful,
-            egress=EgressPolicy(),
+            egress=egress if egress is not None else EgressPolicy(),
             block_popups=True,
             enable_cdp=False,
             block_resource_types=block_resource_types,

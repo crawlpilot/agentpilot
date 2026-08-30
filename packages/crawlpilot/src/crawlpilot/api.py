@@ -54,6 +54,7 @@ from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.actions import ActionResult
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.egress import LIBRARY_EGRESS, EgressPolicy
 from crawlpilot.spi.scrape import Document, ScrapeOptions
 from crawlpilot.tiers import Tier
 
@@ -123,8 +124,12 @@ class BrowserSession:
     async def click(self, ref: str, *, all: bool = False) -> ActionResult:
         return await self.execute([spi_actions.ClickAction(ref=ref, all=all)])
 
-    async def fill(self, ref: str, text: str) -> ActionResult:
-        return await self.execute([spi_actions.FillAction(ref=ref, text=text)])
+    async def fill(self, ref: str, text: str, *, clear: bool = True) -> ActionResult:
+        """Type into a field. `clear=False` appends to what is already there."""
+
+        return await self.execute(
+            [spi_actions.FillAction(ref=ref, text=text, clear=clear)]
+        )
 
     async def select_option(self, ref: str, *values: str) -> ActionResult:
         return await self.execute(
@@ -138,14 +143,114 @@ class BrowserSession:
         return await self.execute([spi_actions.PressAction(key=key)])
 
     async def scroll(
-        self, direction: str = "down", *, ref: str | None = None
+        self, direction: str = "down", *, pages: float = 1.0, ref: str | None = None
     ) -> ActionResult:
         return await self.execute(
-            [spi_actions.ScrollAction(direction=direction, ref=ref)]  # type: ignore[arg-type]
+            [spi_actions.ScrollAction(direction=direction, pages=pages, ref=ref)]  # type: ignore[arg-type]
         )
 
     async def wait(self, ms: int, *, ref: str | None = None) -> ActionResult:
         return await self.execute([spi_actions.WaitAction(ms=ms, ref=ref)])
+
+    async def send_keys(self, keys: str) -> ActionResult:
+        """A key or shortcut (`'Escape'`, `'Control+a'`) to whatever has focus."""
+
+        return await self.execute([spi_actions.SendKeysAction(keys=keys)])
+
+    async def find_text(self, text: str) -> ActionResult:
+        """Scroll to the first occurrence of `text`."""
+
+        return await self.execute([spi_actions.FindTextAction(text=text)])
+
+    async def upload_file(self, ref: str, path: str | Path) -> ActionResult:
+        """Attach a local file to a file input, without a file chooser."""
+
+        return await self.execute(
+            [spi_actions.UploadFileAction(ref=ref, path=str(path))]
+        )
+
+    async def execute_js(self, script: str) -> Any:
+        result = await self.execute([spi_actions.ExecuteJsAction(script=script)])
+        return result.js_returns[0] if result.js_returns else None
+
+    # ----------------------------------------------------------------- queries
+    #
+    # These return their answer directly rather than an `ActionResult` whose
+    # `readouts[0]` the caller has to index into -- the same reason `extract()`
+    # returns a string.
+
+    async def dropdown_options(self, ref: str) -> str:
+        """The options of a `<select>`, read off the last snapshot."""
+
+        result = await self.execute([spi_actions.DropdownOptionsAction(ref=ref)])
+        return result.readouts[0] if result.readouts else ""
+
+    async def search_page(self, pattern: str, *, regex: bool = False, **kwargs: Any) -> str:
+        """Grep the rendered page text. Cheap; no model, no full observation."""
+
+        result = await self.execute(
+            [spi_actions.SearchPageAction(pattern=pattern, regex=regex, **kwargs)]
+        )
+        return result.readouts[0] if result.readouts else ""
+
+    async def find_elements(
+        self, selector: str, *, attributes: Sequence[str] = (), **kwargs: Any
+    ) -> str:
+        """Query the DOM by CSS selector; returns tags, text and attributes."""
+
+        result = await self.execute(
+            [
+                spi_actions.FindElementsAction(
+                    selector=selector, attributes=list(attributes), **kwargs
+                )
+            ]
+        )
+        return result.readouts[0] if result.readouts else ""
+
+    # -------------------------------------------------------------------- tabs
+
+    async def new_tab(self, url: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.NewTabAction(url=url)])
+
+    async def switch_tab(self, page_id: str) -> ActionResult:
+        return await self.execute([spi_actions.SwitchTabAction(page_id=page_id)])
+
+    async def close_tab(self, page_id: str) -> ActionResult:
+        return await self.execute([spi_actions.CloseTabAction(page_id=page_id)])
+
+    async def list_tabs(self) -> list[spi_actions.TabInfo]:
+        result = await self.execute([spi_actions.ListTabsAction()])
+        return result.tabs[0] if result.tabs else []
+
+    # ------------------------------------------------------------------- tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> ActionResult:
+        """Dispatch a tool by name, as an LLM would call it.
+
+        `browser_tools()` and the `to_anthropic` / `to_openai` / `to_mcp`
+        adapters hand a caller tool *definitions*; this is the other half, and
+        without it every consumer had to write the same
+        name-and-dict → validate → `spi.actions` → `execute()` loop themselves
+        (which is exactly what `agentpilot.agent.actions` does today).
+
+        Arguments are validated against the tool's own schema before dispatch, so
+        a malformed call is a `ValidationError` naming the field rather than a
+        `TypeError` from somewhere inside the driver.
+        """
+
+        from crawlpilot.tools import browser_tools  # noqa: PLC0415
+
+        spec = browser_tools().get(name)
+        if spec is None:
+            raise ValueError(f"no such tool {name!r}")
+        if spec.agent_fields is None:
+            raise ValueError(
+                f"tool {name!r} is not callable this way: it is wire-only "
+                "(security-sensitive, or it needs arguments a caller must supply "
+                "explicitly). Build the action and pass it to execute()."
+            )
+        parsed = spec.agent_model().model_validate({"type": spec.name, **(arguments or {})})
+        return await self.execute([spec.from_model(parsed)])
 
     # --------------------------------------------------------------- content
 
@@ -198,6 +303,7 @@ class Browser:
         extensions: Sequence[Extension] = (),
         profiles_root: Path | None = None,
         lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+        egress: EgressPolicy | None = None,
         executable_path: str | Path | None = None,
         channel: str | None = None,
         headless: bool | None = None,
@@ -231,6 +337,11 @@ class Browser:
             ),
         )
         self.lease_ttl_seconds = lease_ttl_seconds
+        self.egress = egress if egress is not None else LIBRARY_EGRESS
+        """Network fence for the browser. Defaults to *not* fencing: enforcement
+        is container-wide `iptables`, which a library has no business inserting
+        into someone's host firewall, and which would block the local dev server
+        they are most likely pointing at. The service passes `EgressPolicy()`."""
 
         # In-process by default. Correct for one process; a multi-worker
         # deployment injects a shared registry (see `policy.StateStore`'s
@@ -360,6 +471,7 @@ class Browser:
             timezone_id=timezone_id,
             browser_config=self.config,
             prototype_provider=self.prototype_provider,
+            egress=self.egress,
         )
         try:
             yield BrowserSession(self, session)
@@ -401,6 +513,7 @@ class Browser:
             session_name=identity,
             browser_config=self.config,
             prototype_provider=self.prototype_provider,
+            egress=self.egress,
             block_hooks=self.extensions.blocks,
         )
         return document
