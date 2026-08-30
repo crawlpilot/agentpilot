@@ -1226,7 +1226,44 @@ Wire up §4's job 3. Port one real crawler pipeline in `Browser4`/`crawlPilot` t
 `packages/browserpilot/README.md` around the four canonical uses: direct scrape,
 interactive session, agent tools, pure markdown.
 
-**Accept:** all three CI jobs green; the ported pipeline runs against the wheel only.
+**Status: done. The extraction is complete.**
+
+**All three CI jobs were executed locally, not merely written.**
+
+| Job | Result |
+|---|---|
+| 1 — crawlpilot alone, clean venv | **255 passed, 2 skipped**; closure asserted free of fastapi, starlette, psycopg, prometheus, redis and every LLM SDK; `from crawlpilot import Browser` works with nothing else installed |
+| 2 — agentpilot on the workspace | **874 passed, 65 skipped**; 7 layer contracts across both projects; mypy 11; ruff 11 |
+| 3 — agentpilot against the **published wheel** | **619 passed, 63 skipped**, with `crawlpilot` resolved from a local PEP 503 index and `--no-sources` disabling the workspace override |
+
+**The consumer story is proven, not asserted.** `examples/crawl_to_markdown.py`
+runs against the live internet inside the crawlpilot-only venv, with
+`importlib.util.find_spec("agentpilot") is None` verified first — exercising both
+shapes, the one-shot HTTP path and a real Chrome session.
+
+The test suite is split in two, and each stands alone: `packages/crawlpilot/tests`
+(255) must pass with only crawlpilot installed, `tests/` (619) additionally
+covers the platform's implementations of crawlpilot's seams —
+`RedisStateStore`, `ProxyConfig`, `DirectoryPrototypes`, `RetailExtension`, the
+identity composer. Eighteen tests moved across after being de-coupled from
+`control.identity_for`, building a `crawlpilot.IdentityRef` directly instead.
+
+Job 3 earned its place immediately by finding two things job 2 could not:
+
+- **agentpilot's tests needed the `driver` extra**, which the workspace had been
+  supplying transitively.
+- **`tests/fusion_fixtures.py` was shared across the split.** The published
+  wheel ships no test modules, so agentpilot's suite could not import a fixture
+  that had moved into crawlpilot's. Each suite now owns a copy — fixture data is
+  cheap to duplicate, and coupling two independently installable projects
+  through their test trees is exactly what the split exists to prevent.
+
+Job 1 found a third: the library's own suite needs **`[all]`**, not a subset —
+`test_vault.py` requires `cryptography` from the `[vault]` extra. A library that
+advertises an extra should test it.
+
+**Gates:** 874 passed / 65 skipped; 7 contracts, 0 broken; mypy 11; ruff 11, one
+below the pre-split baseline of 12.
 
 ---
 

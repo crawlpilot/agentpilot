@@ -22,3 +22,9 @@ opencode.jsonc
 *.bak
 scripts/node_modules/*
 scripts/cdp_demo_screenshots/*
+
+# CI-job artifacts, reproducible locally with .github/workflows/ci.yml's steps
+.venv-crawlpilot/
+.venv-published/
+localindex/
+dist/
