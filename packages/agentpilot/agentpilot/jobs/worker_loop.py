@@ -44,7 +44,7 @@ from crawlpilot.policy import NullPrototypes, PrototypeProvider
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.session.warm_pool import WarmPool
-from crawlpilot.spi.crawl import CrawlOptions
+from agentpilot.crawl.types import CrawlOptions
 from crawlpilot.spi.driver import BrowserDriver
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.scrape import Document

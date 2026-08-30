@@ -1,6 +1,9 @@
 """Job-lifecycle webhook config -- attached to a `Job` at creation time,
-delivered by `agentpilot.webhook` (HMAC-signed, egress-guarded; see that
-package's docstring for why the guard is mandatory, not optional).
+delivered HMAC-signed and egress-guarded.
+
+Lives beside `jobs.types` rather than in `crawlpilot.spi` because nothing in
+the browser library ever referenced it; a job's delivery callback belongs to
+the service that owns the job.
 """
 
 from __future__ import annotations

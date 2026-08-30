@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from crawlpilot.spi.jobs import Job, JobId, JobStatus, JobType
+from agentpilot.jobs.types import Job, JobId, JobStatus, JobType
 from crawlpilot.spi.scrape import Document, DocumentMetadata
-from crawlpilot.spi.webhook import WebhookConfig
+from agentpilot.jobs.webhook import WebhookConfig
 
 if TYPE_CHECKING:
     # Deferred at runtime for the same reason `agentpilot.auth.store` defers
@@ -58,7 +58,7 @@ class ClaimedTask:
 
 @dataclass
 class JobForWorker:
-    """The worker-facing view of a job -- distinct from `spi.jobs.Job` (the
+    """The worker-facing view of a job -- distinct from `jobs.types.Job` (the
     tenant-facing `/v1/crawl` polling shape), which deliberately excludes
     `options`/`webhook` fields a caller never needs back. `get_job_for_worker`
     has no `tenant` filter, unlike `get_job()`: the crawl-worker loop is a

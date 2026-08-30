@@ -9,7 +9,7 @@ from __future__ import annotations
 from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl import rank, seed
-from crawlpilot.spi.crawl import MapLink, MapOptions
+from agentpilot.crawl.types import MapLink, MapOptions
 from crawlpilot.spi.egress import EgressPolicy
 
 POLICY = EgressPolicy()

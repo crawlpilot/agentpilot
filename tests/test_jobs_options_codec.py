@@ -15,7 +15,7 @@ from agentpilot.jobs.options_codec import (
     load_crawl_options,
     load_scrape_options,
 )
-from crawlpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
+from agentpilot.crawl.types import BatchScrapeOptions, CrawlOptions
 from crawlpilot.spi.scrape import ScrapeOptions
 
 

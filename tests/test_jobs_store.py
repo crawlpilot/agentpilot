@@ -15,7 +15,7 @@ import pytest
 
 from agentpilot.jobs.store import PostgresJobStore
 from crawlpilot.spi.scrape import Document, DocumentMetadata
-from crawlpilot.spi.webhook import WebhookConfig
+from agentpilot.jobs.webhook import WebhookConfig
 
 _DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")
 
@@ -95,7 +95,7 @@ async def test_get_job_for_worker_has_no_tenant_filter(store: PostgresJobStore) 
 
 
 async def test_get_job_for_worker_includes_webhook_secret(store: PostgresJobStore) -> None:
-    from crawlpilot.spi.webhook import WebhookConfig
+    from agentpilot.jobs.webhook import WebhookConfig
 
     webhook = WebhookConfig(url="https://example.com/hook", secret="shh", events=("completed",))
     job = await store.create_job(_tenant(), "batch_scrape", None, {}, webhook)
@@ -119,7 +119,7 @@ async def test_create_job_persists_webhook_secret_but_get_job_omits_it(
     fetched = await store.get_job(job.job_id, tenant)
     assert fetched is not None
     assert fetched.job_id == job.job_id
-    # Job (spi.jobs) deliberately has no webhook field -- callers never see
+    # Job (jobs.types) deliberately has no webhook field -- callers never see
     # the secret again after job creation, same "shown once" discipline as
     # an API key's plaintext.
     assert not hasattr(fetched, "webhook")

@@ -8,9 +8,13 @@ full reasoning, ported from Firecrawl's own Postgres-backed "NuQ" queue).
 
 A `Job` tracks one `/v1/crawl` or `/v1/batch/scrape` call; its constituent
 per-URL work items live in `agentpilot.jobs.store`'s `crawl_tasks` table,
-correlated by `job_id` -- there is no separate `spi` type for a task, since
-callers only ever see the aggregate `Job` (via `GET /v1/crawl/{id}`) and the
-resulting `Document`s (`spi.scrape.Document`), never a task directly.
+correlated by `job_id` -- there is no separate type for a task, since callers
+only ever see the aggregate `Job` (via `GET /v1/crawl/{id}`) and the resulting
+`Document`s (`crawlpilot.spi.scrape.Document`), never a task directly.
+
+Lives here rather than in `crawlpilot.spi` because nothing in the browser
+library ever referenced it: a durable job queue is a property of running this
+platform as a service, not of driving a browser.
 """
 
 from __future__ import annotations

@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 import re
 
-from crawlpilot.spi.crawl import MapLink
+from agentpilot.crawl.types import MapLink
 
 _WORD_SPLIT = re.compile(r"\W+")
 

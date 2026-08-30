@@ -1,4 +1,4 @@
-"""dict <-> `spi.crawl`/`spi.scrape` option-type conversion for the
+"""dict <-> `crawl.types`/`crawlpilot.spi.scrape` option-type conversion for the
 `jobs.options` JSONB column. Plain, hand-written (no Pydantic):
 `agentpilot.jobs` sits below `agentpilot.gateway` in the layering and must not
 import Pydantic request models from it (`gateway.schemas.CrawlRequest` etc.)
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from crawlpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
+from agentpilot.crawl.types import BatchScrapeOptions, CrawlOptions
 from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 

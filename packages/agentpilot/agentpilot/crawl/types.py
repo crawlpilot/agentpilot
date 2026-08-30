@@ -4,8 +4,10 @@ and `/v1/map` -- adapted from Firecrawl's `crawlerOptions`/`MapRequest`
 concept carries over so this reads as "the same crawl options, this
 platform's engine" rather than a fresh vocabulary.
 
-`agentpilot.crawl` (the discovery/filtering module these options drive) is a
-pure, driver-free leaf module -- see that package's own docstring.
+These options drive `agentpilot.crawl`'s own discovery/filtering modules, which
+is why they live here: site discovery is this platform's concern, and the
+browser library never referenced them. `ScrapeOptions` -- the per-page half,
+which crawlpilot genuinely does own and act on -- stays in `crawlpilot.spi`.
 """
 
 from __future__ import annotations
