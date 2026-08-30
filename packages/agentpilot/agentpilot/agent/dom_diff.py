@@ -217,7 +217,9 @@ def render_change_block(diff: DomDiff) -> str:
     ):
         for change in diff.of_kind(kind):
             node = change.node
-            ref = f"e{node.backend_node_id}"
+            # Must match what the serializer rendered, or the change block would
+            # hand the model a ref the ref index cannot resolve.
+            ref = f"e{node.selector_index if node.selector_index is not None else node.backend_node_id}"
             name = f' "{node.ax_name}"' if node.ax_name else ""
             role = node.ax_role or node.tag_name
             suffix = f" ({change.detail})" if change.detail else ""
