@@ -49,6 +49,18 @@ class NavigateAction:
 
 @dataclass
 class GoBackAction:
+    wait_until: NavigateWaitUntil = "commit"
+    """`"commit"`, not the `"load"` Playwright defaults to, and not even
+    `"domcontentloaded"`.
+
+    Going back usually restores the page from the back/forward cache, and a
+    bfcache restore fires `pageshow` -- it fires neither `DOMContentLoaded` nor
+    `load`, because nothing is being parsed or fetched. Waiting for either means
+    waiting for an event that will never come: the navigation completes
+    instantly, then the call sits until its 30s timeout and raises on a
+    navigation that already succeeded. `commit` is the one state a restore
+    actually reaches."""
+    timeout_ms: int = 30_000
     terminates_sequence: bool = True
 
 

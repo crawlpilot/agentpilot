@@ -210,6 +210,13 @@ _LIVENESS_TIMEOUT_S = 2.0
 is reported dead so the session layer can reopen it, rather than hanging the
 acquire path on an unresponsive Chrome."""
 
+_CLICK_NAVIGATION_TIMEOUT_MS = 5_000
+"""How long a click waits for a navigation it triggered to parse a document.
+
+Longer than `_SETTLE_TIMEOUT_MS` because this is a real page load rather than a
+quiet-network check, and short enough that a click which merely *looked* like a
+navigation does not stall the batch."""
+
 _SETTLE_TIMEOUT_MS = 1_500
 """Upper bound on the best-effort network-idle wait before an opt-in
 (`SnapshotAction.settle`) snapshot. Bounded because `networkidle` never fires
@@ -976,9 +983,15 @@ class PatchrightDriver:
             result.verifications.append(f"navigated to {live.page.url}")
             await self._post_navigate(cctx, live, result, response)
         elif isinstance(action, GoBackAction):
-            await live.page.go_back()
+            try:
+                await live.page.go_back(
+                    wait_until=action.wait_until, timeout=action.timeout_ms
+                )
+            except PlaywrightTimeoutError as exc:
+                raise NavigationTimeout(str(exc)) from exc
             live.epoch += 1
             live.nodes.reset()
+            result.verifications.append(f"went back to {live.page.url}")
         elif isinstance(action, SnapshotAction):
             if action.settle:
                 await self._settle(live)
@@ -1034,6 +1047,13 @@ class PatchrightDriver:
             node, cdp = await self._resolve_ref(live, action.ref)
             await self._human_click(cdp, node, action.ref, cctx.delay_policy)
             if live.page.url != pre_click_url:
+                # A click that navigated returns as soon as the event is
+                # dispatched, so the new document may not exist yet -- the very
+                # next action (an extract, a snapshot) would then read the *old*
+                # page and look like it simply saw no change. Bounded and
+                # best-effort: a page that never settles still returns whatever
+                # it has, which is better than failing an action that worked.
+                await self._await_document(live)
                 result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
             else:
                 result.verifications.append(f"clicked {action.ref}")
@@ -1280,6 +1300,20 @@ class PatchrightDriver:
             metrics.incr("context_leak_warnings_total", reason=reason)
             result.verifications.append(
                 f"warning: navigation returned {reason} -- possible block or bot challenge"
+            )
+
+    async def _await_document(self, live: _Page) -> None:
+        """Wait, briefly, for a click-triggered navigation's document to parse.
+
+        `domcontentloaded` rather than `load`, for the same reason
+        `NavigateAction` defaults to it: waiting on every subresource means a
+        page with one slow third-party frame never returns. Swallows everything
+        -- this is making a subsequent read see the right page, not a guarantee
+        the caller can rely on, and a click that worked must not fail here."""
+
+        with contextlib.suppress(Exception):
+            await live.page.wait_for_load_state(
+                "domcontentloaded", timeout=_CLICK_NAVIGATION_TIMEOUT_MS
             )
 
     async def _settle(self, live: _Page) -> None:
