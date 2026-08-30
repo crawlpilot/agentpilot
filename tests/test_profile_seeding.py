@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from crawlpilot.config import ProfileConfig
 from agentpilot.control.prototypes import DirectoryPrototypes
+from crawlpilot.config import ProfileConfig
 from crawlpilot.identity.profile_store import PROTOTYPE_ENV, seed_profile_dir
 from crawlpilot.session.ephemeral import _build_batch, _site_root
 from crawlpilot.spi.actions import NavigateAction

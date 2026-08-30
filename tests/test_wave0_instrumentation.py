@@ -3,8 +3,8 @@ agent-loop / context metric objects. Pure -- no browser, no network."""
 
 from __future__ import annotations
 
-from crawlpilot.driver.patchright_driver import _ContextHealth
 from agentpilot.observability import metrics
+from crawlpilot.driver.patchright_driver import _ContextHealth
 
 
 def test_context_health_defaults_are_zero() -> None:

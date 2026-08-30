@@ -24,10 +24,10 @@ import structlog
 
 from agentpilot.agent.loop import run_agent_loop
 from agentpilot.agent.state import AgentStepRecord
-from crawlpilot.config import DEFAULTS, BrowserConfig
-from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import ClaimedAgentRun, PostgresAgentStore
 from agentpilot.llm.client import LLMConfig
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from crawlpilot.policy import NullPrototypes, PrototypeProvider
 from crawlpilot.session.interactive import open_interactive_session, release_interactive_session
 from crawlpilot.session.registry import RegistryProtocol

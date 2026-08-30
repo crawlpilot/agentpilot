@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pytest_httpserver import HTTPServer
 
-from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.sessions import execute_session, open_session, release_session
 from agentpilot.gateway.schemas import (
     ExecuteRequest,
@@ -19,6 +18,7 @@ from agentpilot.gateway.schemas import (
     SessionOpenRequest,
     SnapshotActionIn,
 )
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.registry import Registry
 
 ARTICLE_HTML = """<html><body><h1>Session Lifecycle Article</h1></body></html>"""

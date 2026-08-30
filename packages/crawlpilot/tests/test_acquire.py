@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from agentpilot.control.identity import identity_for
 from crawlpilot.session.acquire import acquire_validated
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.errors import ContextCrashed, LeaseConflict
+from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.lease import ContextRef, ContextState
 
-_IDENTITY = identity_for("t", "d", "n")
+_IDENTITY = IdentityRef(key="t/d/n")
 
 
 class FakeDriver:

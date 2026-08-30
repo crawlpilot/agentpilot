@@ -20,7 +20,6 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agentpilot.control.identity import parts_of, tenant_of
-from crawlpilot.dom.serializer import serialize
 from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
@@ -43,6 +42,7 @@ from agentpilot.observability.metrics import (
     requests_total,
     session_open_duration_seconds,
 )
+from crawlpilot.dom.serializer import serialize
 from crawlpilot.session.interactive import (
     execute_on_session,
     open_interactive_session,

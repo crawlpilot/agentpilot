@@ -18,10 +18,9 @@ deliberate edit to this file in the same commit, not a silent drift.
 from __future__ import annotations
 
 import importlib
+import pathlib
 
 import pytest
-
-import pathlib
 
 CRAWLPILOT_SRC = pathlib.Path(__file__).resolve().parents[1] / "packages/crawlpilot/src/crawlpilot"
 """Resolved from this file, not the working directory: these guards walk the
@@ -138,7 +137,6 @@ def test_browser_layer_carries_no_web_framework_import() -> None:
     makes it enforceable at the dependency level."""
 
     import ast
-    import pathlib
 
     banned = {"fastapi", "starlette", "psycopg", "prometheus_client"}
     offenders: list[str] = []
@@ -177,7 +175,6 @@ def test_browser_layer_reads_no_ambient_environment() -> None:
     """
 
     import ast
-    import pathlib
 
     allowed = {"driver/process_launcher.py", "identity/proxy_config.py"}
     offenders: list[str] = []
@@ -220,7 +217,6 @@ def test_browser_layer_has_no_tenancy_vocabulary() -> None:
     exempt = {("jobs.py", "tenant"), ("artifact.py", "tenant")}
 
     import ast
-    import pathlib
 
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
@@ -259,7 +255,6 @@ def test_the_browser_layer_never_imports_observability() -> None:
     """
 
     import ast
-    import pathlib
 
     offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",

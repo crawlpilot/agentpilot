@@ -9,7 +9,6 @@ import asyncio
 import pytest
 
 import crawlpilot.session.reaper as reaper_module
-from agentpilot.control.identity import identity_for, parts_of
 from crawlpilot.session.reaper import Reaper
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.identity import IdentityRef
@@ -25,7 +24,7 @@ class FakeDriver:
 
 
 def _identity(name: str) -> IdentityRef:
-    return identity_for("t", "example.com", name)
+    return IdentityRef(key=f"t/example.com/{name}")
 
 
 async def _make_idle_entry(
@@ -33,7 +32,7 @@ async def _make_idle_entry(
 ) -> ContextRef:
     async def opener() -> ContextRef:
         return ContextRef(
-            context_id=f"ctx-{parts_of(identity).name}",
+            context_id=f"ctx-{identity.key.split('/')[-1]}",
             identity=identity,
             state=ContextState.ACTIVE,
             pid=pid,

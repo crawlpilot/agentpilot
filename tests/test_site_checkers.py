@@ -3,8 +3,8 @@ block/integrity checkers. Pure, no browser."""
 
 from __future__ import annotations
 
-from crawlpilot.extraction.block_detect import Verdict
 from agentpilot.control.retail_extension import AmazonChecker, JdChecker, WalmartChecker
+from crawlpilot.extraction.block_detect import Verdict
 
 
 def _big(n: int) -> str:

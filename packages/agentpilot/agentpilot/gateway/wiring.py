@@ -49,21 +49,21 @@ if TYPE_CHECKING:
     from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
-from crawlpilot.config import BrowserConfig
 from agentpilot.control.prototypes import DirectoryPrototypes
 from agentpilot.control.proxy_config import ProxyConfig
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.control.retail_extension import RetailExtension
-from crawlpilot.extensions import ExtensionRegistry
 from agentpilot.gateway.role import Role, get_role
-from crawlpilot.identity.burn_tracker import BurnTracker
-from crawlpilot.identity.proxy_health import ProxyHealth
-from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
-from crawlpilot.metrics import set_recorder
 from agentpilot.observability.metrics import PrometheusRecorder
+from crawlpilot.config import BrowserConfig
+from crawlpilot.extensions import ExtensionRegistry
+from crawlpilot.identity.burn_tracker import BurnTracker
+from crawlpilot.identity.proxy_health import ProxyHealth
+from crawlpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.metrics import set_recorder
 from crawlpilot.policy import InMemoryStateStore, StateStore
 from crawlpilot.session.interactive import InteractiveSession
 from crawlpilot.spi.proxy import ProxyEndpoint
@@ -284,10 +284,10 @@ class Wiring:
         import uuid
 
         from agentpilot.control.redis_registry import RedisRegistry
+        from agentpilot.placement.node_registry import NodeRegistry
         from crawlpilot.driver.patchright_driver import PatchrightDriver
         from crawlpilot.driver.process_launcher import ProcessLauncher
         from crawlpilot.identity.vault import Vault
-        from agentpilot.placement.node_registry import NodeRegistry
         from crawlpilot.session.reaper import Reaper
         from crawlpilot.session.registry import Registry, RegistryProtocol
         from crawlpilot.session.warm_pool import KeepaliveLoop, WarmPool

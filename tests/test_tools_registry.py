@@ -122,7 +122,9 @@ def test_the_tools_package_imports_no_llm_sdk() -> None:
 
     banned = {"anthropic", "openai", "langchain", "litellm", "cohere", "mistralai", "google"}
     offenders: list[str] = []
-    tools_dir = pathlib.Path(__file__).resolve().parents[1] / "packages/crawlpilot/src/crawlpilot/tools"
+    tools_dir = (
+        pathlib.Path(__file__).resolve().parents[1] / "packages/crawlpilot/src/crawlpilot/tools"
+    )
     assert tools_dir.is_dir(), tools_dir
     for path in tools_dir.rglob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
@@ -145,7 +147,11 @@ def test_adapters_are_pure_transforms_of_the_json_schema(adapter) -> None:  # ty
     out = adapter(specs)
     assert len(out) == len(specs)
     for spec, entry in zip(specs, out, strict=True):
-        params = entry.get("input_schema") or entry.get("inputSchema") or entry["function"]["parameters"]
+        params = (
+            entry.get("input_schema")
+            or entry.get("inputSchema")
+            or entry["function"]["parameters"]
+        )
         schema = spec.json_schema()
         # Same properties as the neutral schema, minus the discriminator the
         # provider carries out of band as the tool name.

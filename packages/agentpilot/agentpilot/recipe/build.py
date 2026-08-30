@@ -31,7 +31,6 @@ from typing import Any
 
 from agentpilot.agent.loop import run_agent_loop
 from agentpilot.agent.state import AgentStepRecord
-from crawlpilot.dom.serializer import serialize
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.evaluate import fetch_structured_data
@@ -46,6 +45,7 @@ from agentpilot.recipe.schema import (
     render_schema_for_prompt,
 )
 from agentpilot.recipe.stabilize import stabilize_action_dict
+from crawlpilot.dom.serializer import serialize
 from crawlpilot.session.interactive import InteractiveSession, execute_on_session
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi import actions as spi_actions

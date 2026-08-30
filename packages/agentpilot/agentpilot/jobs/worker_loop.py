@@ -32,14 +32,14 @@ from urllib.parse import urlparse
 
 import structlog
 
-from crawlpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import fetch as fetch_robots
-from crawlpilot.extensions.mounts import BlockHooks
-from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_options
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
 from agentpilot.llm.structured import extract_structured
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.extensions.mounts import BlockHooks
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from crawlpilot.policy import NullPrototypes, PrototypeProvider
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
 from crawlpilot.session.registry import RegistryProtocol

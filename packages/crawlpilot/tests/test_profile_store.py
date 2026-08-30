@@ -12,16 +12,16 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.control.identity import identity_for
 from crawlpilot.identity.profile_store import (
     PathTraversalError,
     delete_profile_dir,
     resolve_profile_dir,
 )
+from crawlpilot.spi.identity import IdentityRef
 
 
 def test_resolve_profile_dir_stays_within_tenant_root(tmp_path) -> None:
-    identity = identity_for("acme", "example.com", "alice")
+    identity = IdentityRef(key="acme/example.com/alice")
     resolved = resolve_profile_dir(tmp_path, identity)
     assert resolved == (tmp_path / "acme" / "example.com" / "alice").resolve()
 
@@ -37,18 +37,18 @@ def test_symlinked_domain_dir_escaping_tenant_root_is_rejected(tmp_path) -> None
     outside.mkdir(exist_ok=True)
     (tenant_dir / "example.com").symlink_to(outside)
 
-    identity = identity_for("acme", "example.com", "alice")
+    identity = IdentityRef(key="acme/example.com/alice")
     with pytest.raises(PathTraversalError):
         resolve_profile_dir(tmp_path, identity)
 
 
 def test_identity_key_itself_rejects_dotdot_segments() -> None:
     with pytest.raises(ValueError):
-        identity_for("..", "example.com", "alice").slug()
+        IdentityRef(key="../example.com/alice").slug()
 
 
 def test_delete_profile_dir_removes_an_existing_dir(tmp_path) -> None:
-    identity = identity_for("acme", "example.com", "scrape-1")
+    identity = IdentityRef(key="acme/example.com/scrape-1")
     path = resolve_profile_dir(tmp_path, identity)
     path.mkdir(parents=True)
     (path / "Default").mkdir()
@@ -59,5 +59,5 @@ def test_delete_profile_dir_removes_an_existing_dir(tmp_path) -> None:
 
 
 def test_delete_profile_dir_on_a_dir_that_never_existed_is_a_no_op(tmp_path) -> None:
-    identity = identity_for("acme", "example.com", "scrape-1")
+    identity = IdentityRef(key="acme/example.com/scrape-1")
     delete_profile_dir(tmp_path, identity)  # must not raise

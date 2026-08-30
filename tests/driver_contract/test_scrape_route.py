@@ -13,9 +13,9 @@ from pytest_httpserver import HTTPServer
 from werkzeug import Response
 
 from agentpilot.control.identity import identity_for
-from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.scrape import scrape
 from agentpilot.gateway.schemas import ScrapeRequest
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.errors import ChallengeDetected
 

@@ -1159,7 +1159,65 @@ Create the uv workspace; `git mv` per §3.2; write both `pyproject.toml`s with
 and the import-linter config. Keep a compatibility shim in `agentpilot` for one
 release re-exporting old paths with a `DeprecationWarning`.
 
-**Accept:** `uv build --all-packages` produces two wheels; §4's job 1 is green.
+**Status: done.** Two projects, two wheels, one workspace.
+
+The browser layer ships as **`crawlpilot`** — `browserpilot` is taken on PyPI by
+an unrelated browser-automation package, and the Phase 0 spike reproduced a real
+dependency-confusion install of it. `crawlpilot` is free and matches the org, so
+the collision and its permanent index-pinning tax are both gone.
+
+```
+packages/crawlpilot/src/crawlpilot/   api config metrics spi driver session
+                                      identity egress extraction dom tiers
+                                      policy extensions tools
+packages/agentpilot/agentpilot/       agent auth control crawl gateway jobs
+                                      llm observability placement recipe
+```
+
+**`crawlpilot` installs and runs standalone.** A clean venv with
+`crawlpilot[engine,markdown]` pulls 27 packages — httpx, patchright, lxml,
+pydantic, structlog and their transitives — and **no fastapi, starlette,
+psycopg, prometheus, redis, or LLM SDK**. `from crawlpilot import Browser`
+works, 17 tools register, `py.typed` ships.
+
+**Two dependencies had to be severed first, and the guards found both:**
+
+- **`observability`** — the browser layer imported it for seven counters, which
+  made prometheus transitive, and it is used by fourteen platform modules so it
+  could not move across either. The Phase-4 ratchet existed precisely to surface
+  this here. Paid: `crawlpilot.metrics` is a `Recorder` seam defaulting to a
+  no-op, and the platform installs a `PrometheusRecorder` at its composition
+  root. Same counter names, same labels, opposite dependency direction.
+- **`agentpilot.llm`** — `session.ephemeral` called it directly for
+  `ScrapeOptions.extract`. The last platform import in the browser layer, and
+  the one the layer contracts never caught because `llm` sat below `session`.
+  Producing markdown is browsing; deciding to hand it to a model is the
+  platform's business, so it is now an injected `StructuredExtractor`.
+
+**The cross-project boundary is a test, not a contract.** import-linter refuses
+to forbid subpackages of an *external* package, and `crawlpilot` is external
+now — exactly as §3.2 anticipated. `tests/test_project_boundary.py` asserts
+agentpilot imports only published crawlpilot packages, that only
+`gateway/wiring.py` names the concrete driver, and that crawlpilot never imports
+agentpilot. It also asserts it found more than twenty imports, because a
+path-based guard that silently matches nothing proves nothing.
+
+**A mistake worth recording.** Rewriting the root manifest, I replaced the ruff
+rule selection with a much larger one — silently tightening lint during a
+packaging refactor and producing 359 spurious findings. Two of my own
+measurement habits then hid it: several commands ran in the wrong repository
+(the shell's cwd resets between calls), and my first "baseline" comparison used
+a tree where `agentpilot/` no longer existed, so it measured the test directory
+alone. Restoring the pre-split `select`/`ignore` verbatim — plus the one genuine
+addition, `src = [...]`, without which isort reclassifies every internal import
+as third-party — brought it back to the real baseline.
+
+**Gates:** 874 passed / 65 skipped; **7 contracts across the two projects**, 0
+broken; mypy 11; ruff 10, two *below* the pre-split baseline of 12.
+
+Both Dockerfiles' dependency-cache layers now copy both manifests plus the
+workspace root, and the gateway image stays Chrome-free by installing
+`crawlpilot` without `[engine]`.
 
 ### Phase 8 — Prove the consumer story
 
@@ -1212,7 +1270,8 @@ interactive session, agent tools, pure markdown.
 Settled and recorded in the design: the distinct top-level package name (§3.1),
 no Redis in `browserpilot` (§3.7d), markdown stays core (§3.9).
 
-1. **The distribution name** — now urgent, and evidence-backed. `browserpilot` on
+1. ~~The distribution name~~ — **settled: `crawlpilot`.**
+   Original analysis: `browserpilot` on
    PyPI is an unrelated browser-automation library, so the name is confusable in
    the worst possible way and the collision is live even on a private index (see
    §3.1 and the risk register). `agentpilot` is taken too. Three options:

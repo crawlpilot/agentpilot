@@ -13,8 +13,8 @@ from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
 from agentpilot.agent.loop import run_agent_loop
-from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.llm.client import LLMConfig
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.interactive import open_interactive_session, release_interactive_session
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.actions import NavigateAction

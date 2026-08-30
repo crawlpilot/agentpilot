@@ -1,0 +1,139 @@
+# Three jobs, and the third is the one that matters.
+#
+# `crawlpilot` (the browser platform) and `agentpilot` (the service built on it)
+# are separate distributions sharing a uv workspace. Nothing enforces that
+# separation at import time -- during development `[tool.uv.sources]` points the
+# dependency at the local path, so agentpilot can reach into any crawlpilot
+# module and keep working right up until a crawlpilot release moves it. Job 3
+# resolves the *built wheel* instead, which is the only way that failure shows
+# up before a consumer hits it.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  UV_VERSION: "0.9.28"
+
+jobs:
+  # ---------------------------------------------------------------- job 1
+  crawlpilot:
+    name: crawlpilot alone (clean venv)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install 3.12
+
+      # A clean venv with ONLY crawlpilot: no workspace, no agentpilot, no dev
+      # group. If the browser layer has re-acquired a platform dependency, this
+      # is where it fails.
+      - name: Build and install crawlpilot alone
+        run: |
+          uv build --package crawlpilot
+          uv venv .venv-crawlpilot
+          VIRTUAL_ENV=.venv-crawlpilot uv pip install \
+            "$(ls dist/crawlpilot-*.whl)[engine,markdown]" \
+            pytest pytest-asyncio pytest-httpserver
+
+      - name: Assert the dependency closure stays clean
+        run: |
+          set -euo pipefail
+          installed=$(VIRTUAL_ENV=.venv-crawlpilot uv pip list --format=freeze | cut -d= -f1 | tr 'A-Z' 'a-z')
+          for banned in fastapi starlette psycopg prometheus-client redis anthropic openai; do
+            if echo "$installed" | grep -qx "$banned"; then
+              echo "::error::$banned leaked into crawlpilot's closure"
+              exit 1
+            fi
+          done
+          echo "closure clean"
+
+      - name: Run crawlpilot's own suite
+        run: VIRTUAL_ENV=.venv-crawlpilot .venv-crawlpilot/bin/python -m pytest -q packages/crawlpilot/tests
+
+      - name: Import the public API with nothing else installed
+        run: .venv-crawlpilot/bin/python -c "from crawlpilot import Browser, browser_tools; assert len(browser_tools()) == 17"
+
+  # ---------------------------------------------------------------- job 2
+  agentpilot-workspace:
+    name: agentpilot on the workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install 3.12
+      - run: uv sync --all-extras
+
+      # The everyday signal: both suites, both projects' layer contracts, types.
+      - run: uv run pytest -q --ignore=tests/driver_contract
+      - run: uv run mypy packages/crawlpilot/src/crawlpilot packages/agentpilot/agentpilot
+      - run: uv run ruff check packages tests examples
+      - name: Layer contracts (crawlpilot)
+        working-directory: packages/crawlpilot
+        run: uv run --project ../.. lint-imports
+      - name: Layer contracts (agentpilot)
+        working-directory: packages/agentpilot
+        run: uv run --project ../.. lint-imports
+
+  # ---------------------------------------------------------------- job 3
+  agentpilot-published:
+    name: agentpilot against the published wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install 3.12
+
+      # Build crawlpilot and serve it from a local PEP 503 index, then install
+      # agentpilot with `--no-sources` so the workspace override is ignored and
+      # the dependency resolves the way a real consumer's would.
+      #
+      # `--index-strategy`/the explicit index also guards the name: PyPI hosts
+      # an unrelated `browserpilot`, which is why this project is `crawlpilot`
+      # -- a resolver that silently reached PyPI for the browser layer is the
+      # exact failure this job exists to catch.
+      - name: Build crawlpilot into a local index
+        run: |
+          uv build --package crawlpilot
+          mkdir -p localindex/crawlpilot
+          cp dist/crawlpilot-*.whl localindex/crawlpilot/
+          python - <<'PY'
+          import pathlib
+          root = pathlib.Path("localindex")
+          links = "".join(
+              f'<a href="{w.name}">{w.name}</a>\n'
+              for w in sorted((root / "crawlpilot").glob("*.whl"))
+          )
+          (root / "crawlpilot" / "index.html").write_text(links)
+          (root / "index.html").write_text('<a href="crawlpilot/">crawlpilot</a>\n')
+          PY
+
+      - name: Install agentpilot resolving crawlpilot from the index
+        run: |
+          uv venv .venv-published
+          VIRTUAL_ENV=.venv-published uv pip install \
+            --no-sources \
+            --find-links localindex/crawlpilot \
+            "./packages/agentpilot[postgres]" \
+            pytest pytest-asyncio pytest-httpserver fakeredis lupa
+
+      - name: Assert crawlpilot came from the index, not the source tree
+        run: |
+          set -euo pipefail
+          location=$(.venv-published/bin/python -c "import crawlpilot, pathlib; print(pathlib.Path(crawlpilot.__file__).parent)")
+          case "$location" in
+            *"site-packages/crawlpilot") echo "resolved the built wheel: $location" ;;
+            *) echo "::error::crawlpilot resolved from $location, not an installed wheel"; exit 1 ;;
+          esac
+
+      - name: Run agentpilot's suite against the published wheel
+        run: .venv-published/bin/python -m pytest -q tests --ignore=tests/driver_contract

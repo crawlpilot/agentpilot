@@ -8,13 +8,13 @@ import asyncio
 
 import pytest
 
-from agentpilot.control.identity import identity_for
 from crawlpilot.session.lease import is_expired
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.lease import ContextRef, ContextState
 
-IDENTITY = identity_for("t", "example.com", "a")
+IDENTITY = IdentityRef(key="t/example.com/a")
 
 
 def _make_ctx(n: int = 0) -> ContextRef:

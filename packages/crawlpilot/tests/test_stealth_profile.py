@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.control.identity import identity_for
 from crawlpilot.session import stealth_profile
-from crawlpilot.spi.identity import ProfileKind
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
 from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.tiers import TierPolicy
 
-IDENTITY = identity_for("acme", "zara.com", "s1", kind=ProfileKind.DEFAULT)
+IDENTITY = IdentityRef(key="acme/zara.com/s1", kind=ProfileKind.DEFAULT)
 
 
 @pytest.mark.parametrize("tier", ["stealth", "enhanced", "auto"])
@@ -81,7 +80,7 @@ def test_fingerprint_is_pinned_per_identity() -> None:
     a = stealth_profile.resolve(IDENTITY, "stealth")
     b = stealth_profile.resolve(IDENTITY, "stealth")
     other = stealth_profile.resolve(
-        identity_for("acme", "zara.com", "s2"), "stealth"
+        IdentityRef(key="acme/zara.com/s2"), "stealth"
     )
 
     assert a == b

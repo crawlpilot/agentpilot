@@ -3,8 +3,8 @@ result/metric surfaces. Pure -- no browser (imports the module only)."""
 
 from __future__ import annotations
 
-from crawlpilot.driver.patchright_driver import _ContextHealth, _navigation_leak_reason
 from agentpilot.observability import metrics
+from crawlpilot.driver.patchright_driver import _ContextHealth, _navigation_leak_reason
 from crawlpilot.spi.actions import ActionResult
 
 

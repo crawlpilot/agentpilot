@@ -17,9 +17,9 @@ import pytest
 from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
-from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.registry import Registry
 
 _DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")

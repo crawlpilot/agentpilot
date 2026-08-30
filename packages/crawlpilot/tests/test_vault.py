@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from cryptography.fernet import Fernet
 
-from agentpilot.control.identity import identity_for
 from crawlpilot.identity.vault import Vault
+from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
-IDENTITY = identity_for("acme", "example.com", "alice")
+IDENTITY = IdentityRef(key="acme/example.com/alice")
 
 STATE = StorageState(
     cookies=[{"name": "sid", "value": "abc123", "domain": "example.com"}],
