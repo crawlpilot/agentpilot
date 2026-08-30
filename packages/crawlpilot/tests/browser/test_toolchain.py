@@ -31,36 +31,44 @@ async def _log(page) -> str:
     return await page.execute_js("document.getElementById('log').textContent")
 
 
-async def _refs(page) -> dict[str, str]:
-    """`{element id: ref}` for everything the snapshot indexed.
+async def _offered(page) -> dict[str, str]:
+    """`{element id: ref}` for the elements a model would actually be offered.
 
-    Going through `snapshot()` rather than a CSS lookup is the point: these are
-    the refs a model would be handed, so the tests exercise the same path an
-    agent takes.
+    Runs the snapshot through `dom.serialize`, which is the same pipeline the
+    agent's observation is built from -- so this reflects the *editorial*
+    decisions too (occluded elements dropped, nested duplicates deduped), not
+    merely everything the capture walked over. Asserting against the raw tree
+    would pass for elements the model is never shown.
     """
 
-    from crawlpilot.spi.dom_tree import iter_elements
+    from crawlpilot.dom.serializer import serialize
 
     tree = await page.snapshot()
     assert tree is not None, "snapshot returned no tree"
     found: dict[str, str] = {}
-    for node in iter_elements(tree):
+    for index, node in serialize(tree).selector_map.items():
         element_id = node.attributes.get("id")
         # First wins: `dup` appears twice and the pair is tested separately.
         if element_id and element_id not in found:
-            found[element_id] = f"e{node.selector_index}"
+            found[element_id] = f"e{index}"
     return found
 
 
+async def _refs(page) -> dict[str, str]:
+    return await _offered(page)
+
+
 async def _all_refs(page, element_id: str) -> list[str]:
-    from crawlpilot.spi.dom_tree import iter_elements
+    """Every offered ref carrying `element_id`, in document order."""
+
+    from crawlpilot.dom.serializer import serialize
 
     tree = await page.snapshot()
     assert tree is not None
     return [
-        f"e{n.selector_index}"
-        for n in iter_elements(tree)
-        if n.attributes.get("id") == element_id
+        f"e{index}"
+        for index, node in sorted(serialize(tree).selector_map.items())
+        if node.attributes.get("id") == element_id
     ]
 
 
@@ -77,10 +85,10 @@ async def test_click_a_link_then_go_back(page, toolbench) -> None:
     refs = await _refs(page)
 
     await page.click(refs["same-tab"])
-    assert "via=link" in await page.text()
+    assert "via=link" in await page.execute_js("location.href")
 
     await page.go_back()
-    assert "Toolbench" in await page.text()
+    assert "index.html" in await page.execute_js("location.href")
 
 
 async def test_submitting_a_form_navigates_and_carries_the_field(page, toolbench) -> None:
@@ -90,7 +98,8 @@ async def test_submitting_a_form_navigates_and_carries_the_field(page, toolbench
     await page.fill(refs["query"], "hello")
     await page.click(refs["submit"])
 
-    assert "q=hello" in await page.text()
+    assert "q=hello" in await page.execute_js("location.href")
+    assert "Target page" in await page.execute_js("document.title")
 
 
 async def test_a_target_blank_link_opens_a_tab_the_agent_can_reach(page, toolbench) -> None:
@@ -147,8 +156,7 @@ async def test_an_occluded_button_is_not_offered(page, toolbench) -> None:
     await page.navigate(toolbench.index)
     refs = await _refs(page)
 
-    assert "covered-button" not in refs
-    assert "blanket" in refs or True  # the overlay itself need not be interactive
+    assert "covered-button" not in refs, "a button under an opaque overlay was offered"
     assert await _log(page) == "idle"
 
 
@@ -224,18 +232,26 @@ async def test_interact_inside_a_cross_origin_iframe(page, toolbench) -> None:
     await page.navigate(toolbench.index)
     refs = await _refs(page)
 
-    frame_fields = [k for k in refs if k == "frame-field"]
-    assert frame_fields, "cross-origin frame content was not captured"
-
-    # Both frames expose `frame-field`; the cross-origin one is the second.
+    # Both frames expose `frame-field`; the second belongs to the cross-origin
+    # one, whose document never appears in the host's DOM at all.
     fields = await _all_refs(page, "frame-field")
     assert len(fields) == 2, f"expected both frames' fields, got {len(fields)}"
 
     await page.fill(fields[1], "across origins")
-    # Read back through a snapshot rather than JS: the host document cannot
-    # reach into a cross-origin contentDocument at all, which is the point.
-    after = await page.snapshot()
-    assert after is not None
+
+    # Read back through the capture, not JS: the host document cannot reach into
+    # a cross-origin contentDocument, which is exactly why this needed the
+    # per-target capture in the first place.
+    from crawlpilot.spi.dom_tree import iter_elements
+
+    tree = await page.snapshot()
+    assert tree is not None
+    typed = [
+        n
+        for n in iter_elements(tree)
+        if n.attributes.get("id") == "frame-field" and n.session_id is not None
+    ]
+    assert typed, "no node carried a cross-origin frame session"
 
 
 # --------------------------------------------------------------------- select
@@ -334,6 +350,7 @@ async def test_send_keys_delivers_a_shortcut(page, toolbench) -> None:
 
 async def test_find_text_reaches_content_below_the_fold(page, toolbench) -> None:
     await page.navigate(toolbench.index)
+    await page.execute_js("window.scrollTo(0, 0)")
     assert await page.execute_js("window.scrollY") == 0
 
     await page.find_text("a needle buried")

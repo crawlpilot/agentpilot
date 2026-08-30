@@ -282,10 +282,18 @@ class BrowserSession:
         result = await self.execute([spi_actions.ScreenshotAction(full_page=full_page)])
         return result.screenshots[0] if result.screenshots else b""
 
-    async def snapshot(self) -> EnhancedDOMTreeNode | None:
-        """The fused DOM tree -- what an agent reads to find element refs."""
+    async def snapshot(self, *, settle: bool = True) -> EnhancedDOMTreeNode | None:
+        """The fused DOM tree -- what an agent reads to find element refs.
 
-        result = await self.execute([spi_actions.SnapshotAction()])
+        Settles first by default. A snapshot is an act of perception, and
+        capturing a page whose frames and scripts have not finished is how you
+        get a tree that is missing the element you were about to act on --
+        cross-origin iframes in particular attach late, so an unsettled capture
+        routinely misses them entirely. `settle=False` for the cheap read when
+        you know the page is already still.
+        """
+
+        result = await self.execute([spi_actions.SnapshotAction(settle=settle)])
         return result.fused_trees[0] if result.fused_trees else None
 
 

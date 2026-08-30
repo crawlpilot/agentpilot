@@ -1459,7 +1459,13 @@ class PatchrightDriver:
         # An element's own scroll distance is measured in *its* height, not the
         # viewport's: one "page" of a short dropdown list is a short scroll.
         dx, dy = _scroll_delta(action.direction, action.pages, box["width"], box["height"])
-        await cdp_element.wheel_at(
+        # A gesture rather than a wheel event here too. `mouseWheel` is
+        # delivered to the compositor and frequently lands with no effect at all
+        # (crbug.com/444929150); the gesture runs the real scroll and does not
+        # return until it has happened. It scrolls whatever container is under
+        # the point, so aiming at the element's centre still targets the
+        # element's own overflow rather than the page.
+        await cdp_element.scroll_gesture(
             cdp, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, dx, dy
         )
 
