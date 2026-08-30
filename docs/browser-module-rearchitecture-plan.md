@@ -1036,7 +1036,58 @@ Implement `Browser`/`BrowserSession` over the existing `interactive.py` and
 empty extension registry — so a caller can pass nothing. Add an `examples/`
 script that crawls three pages to markdown with no gateway involved.
 
-**Accept:** the example runs; `driver_contract/` gains a facade-level test using only the public API.
+**Status: done.** `agentpilot/api.py` — `Browser` and `BrowserSession`.
+
+```python
+async with Browser() as browser:            # nothing to configure
+    async with browser.session() as page:
+        await page.navigate("https://example.com")
+        print(await page.markdown())
+```
+
+Every constructor argument is optional and defaults to something
+inert-but-working: real Chrome driver, in-process `Registry`, `NullPrototypes`,
+no proxies, empty `ExtensionRegistry`. The platform passes its Redis-backed
+registry, tenant-aware proxy provider and extension registry and gets the same
+object.
+
+Judgement calls:
+
+- **The driver is built lazily, on first use.** Constructing a `Browser` must
+  not import `agentpilot.driver`, which pulls Patchright — the Chrome-free
+  gateway image deliberately does not install it. A test asserts `_driver is
+  None` after construction.
+- **`profiles_root` defaults to a temp dir the `Browser` owns and removes on
+  close.** A one-shot crawler should not have to think about it, and a library
+  should not silently litter the home directory. A caller wanting warm
+  identities across runs supplies one, and then owns it — also tested.
+- **Convenience methods are sugar over `execute()`, never a second path.** Two
+  tests enforce it: one asserts a three-action batch reaches the driver in
+  **one** call, another that a single-action convenience call does too.
+- **`markdown()` returns the string.** Reaching content previously meant
+  indexing `ActionResult.extracts` by position (D6).
+
+`examples/crawl_to_markdown.py` runs against the live internet, exercising both
+shapes — one-shot `scrape()` over the HTTP fast path and an interactive
+`session()` in real Chrome.
+
+Three things the tests caught that I had guessed wrong, all worth recording
+because they are the kind of thing a facade gets wrong silently:
+
+- **Action field names.** I had written `ClickAction(selector=…)`,
+  `ScrollAction(dx=, dy=)`, `SelectOptionAction(value=)`. The real fields are
+  `ref`, `direction`, `values`. Verified by introspecting the dataclasses rather
+  than assuming.
+- **Refs are `e<backendNodeId>` tokens from a snapshot, not CSS selectors** —
+  the same contract the agent loop uses. The contract test now takes a snapshot
+  and resolves elements by accessibility role.
+- **A named identity opens the driver *once*.** My first test asserted two
+  opens; the second `session()` actually reuses the context the first released
+  to the warm IDLE pool, which is the whole reason to name an identity. The
+  assertion is now that stronger fact.
+
+**Gates:** 849 passed / 65 skipped (was 834), plus 4 new real-Chrome contract
+tests; 20 contracts kept, 0 broken; mypy 11 at baseline; ruff 11, two below.
 
 ### Phase 6 — Tool registry; delete the mirrors (D5, D6)
 

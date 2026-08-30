@@ -51,8 +51,8 @@ from agentpilot.session.interactive import (
 from agentpilot.session.registry import Registry, RegistryProtocol
 from agentpilot.spi import actions as spi_actions
 from agentpilot.spi.actions import ActionResult
-from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+from agentpilot.spi.driver import BrowserDriver
 from agentpilot.spi.scrape import Document, ScrapeOptions
 from agentpilot.tiers import Tier
 
@@ -127,7 +127,7 @@ class BrowserSession:
 
     async def select_option(self, ref: str, *values: str) -> ActionResult:
         return await self.execute(
-            [spi_actions.SelectOptionAction(ref=ref, values=tuple(values))]
+            [spi_actions.SelectOptionAction(ref=ref, values=list(values))]
         )
 
     async def hover(self, ref: str) -> ActionResult:
