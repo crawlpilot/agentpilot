@@ -25,9 +25,13 @@ class Observation:
     text: str
     """The full observation text: change block (if any) + serialized tree."""
     selector_map: DOMSelectorMap
-    """Ref (`backendNodeId`) -> node, for ref-resolution of the model's actions."""
+    """Ref (`selector_index`) -> node, for ref-resolution of the model's actions."""
     diff: DomDiff
     """The structured change report, retained for stagnation/loop detection."""
+    visible_refs: set[str]
+    """The `e<n>` refs actually present in `text`. Narrower than `selector_map`
+    when the render hit its length budget -- which is the set the loop must
+    validate against, since a ref the model never saw is one it invented."""
 
 
 def build_observation(
@@ -48,7 +52,12 @@ def build_observation(
     else:
         text = serialized.llm_text
 
-    return Observation(text=text, selector_map=serialized.selector_map, diff=diff)
+    return Observation(
+        text=text,
+        selector_map=serialized.selector_map,
+        diff=diff,
+        visible_refs={f"e{index}" for index in serialized.rendered_indices},
+    )
 
 
 def identity_fingerprint(tree: EnhancedDOMTreeNode) -> str:

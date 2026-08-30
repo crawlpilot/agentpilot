@@ -71,7 +71,6 @@ class EnhancedAXNode:
 
     role: str | None = None
     name: str | None = None
-    description: str | None = None
     properties: dict[str, str | bool] = field(default_factory=dict)
     """Flattened AX property name -> value (e.g. ``{"checked": True,
     "expanded": False}``). Only the properties the interactivity/diff logic
@@ -91,6 +90,18 @@ class EnhancedDOMTreeNode:
     node_name: str
     node_value: str = ""
     attributes: dict[str, str] = field(default_factory=dict)
+
+    selector_index: int | None = None
+    """The model-facing ref (`e<selector_index>`), minted once by
+    `assign_selector_indices` after the whole multi-target tree is merged.
+
+    Normally the node's own `backend_node_id`, so refs stay recognisable in logs
+    and traces. It has to be a separate field because `backendNodeId` is unique
+    per *renderer*, not per browser: once cross-origin iframes are captured from
+    their own targets, two unrelated elements can carry the same one, and one
+    would silently shadow the other in the ref index. Colliding nodes get a
+    synthetic index above every real id instead (browser-use's
+    `_allocate_selector_index`, `dom/serializer/serializer.py:647-656`)."""
 
     # Layout / visibility (filled from the snapshot + frame walk).
     is_visible: bool | None = None
@@ -244,5 +255,57 @@ def _sibling_position(element: EnhancedDOMTreeNode) -> int:
 
 
 # The model-facing index -> node map the serializer produces and ref-resolution
-# consumes. Index is the element's `backendNodeId` (collision-resolved).
+# consumes. Keyed by `selector_index`, assigned by `assign_selector_indices`.
 DOMSelectorMap = dict[int, EnhancedDOMTreeNode]
+
+
+def iter_elements(root: EnhancedDOMTreeNode):
+    """Every element node at or under `root`, in document order, descending
+    shadow roots and iframe content documents. Never follows `parent_node`, so
+    the walk terminates on the self-referential graph."""
+
+    stack = [root]
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if node.node_type == NodeType.ELEMENT_NODE:
+            yield node
+        children = list(node.children_and_shadow_roots)
+        if node.content_document is not None:
+            children.append(node.content_document)
+        stack.extend(reversed(children))
+
+
+def assign_selector_indices(root: EnhancedDOMTreeNode) -> None:
+    """Stamp a collision-free `selector_index` on every element in the merged tree.
+
+    Run once, after every target's subtree has been stitched in -- the whole
+    point is to see all the `backendNodeId`s together, and a per-target pass
+    could not. A node keeps its own `backend_node_id` where that is unambiguous,
+    so a ref still reads back to a real CDP id; a duplicate (two renderers
+    numbering their nodes independently) gets a synthetic index above every real
+    id, which cannot then collide with one.
+
+    Ported from browser-use's `_allocate_selector_index`
+    (`dom/serializer/serializer.py:647-656`). crawlpilot previously used the raw
+    `backend_node_id` and described it as "collision-resolved" without resolving
+    anything -- correct while only one target was ever captured, and a
+    silently-wrong ref the moment cross-origin iframes were.
+    """
+
+    elements = list(iter_elements(root))
+    reserved = {node.backend_node_id for node in elements}
+    next_synthetic = max(reserved, default=0) + 1
+
+    taken: set[int] = set()
+    for node in elements:
+        index = node.backend_node_id
+        if index in taken:
+            while next_synthetic in reserved or next_synthetic in taken:
+                next_synthetic += 1
+            index = next_synthetic
+        taken.add(index)
+        node.selector_index = index

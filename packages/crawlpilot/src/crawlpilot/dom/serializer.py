@@ -64,6 +64,10 @@ class SimplifiedNode:
 class SerializedDOM:
     selector_map: DOMSelectorMap
     llm_text: str
+    rendered_indices: set[int] = field(default_factory=set)
+    """The subset of `selector_map` the model can actually see -- equal to its
+    keys unless `max_length` truncated the render. Callers pre-validating a
+    model's chosen ref should check this, not `selector_map`."""
 
 
 def _bounds(node: EnhancedDOMTreeNode) -> BoundingBox | None:
@@ -214,13 +218,32 @@ def _apply_containment(root: SimplifiedNode) -> None:
 
 
 def _assign_indices(root: SimplifiedNode, new_backend_ids: set[int]) -> DOMSelectorMap:
+    """Copy the capture's `selector_index` onto each surviving interactive node
+    and build the `selector_map`.
+
+    The index is *read*, never computed here. It is minted once by
+    `assign_selector_indices` when the fused tree is captured, so the driver's
+    ref lookup and this map cannot disagree -- previously both independently used
+    the raw `backend_node_id`, which agreed only for as long as a single target
+    was ever captured.
+
+    A tree assembled by hand rather than by a capture (tests, a replayed
+    fixture) has no index; it falls back to `backend_node_id`, which is what
+    `assign_selector_indices` would have chosen for it anyway absent a collision.
+    """
+
     selector_map: DOMSelectorMap = {}
     for node in _iter_simplified(root):
         if node.is_interactive and not node.ignored_by_paint_order and not node.excluded_by_parent:
-            index = node.original.backend_node_id
+            original = node.original
+            index = (
+                original.selector_index
+                if original.selector_index is not None
+                else original.backend_node_id
+            )
             node.selector_index = index
-            node.is_new = index in new_backend_ids
-            selector_map[index] = node.original
+            node.is_new = original.backend_node_id in new_backend_ids
+            selector_map[index] = original
     return selector_map
 
 
@@ -241,7 +264,11 @@ def serialize(
     _apply_paint_order(simplified)
     _apply_containment(simplified)
     selector_map = _assign_indices(simplified, new_backend_ids or set())
-    text = render.render_tree(
+    rendered = render.render_tree(
         simplified, include_attributes=include_attributes, max_length=max_length
     )
-    return SerializedDOM(selector_map=selector_map, llm_text=text or "(empty page)")
+    return SerializedDOM(
+        selector_map=selector_map,
+        llm_text=rendered.text or "(empty page)",
+        rendered_indices=rendered.rendered_indices,
+    )

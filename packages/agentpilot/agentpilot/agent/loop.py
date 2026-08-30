@@ -167,9 +167,11 @@ async def run_agent_loop(
             # elements new since `previous_tree`.
             observation = build_observation(tree, previous_tree, max_length=max_observation_chars)
             snapshot_text = observation.text
-            # `selector_map` is keyed by int `backend_node_id`; the model
-            # refers to elements as `e<backend_node_id>`.
-            valid_refs = {f"e{backend_id}" for backend_id in observation.selector_map}
+            # The refs the model was *shown*, not every ref on the page: a long
+            # page is truncated to `max_observation_chars`, and validating
+            # against the full `selector_map` waved through refs the model could
+            # only have guessed at.
+            valid_refs = observation.visible_refs
             page_fingerprint = identity_fingerprint(tree)
         else:
             snapshot_text, page_fingerprint = "(no snapshot)", None

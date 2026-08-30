@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from crawlpilot.driver.dom_fusion import (
@@ -31,7 +32,13 @@ from crawlpilot.driver.dom_fusion import (
     LayoutInfo,
     build_snapshot_lookup,
 )
-from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import (
+    EnhancedAXNode,
+    EnhancedDOMTreeNode,
+    NodeType,
+    assign_selector_indices,
+    iter_elements,
+)
 from crawlpilot.spi.geometry import BoundingBox
 
 if TYPE_CHECKING:
@@ -62,6 +69,12 @@ _VIEWPORT_THRESHOLD_PX = 1000
 """Elements within this many px of a containing frame's viewport count as
 visible (browser-use `viewport_threshold`, Browser4 `VIEWPORT_VISIBILITY_MARGIN_PX`)."""
 
+_MAX_FRAME_DEPTH = 3
+"""How deep cross-origin frame capture recurses. Frames nest arbitrarily -- ad
+chains routinely run several levels -- and each level costs four CDP round trips
+per frame on the agent's hot path, while content that far down is almost never
+what the task is about."""
+
 
 def build_ax_lookup(ax_tree: dict[str, Any]) -> dict[int, EnhancedAXNode]:
     """`backendDOMNodeId -> EnhancedAXNode` from an `Accessibility.getFullAXTree`
@@ -84,7 +97,6 @@ def build_ax_lookup(ax_tree: dict[str, Any]) -> dict[int, EnhancedAXNode]:
         lookup[backend_id] = EnhancedAXNode(
             role=(ax_node.get("role") or {}).get("value"),
             name=(ax_node.get("name") or {}).get("value"),
-            description=(ax_node.get("description") or {}).get("value"),
             properties=properties,
         )
     return lookup
@@ -107,6 +119,8 @@ def build_enhanced_tree(
     session_id: str | None = None,
     js_click_backend_ids: set[int] | None = None,
     viewport_threshold: int | None = _VIEWPORT_THRESHOLD_PX,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
 ) -> EnhancedDOMTreeNode:
     """Recursively fuse a `DOM.getDocument` document into an
     `EnhancedDOMTreeNode` graph. Pure and synchronous.
@@ -114,7 +128,15 @@ def build_enhanced_tree(
     Descends `contentDocument` (same-origin iframes) and `shadowRoots`,
     accumulates per-frame coordinate offsets so `absolute_position` is in
     document space, and marks each node's `is_visible` from CSS + the frame
-    viewport stack."""
+    viewport stack.
+
+    `offset_x`/`offset_y` seed that accumulation. They are zero for the page's
+    own document and the hosting `<iframe>`'s page-space position for a
+    cross-origin frame captured from its own target: that document reports
+    coordinates relative to itself, so without the seed its `absolute_position`s
+    would claim the top-left of the page and the serializer's paint-order and
+    containment stages -- which compare bounds across frames -- would draw the
+    wrong conclusions."""
 
     js_ids = js_click_backend_ids or set()
     memo: dict[int, EnhancedDOMTreeNode] = {}
@@ -209,7 +231,7 @@ def build_enhanced_tree(
         return enhanced
 
     root = dom_document["root"] if "root" in dom_document else dom_document
-    return construct(root, [], 0.0, 0.0)
+    return construct(root, [], offset_x, offset_y)
 
 
 def _is_visible(
@@ -287,8 +309,14 @@ async def _detect_js_click_listeners(cdp: CDPSession) -> set[int]:
     _MAX_ELEMENTS = 100
 
     try:
-        doc = await cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
-        # Resolve the document to a JS object so getEventListeners can walk it.
+        # Resolve the elements to a JS object so getEventListeners can walk them.
+        # This used to be preceded by a second `DOM.getDocument{depth:-1,
+        # pierce:true}` whose result was discarded (`_ = doc`), kept only to
+        # "validate the domain is enabled" -- a full re-serialization of the
+        # whole document, on the session `capture_fused_tree` had just fetched
+        # one from, on every non-stealth snapshot. The DOM domain is already
+        # enabled by that fetch; the probe below is what actually needs Runtime,
+        # and it reports its own failure.
         evaluated = await cdp.send(
             "Runtime.evaluate",
             {
@@ -330,20 +358,25 @@ async def _detect_js_click_listeners(cdp: CDPSession) -> set[int]:
                 if backend is not None:
                     backend_ids.add(backend)
                     count += 1
-    _ = doc  # doc fetch validates the domain is enabled; ids come via describeNode
     return backend_ids
 
 
-async def capture_fused_tree(
+async def capture_one_target(
     cdp: CDPSession,
     *,
     target_id: str | None = None,
     session_id: str | None = None,
     no_runtime: bool = False,
     viewport_threshold: int | None = _VIEWPORT_THRESHOLD_PX,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
 ) -> EnhancedDOMTreeNode:
-    """Fire the three tree fetches in parallel on one reused CDP session and
-    fuse them. `no_runtime=True` skips `getEventListeners` (stealth mode)."""
+    """Fire the three tree fetches in parallel on one CDP session and fuse them
+    into that target's subtree. `no_runtime=True` skips `getEventListeners`
+    (stealth mode).
+
+    One *target*, not one page: a cross-origin iframe is its own renderer with
+    its own session, and `capture_fused_tree` calls this once per target."""
 
     dom_task = cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
     snapshot_task = cdp.send(
@@ -381,4 +414,135 @@ async def capture_fused_tree(
         session_id=session_id,
         js_click_backend_ids=js_ids,
         viewport_threshold=viewport_threshold,
+        offset_x=offset_x,
+        offset_y=offset_y,
     )
+
+
+def cross_origin_frame_hosts(root: EnhancedDOMTreeNode) -> list[EnhancedDOMTreeNode]:
+    """The `<iframe>`/`<frame>` elements in `root` whose document this capture
+    did *not* reach.
+
+    `DOM.getDocument{pierce:true}` inlines a same-origin frame's document as
+    `contentDocument`. A cross-origin frame lives in another renderer, so the
+    element comes back carrying only its `frameId` and no document at all --
+    which is exactly the signal that its content needs capturing from its own
+    target. Everything inside such a frame was previously invisible to the agent:
+    consent banners, payment fields, embedded widgets.
+    """
+
+    return [
+        node
+        for node in iter_elements(root)
+        if node.tag_name in ("iframe", "frame")
+        and node.content_document is None
+        and node.frame_id is not None
+    ]
+
+
+async def capture_fused_tree(
+    cdp: CDPSession,
+    *,
+    target_id: str | None = None,
+    session_id: str | None = None,
+    no_runtime: bool = False,
+    viewport_threshold: int | None = _VIEWPORT_THRESHOLD_PX,
+    frame_sessions: Mapping[str, CDPSession] | None = None,
+) -> EnhancedDOMTreeNode:
+    """The page's full fused tree, including cross-origin iframe content.
+
+    Captures the page's own target, then each cross-origin frame from the
+    session in `frame_sessions` (keyed by CDP frame id), stitching every result
+    in as the hosting `<iframe>`'s `content_document` so the rest of the pipeline
+    -- serializer, diff, ref index -- sees one tree and needs no frame awareness
+    of its own.
+
+    Each frame's subtree carries its own `session_id`, which is what lets the
+    driver route a later `DOM.getBoxModel`/`Input.dispatchMouseEvent` to the
+    renderer that owns the node (browser-use's `cdp_client_for_node`,
+    `browser/session.py:3968-4024`). Coordinates come from the frame's own
+    session, so they need the hosting iframe's page-space position as an offset.
+
+    `frame_sessions=None` captures the page target alone -- the previous
+    behaviour, and the fallback when cross-origin capture is disabled.
+    """
+
+    root = await capture_one_target(
+        cdp,
+        target_id=target_id,
+        session_id=session_id,
+        no_runtime=no_runtime,
+        viewport_threshold=viewport_threshold,
+    )
+
+    if frame_sessions:
+        await _attach_cross_origin_frames(
+            root,
+            frame_sessions,
+            no_runtime=no_runtime,
+            viewport_threshold=viewport_threshold,
+        )
+
+    assign_selector_indices(root)
+    return root
+
+
+async def _attach_cross_origin_frames(
+    root: EnhancedDOMTreeNode,
+    frame_sessions: Mapping[str, CDPSession],
+    *,
+    no_runtime: bool,
+    viewport_threshold: int | None,
+    depth: int = 0,
+) -> None:
+    """Capture each cross-origin frame under `root` and hang it off its host.
+
+    Recurses so a frame nested inside a frame is reached too, bounded by
+    `_MAX_FRAME_DEPTH` -- a page can nest frames arbitrarily (ad chains do), and
+    each level costs four CDP round trips.
+
+    Best-effort per frame: a frame that fails to capture (navigating away
+    mid-snapshot, a detached session) leaves its host element in the tree with no
+    content, exactly as before. One uncooperative advertisement must not fail the
+    whole page's perception.
+    """
+
+    if depth >= _MAX_FRAME_DEPTH:
+        return
+
+    hosts = [
+        host for host in cross_origin_frame_hosts(root) if host.frame_id in frame_sessions
+    ]
+    if not hosts:
+        return
+
+    async def capture(host: EnhancedDOMTreeNode) -> EnhancedDOMTreeNode | None:
+        assert host.frame_id is not None
+        position = host.absolute_position
+        try:
+            return await capture_one_target(
+                frame_sessions[host.frame_id],
+                target_id=host.frame_id,
+                session_id=host.frame_id,
+                no_runtime=no_runtime,
+                viewport_threshold=viewport_threshold,
+                offset_x=position.x if position else 0.0,
+                offset_y=position.y if position else 0.0,
+            )
+        except Exception:
+            return None
+
+    subtrees = await asyncio.gather(*(capture(host) for host in hosts))
+
+    for host, subtree in zip(hosts, subtrees, strict=True):
+        if subtree is None:
+            continue
+        subtree.parent_node = host
+        host.content_document = subtree
+        await _attach_cross_origin_frames(
+            subtree,
+            frame_sessions,
+            no_runtime=no_runtime,
+            viewport_threshold=viewport_threshold,
+            depth=depth + 1,
+        )
