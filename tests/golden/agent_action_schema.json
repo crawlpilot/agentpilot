@@ -1,0 +1,312 @@
+{
+  "properties": {
+    "action": {
+      "items": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "navigate",
+                "title": "Type",
+                "type": "string"
+              },
+              "url": {
+                "title": "Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "NavigateActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "go_back",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GoBackActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
+                "title": "Ref",
+                "type": "string"
+              },
+              "type": {
+                "const": "click",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ref"
+            ],
+            "title": "ClickActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
+                "title": "Ref",
+                "type": "string"
+              },
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "type": {
+                "const": "fill",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ref",
+              "text"
+            ],
+            "title": "FillActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
+                "title": "Ref",
+                "type": "string"
+              },
+              "type": {
+                "const": "select_option",
+                "title": "Type",
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Values",
+                "type": "array"
+              }
+            },
+            "required": [
+              "type",
+              "ref"
+            ],
+            "title": "SelectOptionActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
+                "title": "Ref",
+                "type": "string"
+              },
+              "type": {
+                "const": "hover",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ref"
+            ],
+            "title": "HoverActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "title": "Key",
+                "type": "string"
+              },
+              "type": {
+                "const": "press",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "key"
+            ],
+            "title": "PressActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "enum": [
+                  "up",
+                  "down",
+                  "left",
+                  "right"
+                ],
+                "title": "Direction",
+                "type": "string"
+              },
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
+                "title": "Ref"
+              },
+              "type": {
+                "const": "scroll",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "direction"
+            ],
+            "title": "ScrollActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ms": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Ms"
+              },
+              "type": {
+                "const": "wait",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "WaitActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "format": {
+                "default": "markdown",
+                "enum": [
+                  "markdown",
+                  "text"
+                ],
+                "title": "Format",
+                "type": "string"
+              },
+              "type": {
+                "const": "extract",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ExtractActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "screenshot",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ScreenshotActionIn",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "extracted_data": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "result": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              },
+              "type": {
+                "const": "done"
+              }
+            },
+            "required": [
+              "type",
+              "success",
+              "result"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "evaluation_previous_goal": {
+      "type": "string"
+    },
+    "memory": {
+      "type": "string"
+    },
+    "next_goal": {
+      "type": "string"
+    },
+    "thinking": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "evaluation_previous_goal",
+    "memory",
+    "next_goal",
+    "action"
+  ],
+  "type": "object"
+}

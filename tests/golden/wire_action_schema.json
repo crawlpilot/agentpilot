@@ -1,0 +1,527 @@
+{
+  "$defs": {
+    "ClickActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "default": false,
+          "title": "All",
+          "type": "boolean"
+        },
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "click",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "ClickActionIn",
+      "type": "object"
+    },
+    "CloseTabActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "close_tab",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "page_id"
+      ],
+      "title": "CloseTabActionIn",
+      "type": "object"
+    },
+    "ExecuteJsActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "script": {
+          "title": "Script",
+          "type": "string"
+        },
+        "type": {
+          "const": "execute_js",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "script"
+      ],
+      "title": "ExecuteJsActionIn",
+      "type": "object"
+    },
+    "ExtractActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Exclude Tags",
+          "type": "array"
+        },
+        "format": {
+          "default": "markdown",
+          "enum": [
+            "markdown",
+            "text",
+            "html",
+            "structured_data"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "include_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Include Tags",
+          "type": "array"
+        },
+        "main_content": {
+          "default": true,
+          "title": "Main Content",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "extract",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ExtractActionIn",
+      "type": "object"
+    },
+    "FillActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "fill",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref",
+        "text"
+      ],
+      "title": "FillActionIn",
+      "type": "object"
+    },
+    "GoBackActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "go_back",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GoBackActionIn",
+      "type": "object"
+    },
+    "HoverActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "hover",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "HoverActionIn",
+      "type": "object"
+    },
+    "ListTabsActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "list_tabs",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ListTabsActionIn",
+      "type": "object"
+    },
+    "NavigateActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 30000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "navigate",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "title": "NavigateActionIn",
+      "type": "object"
+    },
+    "NewTabActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "new_tab",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "NewTabActionIn",
+      "type": "object"
+    },
+    "PressActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "type": {
+          "const": "press",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "key"
+      ],
+      "title": "PressActionIn",
+      "type": "object"
+    },
+    "ScreenshotActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "full_page": {
+          "default": false,
+          "title": "Full Page",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "screenshot",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ScreenshotActionIn",
+      "type": "object"
+    },
+    "ScrollActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "type": {
+          "const": "scroll",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "direction"
+      ],
+      "title": "ScrollActionIn",
+      "type": "object"
+    },
+    "SelectOptionActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "select_option",
+          "title": "Type",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "SelectOptionActionIn",
+      "type": "object"
+    },
+    "SnapshotActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "max_nodes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Nodes"
+        },
+        "roles": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Roles"
+        },
+        "type": {
+          "const": "snapshot",
+          "title": "Type",
+          "type": "string"
+        },
+        "viewport_only": {
+          "default": false,
+          "title": "Viewport Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "SnapshotActionIn",
+      "type": "object"
+    },
+    "SwitchTabActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "type": {
+          "const": "switch_tab",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "page_id"
+      ],
+      "title": "SwitchTabActionIn",
+      "type": "object"
+    },
+    "WaitActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ms"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "type": {
+          "const": "wait",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "WaitActionIn",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "click": "#/$defs/ClickActionIn",
+      "close_tab": "#/$defs/CloseTabActionIn",
+      "execute_js": "#/$defs/ExecuteJsActionIn",
+      "extract": "#/$defs/ExtractActionIn",
+      "fill": "#/$defs/FillActionIn",
+      "go_back": "#/$defs/GoBackActionIn",
+      "hover": "#/$defs/HoverActionIn",
+      "list_tabs": "#/$defs/ListTabsActionIn",
+      "navigate": "#/$defs/NavigateActionIn",
+      "new_tab": "#/$defs/NewTabActionIn",
+      "press": "#/$defs/PressActionIn",
+      "screenshot": "#/$defs/ScreenshotActionIn",
+      "scroll": "#/$defs/ScrollActionIn",
+      "select_option": "#/$defs/SelectOptionActionIn",
+      "snapshot": "#/$defs/SnapshotActionIn",
+      "switch_tab": "#/$defs/SwitchTabActionIn",
+      "wait": "#/$defs/WaitActionIn"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/NavigateActionIn"
+    },
+    {
+      "$ref": "#/$defs/GoBackActionIn"
+    },
+    {
+      "$ref": "#/$defs/SnapshotActionIn"
+    },
+    {
+      "$ref": "#/$defs/ExtractActionIn"
+    },
+    {
+      "$ref": "#/$defs/ScreenshotActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitActionIn"
+    },
+    {
+      "$ref": "#/$defs/ExecuteJsActionIn"
+    },
+    {
+      "$ref": "#/$defs/ClickActionIn"
+    },
+    {
+      "$ref": "#/$defs/FillActionIn"
+    },
+    {
+      "$ref": "#/$defs/SelectOptionActionIn"
+    },
+    {
+      "$ref": "#/$defs/HoverActionIn"
+    },
+    {
+      "$ref": "#/$defs/PressActionIn"
+    },
+    {
+      "$ref": "#/$defs/ScrollActionIn"
+    },
+    {
+      "$ref": "#/$defs/NewTabActionIn"
+    },
+    {
+      "$ref": "#/$defs/CloseTabActionIn"
+    },
+    {
+      "$ref": "#/$defs/SwitchTabActionIn"
+    },
+    {
+      "$ref": "#/$defs/ListTabsActionIn"
+    }
+  ]
+}

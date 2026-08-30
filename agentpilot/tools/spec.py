@@ -77,6 +77,19 @@ class ToolSpec:
     the same thing; changing either would be a visible API change, so the
     difference is declared rather than papered over."""
 
+    agent_overrides: dict[str, tuple[Any, Any]] = field(default_factory=dict)
+    """Where the *agent* surface deliberately narrows the dataclass. `extract`
+    is the case: the driver and the HTTP API accept `html` and
+    `structured_data`, but an agent reading a page wants markdown or text --
+    raw HTML burns context for no gain, and JSON-LD is not what the loop asks
+    for. Narrowing the enum is what stops a model choosing them at all."""
+
+    validators: dict[str, Any] = field(default_factory=dict)
+    """Pydantic validators applied to the agent projection, by name. `navigate`
+    carries the http/https check: without it a model can steer the browser to
+    `file://` or `javascript:`, so it is a security guard rather than
+    tidiness."""
+
     safety: Safety = "safe"
 
     # ------------------------------------------------------------ projections
@@ -106,7 +119,14 @@ class ToolSpec:
 
         if self.agent_fields is None:
             raise ValueError(f"{self.name!r} is not exposed to agents")
-        return _build_model(self, self.agent_fields, suffix="AgentActionIn")
+        return _build_model(
+            self,
+            self.agent_fields,
+            suffix="ActionIn",
+            overrides=self.agent_overrides,
+            with_docstring=False,
+            validators=self.validators,
+        )
 
     def json_schema(self) -> dict[str, Any]:
         """Plain JSON Schema for the agent projection -- the vendor-neutral
@@ -159,6 +179,8 @@ def _build_model(
     suffix: str,
     overrides: dict[str, tuple[Any, Any]] | None = None,
     with_descriptions: bool = True,
+    with_docstring: bool = True,
+    validators: dict[str, Any] | None = None,
 ) -> type[BaseModel]:
     available = {**_dataclass_fields(spec.action_cls), **(overrides or {})}
     unknown = set(names) - available.keys()
@@ -179,9 +201,10 @@ def _build_model(
     model = create_model(
         _class_name(spec.name, suffix),
         __config__=ConfigDict(extra="forbid"),
+        __validators__=validators or None,
         **fields,
     )
-    if with_descriptions:
+    if with_descriptions and with_docstring:
         model.__doc__ = spec.description
     return model
 

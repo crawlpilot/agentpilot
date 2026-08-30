@@ -10,12 +10,26 @@ the prompt text an agent sees is unchanged by the consolidation.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field as PydanticField
+from pydantic import field_validator
 
 from agentpilot.spi import actions as sa
 from agentpilot.tools.spec import REF_DESCRIPTION, ToolSpec
 
 _REF = {"ref": REF_DESCRIPTION}
+
+
+@field_validator("url")
+@classmethod
+def _http_or_https_only(cls: object, v: str) -> str:
+    """A model must not be able to steer the browser to `file://`,
+    `javascript:` or a `data:` payload -- a security guard, not tidiness."""
+
+    if not v.startswith(("http://", "https://")):
+        raise ValueError("navigate url must be an absolute http:// or https:// URL")
+    return v
 
 CATALOG: tuple[ToolSpec, ...] = (
     ToolSpec(
@@ -24,9 +38,7 @@ CATALOG: tuple[ToolSpec, ...] = (
         action_cls=sa.NavigateAction,
         wire_fields=("url", "timeout_ms"),
         agent_fields=("url",),
-        field_descriptions={
-            "url": "Absolute http:// or https:// URL to open.",
-        },
+        validators={"_http_or_https_only": _http_or_https_only},
     ),
     ToolSpec(
         name="go_back",
@@ -53,6 +65,7 @@ CATALOG: tuple[ToolSpec, ...] = (
             "include_tags": (list[str], PydanticField(default_factory=list)),
             "exclude_tags": (list[str], PydanticField(default_factory=list)),
         },
+        agent_overrides={"format": (Literal["markdown", "text"], "markdown")},
     ),
     ToolSpec(
         name="screenshot",
