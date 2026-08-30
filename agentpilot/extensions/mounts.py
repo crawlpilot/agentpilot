@@ -13,6 +13,7 @@ on one hook, and control its own ordering with `add_first` / `add_last`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
@@ -104,3 +105,19 @@ class BlockMount(Protocol):
     manifest: ExtensionManifest
 
     def configure_blocks(self, hooks: BlockHooks) -> None: ...
+
+
+@runtime_checkable
+class ToolMount(Protocol):
+    """Contribute agent tools.
+
+    Declared in Phase 4 and wired in Phase 6, once there was a registry to wire
+    it into. An extension's tools land in its own namespace, so a third-party
+    package can ship a `walmart.solve_wall` without colliding with a built-in
+    verb -- and a collision *within* a namespace raises rather than silently
+    overriding.
+    """
+
+    manifest: ExtensionManifest
+
+    def tools(self) -> Sequence[Any]: ...

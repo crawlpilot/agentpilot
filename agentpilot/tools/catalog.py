@@ -22,8 +22,7 @@ _REF = {"ref": REF_DESCRIPTION}
 
 
 @field_validator("url")
-@classmethod
-def _http_or_https_only(cls: object, v: str) -> str:
+def _http_or_https_only(cls: object, v: str) -> str:  # noqa: N805
     """A model must not be able to steer the browser to `file://`,
     `javascript:` or a `data:` payload -- a security guard, not tidiness."""
 

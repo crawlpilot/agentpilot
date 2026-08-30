@@ -164,8 +164,8 @@ def _dataclass_fields(action_cls: type) -> dict[str, tuple[Any, Any]]:
     for f in dataclasses.fields(action_cls):
         if f.default is not dataclasses.MISSING:
             default: Any = f.default
-        elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
-            default = Field(default_factory=f.default_factory)  # type: ignore[misc]
+        elif f.default_factory is not dataclasses.MISSING:
+            default = Field(default_factory=f.default_factory)
         else:
             default = ...  # required
         out[f.name] = (hints[f.name], default)
@@ -188,7 +188,7 @@ def _build_model(
         raise ValueError(f"{spec.name!r} exposes unknown field(s) {sorted(unknown)}")
 
     fields: dict[str, Any] = {
-        "type": (Literal[spec.name], ...),  # type: ignore[valid-type]
+        "type": (Literal[spec.name], ...),
     }
     for n in names:
         annotation, default = available[n]
@@ -198,7 +198,7 @@ def _build_model(
         else:
             fields[n] = (annotation, default)
 
-    model = create_model(
+    model: type[BaseModel] = create_model(
         _class_name(spec.name, suffix),
         __config__=ConfigDict(extra="forbid"),
         __validators__=validators or None,

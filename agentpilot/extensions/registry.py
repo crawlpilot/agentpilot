@@ -31,7 +31,9 @@ from agentpilot.extensions.mounts import (
     ContentHooks,
     ContentMount,
     Extension,
+    ToolMount,
 )
+from agentpilot.tools import browser_tools
 
 log = structlog.get_logger(__name__)
 
@@ -49,6 +51,10 @@ class ExtensionRegistry:
         self.browse = BrowseHooks()
         self.content = ContentHooks()
         self.blocks = BlockHooks()
+        self.tools = browser_tools()
+        """Built-in browser verbs, plus whatever `ToolMount` extensions add in
+        their own namespace."""
+
         self._loaded: list[ExtensionManifest] = []
         self._disabled = set(disabled)
         self._host_api_version = host_api_version
@@ -94,6 +100,19 @@ class ExtensionRegistry:
 
     def _wire(self, extension: Extension, manifest: ExtensionManifest) -> list[str]:
         wired: list[str] = []
+        if isinstance(extension, ToolMount):
+            try:
+                for spec in extension.tools():
+                    self.tools.register(spec, namespace=manifest.name)
+                wired.append("tools")
+            except Exception as exc:  # noqa: BLE001 -- one bad mount, not a dead registry
+                log.warning(
+                    "extension.mount_failed",
+                    extension=manifest.name,
+                    mount="tools",
+                    error=str(exc),
+                )
+
         for mount, hooks, attr in (
             (BrowseMount, self.browse, "configure_browse"),
             (ContentMount, self.content, "configure_content"),

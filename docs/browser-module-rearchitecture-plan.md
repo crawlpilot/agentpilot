@@ -1097,7 +1097,58 @@ wire `ToolMount`. Then **delete** `agent/actions.py`'s
 hand-written union and generate `gateway/schemas.py::ActionIn` and
 `action_conversion.py` from the registry.
 
-**Accept:** adding a verb requires editing exactly one file; `browserpilot` imports no LLM SDK (assert over its dependency closure); the generated JSON Schema per tool matches a golden snapshot, and adapter output is tested as a pure transform of it; a duplicate tool namespace raises; the agent loop's existing tests pass unmodified against the generated models.
+**Status: done.** `agentpilot/tools/` is the single declaration; all three
+mirrors are generated from it.
+
+| File | Was | Now |
+|---|---|---|
+| `gateway/schemas.py` action block | 130 lines, 17 hand-written models + union | **0** — generated |
+| `gateway/action_conversion.py` | 67 lines, a 17-entry converter table | **30** — `spec.from_model()` |
+| `agent/actions.py` | 292 lines, 11 more hand-written models + an 11-branch `isinstance` ladder | **173** — generated |
+| `tools/catalog.py` | — | the one file you edit to add a verb |
+
+**Both schemas are byte-identical to the hand-written ones they replace.** The
+goldens were captured *before* deletion and live in `tests/golden/`; a refactor
+that silently changed the published OpenAPI, or the schema an LLM is prompted
+with, would be a behaviour change wearing a refactor's clothes.
+
+Getting to byte-identical surfaced four things the mirrors encoded that a naive
+projection would have destroyed — each now declared rather than lost:
+
+- **`default_factory` must stay a factory.** Resolving it to a literal emitted
+  `"default": []` where the hand-written model emitted no `default` at all.
+- **`extract`'s tag filters differ by surface** — `tuple | None = None` on the
+  dataclass, `list[str]` defaulting to empty on the wire. Declared in
+  `wire_overrides`.
+- **`navigate` carries an http/https validator** — without it a model can steer
+  the browser to `file://` or `javascript:`. A security guard, not tidiness; the
+  test that caught its loss is now a permanent one.
+- **`extract`'s agent surface is narrowed to markdown/text** while the wire
+  accepts `html`/`structured_data`. Raw HTML burns an agent's context for no
+  gain, so narrowing the enum is what stops a model choosing it.
+
+Judgement calls:
+
+- **The registry is vendor-neutral and a test enforces it.** Its unit is a name,
+  a description and plain JSON Schema; `tools/adapters.py` re-shapes that for
+  Anthropic/OpenAI/MCP with no vendor SDK imported anywhere in the package. The
+  adapter tests assert the output's properties are exactly the neutral schema's,
+  minus the discriminator a provider carries out of band as the tool name.
+- **Descriptions are per-surface.** They enrich the agent projection (where
+  `REF_DESCRIPTION` is the difference between a model copying a ref and
+  inventing a label) and are deliberately absent from the wire projection, where
+  they would change the published OpenAPI. Enriching the API docs is a real
+  improvement but a separate, deliberate change.
+- **`DEFAULT_ALLOWED_ACTIONS` keeps its explicit order** — the order a model
+  reads the schema in is a presentation choice — but its *membership* is now
+  asserted equal to the registry's `agent_exposed` subset, so a verb cannot be
+  exposed in one place and forgotten in the other.
+- **`ToolMount` is wired** (Phase 4 deferred it here). An extension's tools land
+  in its own namespace, so `walmart.solve_wall` cannot collide with a built-in;
+  a collision *within* a namespace raises rather than silently overriding.
+
+**Gates:** 867 passed / 65 skipped (was 849); 20 contracts kept, 0 broken; mypy
+11 at baseline; ruff 12, one below.
 
 ### Phase 7 — Split into two projects
 

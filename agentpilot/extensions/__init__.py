@@ -29,6 +29,7 @@ from agentpilot.extensions.mounts import (
     ContentMount,
     Extension,
     Resolution,
+    ToolMount,
 )
 from agentpilot.extensions.registry import (
     ENTRY_POINT_GROUP,
@@ -52,6 +53,7 @@ __all__ = [
     "ExtensionRegistry",
     "HookChain",
     "Resolution",
+    "ToolMount",
     "check_compatibility",
     "discover_extensions",
 ]

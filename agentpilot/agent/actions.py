@@ -31,25 +31,6 @@ DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     "extract",
     "screenshot",
 )
-"""`execute_js` and tab-management actions are excluded by default --
-arbitrary JS execution is a security-sensitive capability, and tab
-management adds complexity without a clear v1 need. Both remain reachable by
-passing a wider `allowed_actions` tuple; neither is enabled by default."""
-
-
-DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
-    "navigate",
-    "go_back",
-    "click",
-    "fill",
-    "select_option",
-    "hover",
-    "press",
-    "scroll",
-    "wait",
-    "extract",
-    "screenshot",
-)
 """Order is a presentation choice -- most-used first, since it is the order a
 model reads the schema in -- so it stays written out rather than derived from
 catalog order. *Membership* is not: `test_tools_registry` asserts this set equals
