@@ -7,11 +7,13 @@ validation on top of it.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agentpilot.tiers import TierName
+from agentpilot.tools import CATALOG
+from agentpilot.tools.spec import union_of
 
 # --- session lifecycle ---
 
@@ -44,143 +46,25 @@ class SessionOpenResponse(BaseModel):
     metadata: SessionMetadata
 
 
-# --- actions (closed, tagged union mirroring spi.actions) ---
+# --- actions ---
+#
+# Generated from `agentpilot.tools.CATALOG`, which is now the single place a
+# browser verb is declared (plan D5). These 17 models and their union used to be
+# written out by hand here, mirroring the `spi.actions` dataclasses, with a
+# third copy in `agent.actions` and a 17-entry converter table in
+# `action_conversion.py` -- four files to edit for one new verb.
+#
+# The generated union is **byte-identical** to the hand-written one it replaced;
+# `tests/test_tools_registry.py` asserts that against a golden schema captured
+# before the change, so the published OpenAPI is unaffected.
 
+_WIRE_MODELS = {spec.name: spec.wire_model() for spec in CATALOG}
+globals().update({model.__name__: model for model in _WIRE_MODELS.values()})
 
-class NavigateActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["navigate"]
-    url: str
-    timeout_ms: int = 30_000
-
-
-class GoBackActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["go_back"]
-
-
-class SnapshotActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["snapshot"]
-    viewport_only: bool = False
-    max_nodes: int | None = None
-    roles: list[str] | None = None
-
-
-class ExtractActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["extract"]
-    format: Literal["markdown", "text", "html", "structured_data"] = "markdown"
-    main_content: bool = True
-    include_tags: list[str] = Field(default_factory=list)
-    exclude_tags: list[str] = Field(default_factory=list)
-
-
-class ScreenshotActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["screenshot"]
-    full_page: bool = False
-
-
-class WaitActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["wait"]
-    ms: int | None = None
-    ref: str | None = None
-
-
-class ExecuteJsActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["execute_js"]
-    script: str
-
-
-class ClickActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["click"]
-    ref: str
-    all: bool = False
-
-
-class FillActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["fill"]
-    ref: str
-    text: str
-
-
-class SelectOptionActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["select_option"]
-    ref: str
-    values: list[str] = Field(default_factory=list)
-
-
-class HoverActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["hover"]
-    ref: str
-
-
-class PressActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["press"]
-    key: str
-
-
-class ScrollActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["scroll"]
-    direction: Literal["up", "down", "left", "right"]
-    ref: str | None = None
-
-
-# --- tab management (mirrors spi.actions' NewTab/CloseTab/SwitchTab/ListTab) ---
-
-
-class NewTabActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["new_tab"]
-    url: str | None = None
-
-
-class CloseTabActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["close_tab"]
-    page_id: str
-
-
-class SwitchTabActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["switch_tab"]
-    page_id: str
-
-
-class ListTabsActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["list_tabs"]
-
-
-ActionIn = Annotated[
-    NavigateActionIn
-    | GoBackActionIn
-    | SnapshotActionIn
-    | ExtractActionIn
-    | ScreenshotActionIn
-    | WaitActionIn
-    | ExecuteJsActionIn
-    | ClickActionIn
-    | FillActionIn
-    | SelectOptionActionIn
-    | HoverActionIn
-    | PressActionIn
-    | ScrollActionIn
-    | NewTabActionIn
-    | CloseTabActionIn
-    | SwitchTabActionIn
-    | ListTabsActionIn,
-    Field(discriminator="type"),
-]
+if TYPE_CHECKING:  # names the generator produces, spelled out for type checkers
+    ActionIn = Any
+else:
+    ActionIn = union_of(list(_WIRE_MODELS.values()))
 
 
 class ExecuteRequest(BaseModel):

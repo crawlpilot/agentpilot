@@ -11,11 +11,12 @@ consumers -- HTTP-boundary validation vs. this module's LLM tool schema.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel
 
 from agentpilot.spi import actions as spi_actions
+from agentpilot.tools import browser_tools
 
 DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     "navigate",
@@ -36,128 +37,46 @@ management adds complexity without a clear v1 need. Both remain reachable by
 passing a wider `allowed_actions` tuple; neither is enabled by default."""
 
 
-class NavigateActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["navigate"]
-    url: str
-
-    @field_validator("url")
-    @classmethod
-    def _http_or_https_only(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("navigate url must be an absolute http:// or https:// URL")
-        return v
-
-
-class GoBackActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["go_back"]
-
-
-# The element-ref contract, described to the model the way browser-use names
-# its typed action target. Refs are `e<backendNodeId>` tokens shown in the page
-# state as `[e12]<button …/>`; a strong field description steers the model to
-# copy the exact token rather than a label. Deliberately NOT a JSON-schema
-# `pattern`: llama.cpp / Ollama structured outputs compile the schema to a GBNF
-# grammar and reject any `pattern` (400 Bad Request), so a regex constraint
-# would break every local-model run. The loop's `valid_refs` guard (a ref not
-# in the current selector map) is what rejects a malformed/stale ref, mirroring
-# browser-use's `index not in selector_map` check.
-_REF_DESCRIPTION = (
-    "The exact element ref from the current page state, shown in square brackets "
-    'e.g. \'e12\' in `[e12]<button "Add to cart"/>`. Copy it verbatim (an `e` '
-    "followed by digits). Never use a human-readable name/label, a description, "
-    "or a URL as a ref -- to open a URL use the navigate action."
+DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
+    "navigate",
+    "go_back",
+    "click",
+    "fill",
+    "select_option",
+    "hover",
+    "press",
+    "scroll",
+    "wait",
+    "extract",
+    "screenshot",
 )
+"""Order is a presentation choice -- most-used first, since it is the order a
+model reads the schema in -- so it stays written out rather than derived from
+catalog order. *Membership* is not: `test_tools_registry` asserts this set equals
+the registry's `agent_exposed` subset, so a verb cannot be exposed to agents in
+one place and forgotten in the other.
 
+`execute_js` and tab management are absent because their catalog entries declare
+`agent_fields=None`: arbitrary JS is security-sensitive, and tab management adds
+complexity without a clear need. Both remain reachable by passing a wider
+`allowed_actions`, and the exclusion now lives *with* the verb instead of in a
+separate tuple that had to be kept in step with it.
+"""
 
-def _ref_field() -> Any:
-    return Field(description=_REF_DESCRIPTION)
-
-
-class ClickActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["click"]
-    ref: str = _ref_field()
-
-
-class FillActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["fill"]
-    ref: str = _ref_field()
-    text: str
-
-
-class SelectOptionActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["select_option"]
-    ref: str = _ref_field()
-    values: list[str] = Field(default_factory=list)
-
-
-class HoverActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["hover"]
-    ref: str = _ref_field()
-
-
-class PressActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["press"]
-    key: str
-
-
-class ScrollActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["scroll"]
-    direction: Literal["up", "down", "left", "right"]
-    ref: str | None = Field(default=None, description=_REF_DESCRIPTION)
-
-
-class WaitActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["wait"]
-    ms: int | None = None
-
-
-class ExtractActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["extract"]
-    format: Literal["markdown", "text"] = "markdown"
-
-
-class ScreenshotActionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Literal["screenshot"]
-
+_AGENT_TOOLS = browser_tools().subset(agent_exposed=True)
 
 _ACTION_MODELS: dict[str, type[BaseModel]] = {
-    "navigate": NavigateActionIn,
-    "go_back": GoBackActionIn,
-    "click": ClickActionIn,
-    "fill": FillActionIn,
-    "select_option": SelectOptionActionIn,
-    "hover": HoverActionIn,
-    "press": PressActionIn,
-    "scroll": ScrollActionIn,
-    "wait": WaitActionIn,
-    "extract": ExtractActionIn,
-    "screenshot": ScreenshotActionIn,
+    spec.name: spec.agent_model() for spec in _AGENT_TOOLS
 }
+"""Generated from `tools.CATALOG`. These were 11 hand-written Pydantic models,
+a deliberate second copy of the same vocabulary the HTTP boundary already
+mirrored -- this module's own docstring used to concede as much (plan D5)."""
 
 _ACTION_DESCRIPTIONS: dict[str, str] = {
-    "navigate": "Navigate the browser to an absolute http(s) URL.",
-    "go_back": "Go back to the previous page in history.",
-    "click": "Click the element identified by `ref` (from the most recent page state).",
-    "fill": "Fill a text input/textarea identified by `ref` with `text`.",
-    "select_option": "Select one or more `values` in a <select> element identified by `ref`.",
-    "hover": "Hover the mouse over the element identified by `ref`.",
-    "press": "Press a keyboard key (e.g. 'Enter', 'Tab').",
-    "scroll": "Scroll the page (or an element identified by `ref`) in `direction`.",
-    "wait": "Wait `ms` milliseconds before the next action.",
-    "extract": "Read the current page's main content as markdown or plain text.",
-    "screenshot": "Capture a screenshot of the current page.",
+    spec.name: spec.description for spec in _AGENT_TOOLS
 }
+
+_SPECS_BY_NAME = {spec.name: spec for spec in _AGENT_TOOLS}
 
 
 @dataclass
@@ -263,30 +182,11 @@ def _parse_one_action(item: dict[str, Any]) -> spi_actions.Action | DoneAction:
     model_cls = _ACTION_MODELS.get(action_type)
     if model_cls is None:
         raise ValueError(f"model chose an unknown action type: {action_type!r}")
-    return _to_spi_action(model_cls.model_validate(item))
+    return _to_spi_action(action_type, model_cls.model_validate(item))
 
 
-def _to_spi_action(parsed: BaseModel) -> spi_actions.Action:
-    if isinstance(parsed, NavigateActionIn):
-        return spi_actions.NavigateAction(url=parsed.url)
-    if isinstance(parsed, GoBackActionIn):
-        return spi_actions.GoBackAction()
-    if isinstance(parsed, ClickActionIn):
-        return spi_actions.ClickAction(ref=parsed.ref)
-    if isinstance(parsed, FillActionIn):
-        return spi_actions.FillAction(ref=parsed.ref, text=parsed.text)
-    if isinstance(parsed, SelectOptionActionIn):
-        return spi_actions.SelectOptionAction(ref=parsed.ref, values=parsed.values)
-    if isinstance(parsed, HoverActionIn):
-        return spi_actions.HoverAction(ref=parsed.ref)
-    if isinstance(parsed, PressActionIn):
-        return spi_actions.PressAction(key=parsed.key)
-    if isinstance(parsed, ScrollActionIn):
-        return spi_actions.ScrollAction(direction=parsed.direction, ref=parsed.ref)
-    if isinstance(parsed, WaitActionIn):
-        return spi_actions.WaitAction(ms=parsed.ms)
-    if isinstance(parsed, ExtractActionIn):
-        return spi_actions.ExtractAction(format=parsed.format)
-    if isinstance(parsed, ScreenshotActionIn):
-        return spi_actions.ScreenshotAction()
-    raise AssertionError(f"unhandled action model: {type(parsed)!r}")
+def _to_spi_action(action_type: str, parsed: BaseModel) -> spi_actions.Action:
+    """Was an 11-branch `isinstance` ladder restating field names that are
+    identical on both sides. The spec knows which dataclass it builds."""
+
+    return _SPECS_BY_NAME[action_type].from_model(parsed)  # type: ignore[no-any-return]

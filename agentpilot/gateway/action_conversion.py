@@ -1,67 +1,30 @@
-"""`ActionIn` (the Pydantic, HTTP-boundary discriminated union) -> `spi.actions
-.Action` (the driver-agnostic dataclass union) -- shared by `routes/sessions.py`
-(`/v1/sessions/{id}/execute`'s caller-supplied batch) and `routes/scrape.py`
-(`/v1/scrape`'s server-composed batch), so both build the exact same
-`spi.actions.Action` values from the exact same wire shape rather than two
-routes drifting into slightly different conversions over time.
+"""`ActionIn` (the HTTP-boundary Pydantic union) -> `spi.actions.Action`.
+
+This was a 17-entry table of `Model: lambda a: SpiAction(field=a.field, ...)`
+converters, hand-written and hand-maintained alongside two other copies of the
+same vocabulary (plan D5). Every entry restated field names that were already
+identical on both sides, so the only thing it could do was drift.
+
+Both sides are now projections of one `tools.ToolSpec`, which knows the
+dataclass it builds and exposes fields under the same names -- so the conversion
+is `spec.from_model(parsed)` and there is nothing left to keep in sync. Adding a
+verb touches `tools/catalog.py` and nothing here.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from agentpilot.gateway.schemas import (
-    ActionIn,
-    ClickActionIn,
-    CloseTabActionIn,
-    ExecuteJsActionIn,
-    ExtractActionIn,
-    FillActionIn,
-    GoBackActionIn,
-    HoverActionIn,
-    ListTabsActionIn,
-    NavigateActionIn,
-    NewTabActionIn,
-    PressActionIn,
-    ScreenshotActionIn,
-    ScrollActionIn,
-    SelectOptionActionIn,
-    SnapshotActionIn,
-    SwitchTabActionIn,
-    WaitActionIn,
-)
 from agentpilot.spi import actions as spi_actions
-
-_ACTION_CONVERTERS: dict[type, Callable[[Any], spi_actions.Action]] = {
-    NavigateActionIn: lambda a: spi_actions.NavigateAction(url=a.url, timeout_ms=a.timeout_ms),
-    GoBackActionIn: lambda a: spi_actions.GoBackAction(),
-    SnapshotActionIn: lambda a: spi_actions.SnapshotAction(
-        viewport_only=a.viewport_only,
-        max_nodes=a.max_nodes,
-        roles=tuple(a.roles) if a.roles is not None else None,
-    ),
-    ExtractActionIn: lambda a: spi_actions.ExtractAction(
-        format=a.format,
-        main_content=a.main_content,
-        include_tags=tuple(a.include_tags) or None,
-        exclude_tags=tuple(a.exclude_tags) or None,
-    ),
-    ScreenshotActionIn: lambda a: spi_actions.ScreenshotAction(full_page=a.full_page),
-    WaitActionIn: lambda a: spi_actions.WaitAction(ms=a.ms, ref=a.ref),
-    ExecuteJsActionIn: lambda a: spi_actions.ExecuteJsAction(script=a.script),
-    ClickActionIn: lambda a: spi_actions.ClickAction(ref=a.ref, all=a.all),
-    FillActionIn: lambda a: spi_actions.FillAction(ref=a.ref, text=a.text),
-    SelectOptionActionIn: lambda a: spi_actions.SelectOptionAction(ref=a.ref, values=a.values),
-    HoverActionIn: lambda a: spi_actions.HoverAction(ref=a.ref),
-    PressActionIn: lambda a: spi_actions.PressAction(key=a.key),
-    ScrollActionIn: lambda a: spi_actions.ScrollAction(direction=a.direction, ref=a.ref),
-    NewTabActionIn: lambda a: spi_actions.NewTabAction(url=a.url),
-    CloseTabActionIn: lambda a: spi_actions.CloseTabAction(page_id=a.page_id),
-    SwitchTabActionIn: lambda a: spi_actions.SwitchTabAction(page_id=a.page_id),
-    ListTabsActionIn: lambda a: spi_actions.ListTabsAction(),
-}
+from agentpilot.tools import BY_NAME
 
 
-def to_spi_action(action_in: ActionIn) -> spi_actions.Action:
-    return _ACTION_CONVERTERS[type(action_in)](action_in)
+def to_spi_action(action_in: Any) -> spi_actions.Action:
+    spec = BY_NAME.get(action_in.type)
+    if spec is None:
+        # Unreachable through the API -- the discriminated union rejects an
+        # unknown `type` at parse time. Explicit anyway: a verb present in the
+        # union but missing from the catalog would otherwise fail as a confusing
+        # `NoneType` attribute error somewhere deeper.
+        raise ValueError(f"no tool spec for action type {action_in.type!r}")
+    return spec.from_model(action_in)  # type: ignore[no-any-return]
