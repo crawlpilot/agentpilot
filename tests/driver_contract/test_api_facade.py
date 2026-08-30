@@ -45,13 +45,18 @@ def _serve(httpserver: HTTPServer) -> str:
 
 
 def _ref(node) -> str:  # type: ignore[no-untyped-def]
-    return f"e{node.backend_node_id}"
+    # `selector_index`, not `backend_node_id`: the capture mints the ref, and the
+    # two diverge once a cross-origin frame's renderer reuses an id.
+    return f"e{node.selector_index}"
 
 
 def _find_role(node, role: str):  # type: ignore[no-untyped-def]
     if node.ax_role == role:
         return node
-    for child in node.children_and_shadow_roots:
+    children = list(node.children_and_shadow_roots)
+    if node.content_document is not None:
+        children.append(node.content_document)
+    for child in children:
         found = _find_role(child, role)
         if found is not None:
             return found

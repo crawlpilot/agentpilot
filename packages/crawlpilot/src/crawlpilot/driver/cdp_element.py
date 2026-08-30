@@ -201,9 +201,45 @@ async def click_at(cdp: CDPSession, x: float, y: float, *, click_count: int = 1)
 
 
 async def wheel_at(cdp: CDPSession, x: float, y: float, dx: float, dy: float) -> None:
+    """A wheel event over a point -- scrolls whatever container is under it.
+
+    Used for scrolling an *element's* own overflow (a dropdown list, a
+    virtualised table), where the point is what selects the container.
+    """
+
     await cdp.send(
         "Input.dispatchMouseEvent",
         {"type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy},
+    )
+
+
+async def scroll_gesture(cdp: CDPSession, x: float, y: float, dx: float, dy: float) -> None:
+    """Scroll the page by a synthesized gesture.
+
+    Not `mouseWheel`: a single wheel event is delivered to the compositor and
+    frequently lands with no effect at all in headless Chrome (the page reports
+    `scrollY == 0` right after), which is the same race Browser4 documents as
+    crbug.com/444929150. `Input.synthesizeScrollGesture` is Chrome's own
+    scroll-driving primitive -- it runs the real scroll animation and does not
+    return until the gesture completes, so the scroll has actually happened by
+    the time the next action reads the position. browser-use makes the same split
+    (`default_action_watchdog.py:2204-2255` page, `:2257-2345` element).
+
+    `*Distance` is the distance the *content* travels, which is the opposite sign
+    to a wheel delta: scrolling down (positive `dy`) moves content up.
+    """
+
+    await cdp.send(
+        "Input.synthesizeScrollGesture",
+        {
+            "x": x,
+            "y": y,
+            "xDistance": -dx,
+            "yDistance": -dy,
+            # Fast enough not to add seconds to an agent step, slow enough that
+            # the page's own scroll handlers (lazy loading, sticky headers) run.
+            "speed": 3000,
+        },
     )
 
 

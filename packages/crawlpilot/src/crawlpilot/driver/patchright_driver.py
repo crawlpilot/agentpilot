@@ -1317,7 +1317,7 @@ class PatchrightDriver:
             cdp = await self._page_session(live)
             width, height = await cdp_element.viewport_size(cdp)
             dx, dy = _scroll_delta(action.direction, action.pages, width, height)
-            await cdp_element.wheel_at(cdp, width / 2, height / 2, dx, dy)
+            await cdp_element.scroll_gesture(cdp, width / 2, height / 2, dx, dy)
             return
 
         node, cdp = await self._resolve_ref(live, action.ref)
