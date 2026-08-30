@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import functools
 import http.server
+import io
 import socketserver
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -50,8 +52,44 @@ class Toolbench:
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
+    # HTTP/1.1, not the stdlib default of 1.0. A browser opens several
+    # connections per origin and keeps them alive; against an HTTP/1.0 server
+    # that closes after every response, some of those requests are simply lost
+    # -- which shows up as an iframe stuck on `chrome-error://chromewebdata/`
+    # while `curl` on the same URL is perfectly happy.
+    protocol_version = "HTTP/1.1"
+
+    cross_origin: str | None = None
+    """Base URL of the sibling origin, injected into `index.html`."""
+
     def log_message(self, *args: object) -> None:
         pass
+
+    def send_head(self):  # noqa: ANN201 - matches the stdlib signature
+        """Substitute the cross-origin placeholder on the way out.
+
+        The sibling origin's port is only known once the server is bound, and
+        the iframe's `src` has to be a real attribute at parse time -- assigning
+        it from JS afterwards produces a frame Chrome treats differently, and
+        this fixture exists precisely to exercise the out-of-process path.
+        """
+
+        path = self.translate_path(self.path)
+        if not path.endswith("index.html") or self.cross_origin is None:
+            return super().send_head()
+
+        body = (
+            pathlib.Path(path)
+            .read_text()
+            .replace("__CROSS_ORIGIN__", self.cross_origin)
+            .encode()
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
+
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")

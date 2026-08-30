@@ -200,8 +200,25 @@ async def click_at(cdp: CDPSession, x: float, y: float, *, click_count: int = 1)
     await dispatch_mouse(cdp, "mouseReleased", x, y, button="left", click_count=click_count)
 
 
+async def wheel_at(cdp: CDPSession, x: float, y: float, dx: float, dy: float) -> None:
+    """A wheel event over a point -- scrolls the container under it.
+
+    This is the *element* scroll primitive. `synthesizeScrollGesture` cannot do
+    this job: it drives the root scroller, so aiming it at a dropdown list or a
+    virtualised table scrolls the page underneath and leaves the element exactly
+    where it was. A wheel event is delivered to the element under the cursor,
+    which is the whole point. browser-use splits the two the same way
+    (`default_action_watchdog.py:2257-2345`).
+    """
+
+    await cdp.send(
+        "Input.dispatchMouseEvent",
+        {"type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy},
+    )
+
+
 async def scroll_gesture(cdp: CDPSession, x: float, y: float, dx: float, dy: float) -> None:
-    """Scroll whatever container sits under `(x, y)`, by a synthesized gesture.
+    """Scroll the page, by a synthesized gesture.
 
     Not `Input.dispatchMouseEvent{type: mouseWheel}`: a single wheel event is
     delivered to the compositor and frequently lands with no effect at all -- the

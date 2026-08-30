@@ -113,9 +113,10 @@
     <section>
       <h2>Frames</h2>
       <iframe id="same-origin" src="frame_inner.html" width="360" height="120"></iframe>
-      <!-- Rewritten at load time to the sibling origin, so this is a genuine
-           out-of-process frame rather than a same-origin one. -->
-      <iframe id="cross-origin" data-cross-origin="frame_inner.html"
+      <!-- `__CROSS_ORIGIN__` is substituted by the fixture server with the
+           sibling origin's base URL, so the src is a real attribute at parse
+           time rather than something JS assigns afterwards. -->
+      <iframe id="cross-origin" src="__CROSS_ORIGIN__/frame_inner.html"
               width="360" height="120"></iframe>
     </section>
 
@@ -140,16 +141,6 @@
         if (e.key === 'Escape') log('escaped');
       });
 
-      // The cross-origin frame's origin is only known at runtime -- the harness
-      // passes the sibling port in, so the file stays static.
-      const params = new URLSearchParams(location.search);
-      const crossOrigin = params.get('crossOrigin');
-      const frame = document.getElementById('cross-origin');
-      if (crossOrigin) {
-        frame.src = crossOrigin.replace(/\/$/, '') + '/' + frame.dataset.crossOrigin;
-      } else {
-        frame.remove();
-      }
     </script>
   </body>
 </html>

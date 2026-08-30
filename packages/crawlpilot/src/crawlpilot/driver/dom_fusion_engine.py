@@ -419,24 +419,27 @@ async def capture_one_target(
     )
 
 
-def cross_origin_frame_hosts(root: EnhancedDOMTreeNode) -> list[EnhancedDOMTreeNode]:
-    """The `<iframe>`/`<frame>` elements in `root` whose document this capture
-    did *not* reach.
+def frame_hosts(root: EnhancedDOMTreeNode) -> list[EnhancedDOMTreeNode]:
+    """The `<iframe>`/`<frame>` elements in `root` that carry a frame id.
 
-    `DOM.getDocument{pierce:true}` inlines a same-origin frame's document as
-    `contentDocument`. A cross-origin frame lives in another renderer, so the
-    element comes back carrying only its `frameId` and no document at all --
-    which is exactly the signal that its content needs capturing from its own
-    target. Everything inside such a frame was previously invisible to the agent:
-    consent banners, payment fields, embedded widgets.
+    Every frame, not only the ones that came back without a document. The
+    tempting narrower rule -- "capture the ones `pierce:true` could not inline"
+    -- loses a race that is easy to hit and hard to see: an iframe pointed at
+    another origin starts life with an empty, *same-process* `about:blank`
+    document and is swapped for an out-of-process one a moment later. Capture in
+    that window and the element has a `contentDocument`, so it looks inlined and
+    is skipped, and the frame's real content never appears in the tree at all.
+
+    So the frame's own session decides, and it is authoritative either way: for a
+    genuine cross-origin frame it is the only thing that can see the content, and
+    for a same-origin one it returns the same nodes the parent capture would,
+    now stamped with the session that actually owns them.
     """
 
     return [
         node
         for node in iter_elements(root)
-        if node.tag_name in ("iframe", "frame")
-        and node.content_document is None
-        and node.frame_id is not None
+        if node.tag_name in ("iframe", "frame") and node.frame_id is not None
     ]
 
 
@@ -502,17 +505,16 @@ async def _attach_cross_origin_frames(
     each level costs four CDP round trips.
 
     Best-effort per frame: a frame that fails to capture (navigating away
-    mid-snapshot, a detached session) leaves its host element in the tree with no
-    content, exactly as before. One uncooperative advertisement must not fail the
-    whole page's perception.
+    mid-snapshot, a detached session) keeps whatever the parent capture inlined
+    for it, so a same-origin frame degrades to the old behaviour rather than
+    losing its content. One uncooperative advertisement must not cost the whole
+    page's perception.
     """
 
     if depth >= _MAX_FRAME_DEPTH:
         return
 
-    hosts = [
-        host for host in cross_origin_frame_hosts(root) if host.frame_id in frame_sessions
-    ]
+    hosts = [host for host in frame_hosts(root) if host.frame_id in frame_sessions]
     if not hosts:
         return
 
