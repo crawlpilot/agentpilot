@@ -34,6 +34,7 @@ import structlog
 
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import fetch as fetch_robots
+from agentpilot.crawl.types import CrawlOptions
 from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_options
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
 from agentpilot.llm.structured import extract_structured
@@ -44,7 +45,6 @@ from crawlpilot.policy import NullPrototypes, PrototypeProvider
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.session.warm_pool import WarmPool
-from agentpilot.crawl.types import CrawlOptions
 from crawlpilot.spi.driver import BrowserDriver
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.scrape import Document

@@ -25,8 +25,8 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from agentpilot.crawl import dedup, filters, link_extractor, rank, robots, sitemap
-from crawlpilot.egress.httpx_guard import guarded_get
 from agentpilot.crawl.types import CrawlOptions, MapLink, MapOptions
+from crawlpilot.egress.httpx_guard import guarded_get
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.errors import EgressBlocked
 

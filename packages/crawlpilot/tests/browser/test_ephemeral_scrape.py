@@ -17,12 +17,12 @@ import json
 import pytest
 from pytest_httpserver import HTTPServer
 
-pytestmark = pytest.mark.browser
-
 from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
+
+pytestmark = pytest.mark.browser
 
 ARTICLE_HTML = """<html><body>
 <article>

@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from agentpilot.auth.models import AuthedTenant
 from agentpilot.crawl.seed import discover_for_crawl
+from agentpilot.crawl.types import CrawlOptions
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.schemas import (
     CrawlCreateResponse,
@@ -32,12 +33,11 @@ from agentpilot.gateway.schemas import (
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.jobs.options_codec import dump_crawl_options
 from agentpilot.jobs.store import PostgresJobStore
+from agentpilot.jobs.webhook import WebhookConfig
 from agentpilot.observability.metrics import requests_total
-from agentpilot.crawl.types import CrawlOptions
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.errors import JobNotFound
 from crawlpilot.spi.scrape import Document, ExtractConfig, ScrapeOptions
-from agentpilot.jobs.webhook import WebhookConfig
 
 log = structlog.get_logger(__name__)
 

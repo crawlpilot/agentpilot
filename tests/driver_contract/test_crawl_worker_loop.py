@@ -18,12 +18,12 @@ import pytest
 from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl.seed import discover_for_crawl
+from agentpilot.crawl.types import CrawlOptions
 from agentpilot.jobs.options_codec import dump_crawl_options
 from agentpilot.jobs.store import PostgresJobStore
 from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.registry import Registry
-from agentpilot.crawl.types import CrawlOptions
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.scrape import ScrapeOptions
 

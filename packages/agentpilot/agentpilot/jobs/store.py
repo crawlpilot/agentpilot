@@ -26,8 +26,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from agentpilot.jobs.types import Job, JobId, JobStatus, JobType
-from crawlpilot.spi.scrape import Document, DocumentMetadata
 from agentpilot.jobs.webhook import WebhookConfig
+from crawlpilot.spi.scrape import Document, DocumentMetadata
 
 if TYPE_CHECKING:
     # Deferred at runtime for the same reason `agentpilot.auth.store` defers

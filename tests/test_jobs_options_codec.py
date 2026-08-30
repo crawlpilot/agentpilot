@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from agentpilot.crawl.types import BatchScrapeOptions, CrawlOptions
 from agentpilot.jobs.options_codec import (
     dump_batch_scrape_options,
     dump_crawl_options,
@@ -15,7 +16,6 @@ from agentpilot.jobs.options_codec import (
     load_crawl_options,
     load_scrape_options,
 )
-from agentpilot.crawl.types import BatchScrapeOptions, CrawlOptions
 from crawlpilot.spi.scrape import ScrapeOptions
 
 

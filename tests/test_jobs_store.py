@@ -14,8 +14,8 @@ import psycopg
 import pytest
 
 from agentpilot.jobs.store import PostgresJobStore
-from crawlpilot.spi.scrape import Document, DocumentMetadata
 from agentpilot.jobs.webhook import WebhookConfig
+from crawlpilot.spi.scrape import Document, DocumentMetadata
 
 _DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")
 
