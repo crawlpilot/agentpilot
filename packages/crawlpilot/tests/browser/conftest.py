@@ -1,13 +1,18 @@
 """Fixtures for the real-browser suite.
 
-**Imports nothing but `crawlpilot`, deliberately.** The existing real-browser
-suite (`tests/driver_contract/`) imports `agentpilot.control.identity` in its
-conftest, which is the single line that makes none of it runnable in the
-crawlpilot-only venv -- so the standalone install had no browser test of its own,
-and the thing most likely to break for an external user was the thing least
-covered. Everything here goes through the public facade (`crawlpilot.api`), which
-means the suite doubles as the client-library test: if it needs a private module
-to do something ordinary, the facade has a hole.
+**Imports nothing but `crawlpilot`, deliberately.** The workspace's other
+real-browser suite (`tests/driver_contract/`) imports `agentpilot.control
+.identity` in its conftest, which is the single line that makes none of it
+runnable in the crawlpilot-only venv -- so the standalone install had no browser
+test of its own, and the thing most likely to break for an external user was the
+thing least covered. Everything here goes through the public facade
+(`crawlpilot.api`), which means the suite doubles as the client-library test: if
+it needs a private module to do something ordinary, the facade has a hole.
+
+The fixture site lives in `packages/crawlpilot/tests/fixtures/toolbench` rather
+than the workspace's `tests/fixtures/`, for the same reason: a suite that has to
+reach outside its own package for its fixtures is not one the standalone wheel
+can actually run.
 
 Marked `browser` and deselected by default, so CI job 1's clean-venv run stays
 Chrome-free. Run it with `-m browser`.
@@ -22,7 +27,7 @@ from pathlib import Path
 import pytest
 from pytest_httpserver import HTTPServer
 
-FIXTURE_ROOT = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "toolbench"
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "toolbench"
 
 PAGES = ("index.html", "article.html", "frame_inner.html", "form_target.html")
 
@@ -131,3 +136,31 @@ async def page(browser):
 
     async with browser.session() as session:
         yield session
+
+
+# ------------------------------------------------- below the facade, on purpose
+#
+# `test_ephemeral_scrape.py` drives `crawlpilot.session.ephemeral` directly, so
+# it needs a raw driver rather than a `Browser`. Kept apart from the fixtures
+# above so the facade-only discipline the rest of this directory follows stays
+# visible: a test that takes `driver` is opting out of it, and says so by name.
+
+
+@pytest.fixture
+async def launcher():
+    from crawlpilot.driver.process_launcher import (  # noqa: PLC0415
+        ProcessLauncher,
+    )
+
+    instance = ProcessLauncher()
+    yield instance
+    await instance.close()
+
+
+@pytest.fixture
+def driver(launcher):
+    from crawlpilot.driver.patchright_driver import (  # noqa: PLC0415
+        PatchrightDriver,
+    )
+
+    return PatchrightDriver(launcher)

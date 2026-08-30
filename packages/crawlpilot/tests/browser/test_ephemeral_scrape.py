@@ -1,8 +1,13 @@
 """`crawlpilot.session.ephemeral.run_ephemeral_scrape` -- real Patchright
-context, real in-memory `Registry`. `routes/scrape.py`'s own tests
-(`test_scrape_route.py`) cover this indirectly through the HTTP layer; this
-module tests the shared function directly, since it now has two independent
-callers (`routes/scrape.py` and, from this pass on, the crawl-worker loop).
+context, real in-memory `Registry`. agentpilot's `routes/scrape.py` tests
+(`tests/test_scrape_route.py`) cover this indirectly through the HTTP layer;
+this module tests the shared function directly, since it has two independent
+callers there (`routes/scrape.py` and the crawl-worker loop).
+
+Unlike its neighbours this one reaches past the facade into
+`crawlpilot.session` on purpose -- `run_ephemeral_scrape` is the one-shot path
+that `api.Browser.scrape` is itself built on, and testing it directly is what
+keeps a regression there from being diagnosed three layers up.
 """
 
 from __future__ import annotations
@@ -11,6 +16,8 @@ import json
 
 import pytest
 from pytest_httpserver import HTTPServer
+
+pytestmark = pytest.mark.browser
 
 from crawlpilot.driver.patchright_driver import PatchrightDriver
 from crawlpilot.session.ephemeral import run_ephemeral_scrape

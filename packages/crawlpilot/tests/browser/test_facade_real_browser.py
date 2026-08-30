@@ -1,13 +1,15 @@
 """The facade against real Chrome, using **only** the public API.
 
-Every other file in this directory constructs a `PatchrightDriver` and a
-`ProcessLauncher` and drives them directly. This one deliberately does not: it
-is the proof that a caller who imports nothing but `crawlpilot.api` (plus the
-action dataclasses for real batching) can drive a real browser -- which is what
-Phase 5 claims, and what the extracted `browserpilot` package has to deliver.
+Proof that a caller who imports nothing but `crawlpilot.api` (plus the action
+dataclasses for real batching) can drive a real browser -- which is what the
+standalone `crawlpilot` wheel promises an external user.
 
 If this file ever needs `crawlpilot.driver` or `crawlpilot.session` to do
 something ordinary, the facade has a hole.
+
+Where `test_toolchain.py` covers the breadth of the verbs, this covers the
+lifecycle around them: that the context opens, batches in one round trip, and
+scrapes one-shot.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from pytest_httpserver import HTTPServer
 from crawlpilot.api import Browser
 from crawlpilot.spi import actions as spi_actions
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.browser]
 
 PAGE_HTML = """
 <html><head><title>Facade</title></head>
