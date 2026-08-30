@@ -24,7 +24,6 @@ from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
     ActionResultOut,
-    ArtifactRefOut,
     BoundingBoxOut,
     ExecuteRequest,
     FusedTreeOut,
@@ -81,16 +80,10 @@ def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
         screenshots=[base64.b64encode(b).decode("ascii") for b in result.screenshots],
         extracts=result.extracts,
         js_returns=result.js_returns,
-        downloads=[
-            ArtifactRefOut(
-                artifact_id=d.artifact_id,
-                tenant=d.tenant,
-                kind=d.kind,
-                size=d.size,
-                sha256=d.sha256,
-            )
-            for d in result.downloads
-        ],
+        # Always empty: download capture is not implemented, and the driver has
+        # never populated this. The field stays on the wire so the response
+        # shape does not change under existing clients -- see `ArtifactRefOut`.
+        downloads=[],
         tabs=[
             [
                 TabInfoOut(page_id=t.page_id, url=t.url, title=t.title, active=t.active)

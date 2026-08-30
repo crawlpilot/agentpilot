@@ -494,6 +494,16 @@ class FusedTreeOut(BaseModel):
 
 
 class ArtifactRefOut(BaseModel):
+    """The shape a captured download *would* serialize as.
+
+    Nothing populates it: `ActionResultOut.downloads` is always `[]`, because
+    download capture was never implemented. Kept so the documented response
+    shape stays stable for existing clients, and so the field has a type when
+    capture does land. Its crawlpilot-side twin (`spi/artifact.py::ArtifactRef`,
+    declared "for shape completeness ... until P2") is gone -- a browser library
+    should not carry a type only an unbuilt platform feature would produce.
+    """
+
     model_config = ConfigDict(extra="forbid")
     artifact_id: str
     tenant: str

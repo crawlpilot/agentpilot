@@ -18,8 +18,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from crawlpilot.spi.artifact import ArtifactRef
-
 if TYPE_CHECKING:
     from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
@@ -340,7 +338,6 @@ class ActionResult:
     screenshots: list[bytes] = field(default_factory=list)
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)
-    downloads: list[ArtifactRef] = field(default_factory=list)
     tabs: list[list[TabInfo]] = field(default_factory=list)
     """One entry per `ListTabsAction` in the batch (matching every other
     per-type list here being index-correlated to that action's occurrences,
