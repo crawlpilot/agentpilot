@@ -16,10 +16,18 @@ from agentpilot.agent.actions import (
 from crawlpilot.spi import actions as spi_actions
 
 
-def test_default_allowed_actions_excludes_execute_js_and_tab_management() -> None:
+def test_default_allowed_actions_excludes_the_sensitive_verbs() -> None:
+    """Arbitrary JS and a driver-side file path stay out of a model's reach.
+
+    Tab management used to be excluded here too, on grounds of complexity rather
+    than safety. It is offered now, as browser-use offers it: a link that opens a
+    new tab is ordinary, and an agent that cannot follow it is stuck.
+    """
+
     assert "execute_js" not in DEFAULT_ALLOWED_ACTIONS
-    assert "new_tab" not in DEFAULT_ALLOWED_ACTIONS
-    assert "switch_tab" not in DEFAULT_ALLOWED_ACTIONS
+    assert "upload_file" not in DEFAULT_ALLOWED_ACTIONS
+    assert "new_tab" in DEFAULT_ALLOWED_ACTIONS
+    assert "switch_tab" in DEFAULT_ALLOWED_ACTIONS
 
 
 def test_render_action_descriptions_includes_done() -> None:

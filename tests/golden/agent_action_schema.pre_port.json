@@ -62,11 +62,6 @@
           {
             "additionalProperties": false,
             "properties": {
-              "clear": {
-                "default": true,
-                "title": "Clear",
-                "type": "boolean"
-              },
               "ref": {
                 "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
                 "title": "Ref",
@@ -127,27 +122,6 @@
                 "type": "string"
               },
               "type": {
-                "const": "dropdown_options",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "ref"
-            ],
-            "title": "DropdownOptionsActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "ref": {
-                "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
-                "title": "Ref",
-                "type": "string"
-              },
-              "type": {
                 "const": "hover",
                 "title": "Type",
                 "type": "string"
@@ -183,26 +157,6 @@
           {
             "additionalProperties": false,
             "properties": {
-              "keys": {
-                "title": "Keys",
-                "type": "string"
-              },
-              "type": {
-                "const": "send_keys",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "keys"
-            ],
-            "title": "SendKeysActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
               "direction": {
                 "enum": [
                   "up",
@@ -212,11 +166,6 @@
                 ],
                 "title": "Direction",
                 "type": "string"
-              },
-              "pages": {
-                "default": 1.0,
-                "title": "Pages",
-                "type": "number"
               },
               "ref": {
                 "anyOf": [
@@ -247,26 +196,6 @@
           {
             "additionalProperties": false,
             "properties": {
-              "text": {
-                "title": "Text",
-                "type": "string"
-              },
-              "type": {
-                "const": "find_text",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "text"
-            ],
-            "title": "FindTextActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
               "ms": {
                 "anyOf": [
                   {
@@ -289,58 +218,6 @@
               "type"
             ],
             "title": "WaitActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "pattern": {
-                "title": "Pattern",
-                "type": "string"
-              },
-              "regex": {
-                "default": false,
-                "title": "Regex",
-                "type": "boolean"
-              },
-              "type": {
-                "const": "search_page",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "pattern"
-            ],
-            "title": "SearchPageActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "attributes": {
-                "items": {
-                  "type": "string"
-                },
-                "title": "Attributes",
-                "type": "array"
-              },
-              "selector": {
-                "title": "Selector",
-                "type": "string"
-              },
-              "type": {
-                "const": "find_elements",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "selector"
-            ],
-            "title": "FindElementsActionIn",
             "type": "object"
           },
           {
@@ -380,73 +257,6 @@
               "type"
             ],
             "title": "ScreenshotActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "const": "new_tab",
-                "title": "Type",
-                "type": "string"
-              },
-              "url": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "title": "Url"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "title": "NewTabActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "page_id": {
-                "title": "Page Id",
-                "type": "string"
-              },
-              "type": {
-                "const": "switch_tab",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "page_id"
-            ],
-            "title": "SwitchTabActionIn",
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "page_id": {
-                "title": "Page Id",
-                "type": "string"
-              },
-              "type": {
-                "const": "close_tab",
-                "title": "Type",
-                "type": "string"
-              }
-            },
-            "required": [
-              "type",
-              "page_id"
-            ],
-            "title": "CloseTabActionIn",
             "type": "object"
           },
           {

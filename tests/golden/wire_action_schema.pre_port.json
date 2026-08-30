@@ -45,26 +45,6 @@
       "title": "CloseTabActionIn",
       "type": "object"
     },
-    "DropdownOptionsActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "ref": {
-          "title": "Ref",
-          "type": "string"
-        },
-        "type": {
-          "const": "dropdown_options",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "ref"
-      ],
-      "title": "DropdownOptionsActionIn",
-      "type": "object"
-    },
     "ExecuteJsActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -133,11 +113,6 @@
     "FillActionIn": {
       "additionalProperties": false,
       "properties": {
-        "clear": {
-          "default": true,
-          "title": "Clear",
-          "type": "boolean"
-        },
         "ref": {
           "title": "Ref",
           "type": "string"
@@ -158,63 +133,6 @@
         "text"
       ],
       "title": "FillActionIn",
-      "type": "object"
-    },
-    "FindElementsActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "attributes": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Attributes",
-          "type": "array"
-        },
-        "include_text": {
-          "default": true,
-          "title": "Include Text",
-          "type": "boolean"
-        },
-        "max_results": {
-          "default": 50,
-          "title": "Max Results",
-          "type": "integer"
-        },
-        "selector": {
-          "title": "Selector",
-          "type": "string"
-        },
-        "type": {
-          "const": "find_elements",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "selector"
-      ],
-      "title": "FindElementsActionIn",
-      "type": "object"
-    },
-    "FindTextActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "text": {
-          "title": "Text",
-          "type": "string"
-        },
-        "type": {
-          "const": "find_text",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "text"
-      ],
-      "title": "FindTextActionIn",
       "type": "object"
     },
     "GoBackActionIn": {
@@ -372,11 +290,6 @@
           "title": "Direction",
           "type": "string"
         },
-        "pages": {
-          "default": 1.0,
-          "title": "Pages",
-          "type": "number"
-        },
         "ref": {
           "anyOf": [
             {
@@ -400,58 +313,6 @@
         "direction"
       ],
       "title": "ScrollActionIn",
-      "type": "object"
-    },
-    "SearchPageActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "case_sensitive": {
-          "default": false,
-          "title": "Case Sensitive",
-          "type": "boolean"
-        },
-        "context_chars": {
-          "default": 150,
-          "title": "Context Chars",
-          "type": "integer"
-        },
-        "css_scope": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Css Scope"
-        },
-        "max_results": {
-          "default": 25,
-          "title": "Max Results",
-          "type": "integer"
-        },
-        "pattern": {
-          "title": "Pattern",
-          "type": "string"
-        },
-        "regex": {
-          "default": false,
-          "title": "Regex",
-          "type": "boolean"
-        },
-        "type": {
-          "const": "search_page",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "pattern"
-      ],
-      "title": "SearchPageActionIn",
       "type": "object"
     },
     "SelectOptionActionIn": {
@@ -479,26 +340,6 @@
         "ref"
       ],
       "title": "SelectOptionActionIn",
-      "type": "object"
-    },
-    "SendKeysActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "keys": {
-          "title": "Keys",
-          "type": "string"
-        },
-        "type": {
-          "const": "send_keys",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "keys"
-      ],
-      "title": "SendKeysActionIn",
       "type": "object"
     },
     "SnapshotActionIn": {
@@ -568,31 +409,6 @@
       "title": "SwitchTabActionIn",
       "type": "object"
     },
-    "UploadFileActionIn": {
-      "additionalProperties": false,
-      "properties": {
-        "path": {
-          "title": "Path",
-          "type": "string"
-        },
-        "ref": {
-          "title": "Ref",
-          "type": "string"
-        },
-        "type": {
-          "const": "upload_file",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "ref",
-        "path"
-      ],
-      "title": "UploadFileActionIn",
-      "type": "object"
-    },
     "WaitActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -637,12 +453,9 @@
     "mapping": {
       "click": "#/$defs/ClickActionIn",
       "close_tab": "#/$defs/CloseTabActionIn",
-      "dropdown_options": "#/$defs/DropdownOptionsActionIn",
       "execute_js": "#/$defs/ExecuteJsActionIn",
       "extract": "#/$defs/ExtractActionIn",
       "fill": "#/$defs/FillActionIn",
-      "find_elements": "#/$defs/FindElementsActionIn",
-      "find_text": "#/$defs/FindTextActionIn",
       "go_back": "#/$defs/GoBackActionIn",
       "hover": "#/$defs/HoverActionIn",
       "list_tabs": "#/$defs/ListTabsActionIn",
@@ -651,12 +464,9 @@
       "press": "#/$defs/PressActionIn",
       "screenshot": "#/$defs/ScreenshotActionIn",
       "scroll": "#/$defs/ScrollActionIn",
-      "search_page": "#/$defs/SearchPageActionIn",
       "select_option": "#/$defs/SelectOptionActionIn",
-      "send_keys": "#/$defs/SendKeysActionIn",
       "snapshot": "#/$defs/SnapshotActionIn",
       "switch_tab": "#/$defs/SwitchTabActionIn",
-      "upload_file": "#/$defs/UploadFileActionIn",
       "wait": "#/$defs/WaitActionIn"
     },
     "propertyName": "type"
@@ -700,24 +510,6 @@
     },
     {
       "$ref": "#/$defs/ScrollActionIn"
-    },
-    {
-      "$ref": "#/$defs/SendKeysActionIn"
-    },
-    {
-      "$ref": "#/$defs/FindTextActionIn"
-    },
-    {
-      "$ref": "#/$defs/DropdownOptionsActionIn"
-    },
-    {
-      "$ref": "#/$defs/SearchPageActionIn"
-    },
-    {
-      "$ref": "#/$defs/FindElementsActionIn"
-    },
-    {
-      "$ref": "#/$defs/UploadFileActionIn"
     },
     {
       "$ref": "#/$defs/NewTabActionIn"

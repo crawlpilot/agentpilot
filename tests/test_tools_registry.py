@@ -43,21 +43,79 @@ GOLDEN = pathlib.Path(__file__).parent / "golden"
 # ------------------------------------------------------------------ goldens
 
 
-def test_the_wire_schema_is_unchanged() -> None:
-    """The published OpenAPI must be byte-identical. Generating it is only safe
-    if it produces exactly what 17 hand-written models produced."""
+def test_the_wire_schema_matches_its_golden() -> None:
+    """The published OpenAPI is pinned: a verb's shape must never drift by
+    accident, only by an edit to `tools/catalog.py` that also updates this."""
 
     golden = json.loads((GOLDEN / "wire_action_schema.json").read_text())
     generated = TypeAdapter(ActionIn).json_schema()
     assert generated == golden
 
 
-def test_the_agent_schema_is_unchanged() -> None:
-    """The schema an LLM is prompted with, likewise: enriching it would change
-    model behaviour, which is not a refactor."""
+def test_the_agent_schema_matches_its_golden() -> None:
+    """The schema an LLM is prompted with, likewise: changing it changes model
+    behaviour, so it should never move without someone meaning it to."""
 
     golden = json.loads((GOLDEN / "agent_action_schema.json").read_text())
     assert build_action_schema(DEFAULT_ALLOWED_ACTIONS) == golden
+
+
+# The two verbs the browser-use port deliberately widened, and what it added to
+# each. Listed rather than waved through so that "additive" stays a claim about
+# every *other* verb, and so widening a third one has to be a deliberate edit
+# here rather than a silently accepted diff.
+_DELIBERATELY_EXTENDED = {
+    "FillActionIn": {"clear"},
+    "ScrollActionIn": {"pages"},
+}
+
+
+def test_the_port_only_added_to_the_pre_existing_wire_verbs() -> None:
+    """Every verb that existed before the port still has exactly the shape it
+    had.
+
+    The port added seven verbs and widened two; `wire_action_schema.json` was
+    regenerated to match. That regeneration is the moment a real API break could
+    hide, so this checks the new schema against a snapshot of the old one taken
+    before it: pre-existing verbs must be byte-identical, except the two named
+    above, which may only have gained the field named there. An integrator's
+    existing request keeps validating.
+    """
+
+    before = json.loads((GOLDEN / "wire_action_schema.pre_port.json").read_text())["$defs"]
+    after = TypeAdapter(ActionIn).json_schema()["$defs"]
+
+    for name, old in before.items():
+        assert name in after, f"{name} disappeared from the wire union"
+        new = after[name]
+        added = _DELIBERATELY_EXTENDED.get(name, set())
+        assert set(new["properties"]) - set(old["properties"]) == added, (
+            f"{name} gained unexpected wire fields"
+        )
+        assert not set(old["properties"]) - set(new["properties"]), (
+            f"{name} lost wire fields"
+        )
+        for field, schema in old["properties"].items():
+            assert new["properties"][field] == schema, f"{name}.{field} changed shape"
+        assert new.get("required", []) == old.get("required", []), (
+            f"{name} changed which fields are required"
+        )
+
+
+def test_the_port_only_added_to_the_agent_action_set() -> None:
+    """The agent surface grew; nothing that was offered before was taken away.
+
+    A removed verb would silently break any caller passing an explicit
+    `allowed_actions`, and would change what a model can do mid-run.
+    """
+
+    before = json.loads((GOLDEN / "agent_action_schema.pre_port.json").read_text())
+    old_verbs = {
+        option["properties"]["type"]["const"]
+        for option in before["properties"]["action"]["items"]["anyOf"]
+        if "const" in option["properties"].get("type", {})
+    }
+    assert old_verbs <= set(DEFAULT_ALLOWED_ACTIONS) | {"done"}
 
 
 # ------------------------------------------------------------------ registry
@@ -65,8 +123,8 @@ def test_the_agent_schema_is_unchanged() -> None:
 
 def test_every_verb_is_registered_once() -> None:
     registry = browser_tools()
-    assert len(registry) == len(CATALOG) == 17
-    assert len({spec.name for spec in registry}) == 17
+    assert len(registry) == len(CATALOG) == 23
+    assert len({spec.name for spec in registry}) == 23
 
 
 def test_registering_a_duplicate_raises_rather_than_overriding() -> None:
@@ -95,11 +153,33 @@ def test_agent_exposure_lives_with_the_verb() -> None:
 
 
 def test_sensitive_verbs_are_not_agent_exposed() -> None:
+    """A model must not be able to run arbitrary JS, nor name a path on the
+    machine the driver runs on.
+
+    `upload_file` is the second one: `path` is read from the worker's own
+    filesystem, so a model choosing it could upload anything the worker can read
+    to a site it controls. Exposing it safely needs a caller-supplied allowlist,
+    which does not exist yet -- until it does, the verb stays wire-only.
+    """
+
     registry = browser_tools()
-    assert registry["browser.execute_js"].safety == "sensitive"
-    assert registry["browser.execute_js"].agent_fields is None
-    for tab_verb in ("new_tab", "close_tab", "switch_tab", "list_tabs"):
-        assert registry[f"browser.{tab_verb}"].agent_fields is None
+    for sensitive in ("execute_js", "upload_file"):
+        assert registry[f"browser.{sensitive}"].safety == "sensitive"
+        assert registry[f"browser.{sensitive}"].agent_fields is None
+
+
+def test_tab_management_is_agent_exposed() -> None:
+    """Ported from browser-use, which offers these to the model.
+
+    A link that opens a new tab, a checkout that pops one, comparing two pages --
+    all ordinary, and all unreachable while these were wire-only. `list_tabs`
+    stays out because every observation already carries the tab list.
+    """
+
+    registry = browser_tools()
+    for tab_verb in ("new_tab", "close_tab", "switch_tab"):
+        assert registry[f"browser.{tab_verb}"].agent_fields is not None
+    assert registry["browser.list_tabs"].agent_fields is None
 
 
 def test_subset_filters_by_name_and_exclusion() -> None:

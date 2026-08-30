@@ -311,13 +311,22 @@ async def run_agent_loop(
                         redact_secrets(v, sensitive_data) for v in dispatch_result.verifications
                     ]
                     action_results.extend(verifications)
+                    # What a query action was asked to fetch (`search_page`,
+                    # `find_elements`, `dropdown_options`). Kept separate from
+                    # verifications by the driver, but both are things the model
+                    # needs to read before its next step.
+                    action_results.extend(
+                        redact_secrets(r, sensitive_data) for r in dispatch_result.readouts
+                    )
                     if dispatch_result.sequence_aborted:
                         step_outcome = "sequence_aborted"
                         action_results.append(
                             "one or more actions in this step were skipped: an earlier action "
                             "unexpectedly changed the page -- re-observe before continuing"
                         )
-                    elif not verifications:
+                    elif not action_results:
+                        # Only when the step produced nothing to read at all --
+                        # a readout is already a better answer than "it worked".
                         action_results.append("actions dispatched successfully")
                     breaker.reset()  # progress -> clear consecutive-failure history
                 except StaleRefError as exc:
