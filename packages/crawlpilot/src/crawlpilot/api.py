@@ -34,6 +34,7 @@ import tempfile
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -197,8 +198,38 @@ class Browser:
         extensions: Sequence[Extension] = (),
         profiles_root: Path | None = None,
         lease_ttl_seconds: float = DEFAULT_LEASE_TTL_SECONDS,
+        executable_path: str | Path | None = None,
+        channel: str | None = None,
+        headless: bool | None = None,
+        cdp_url: str | None = None,
     ) -> None:
-        self.config = config or DEFAULTS
+        """The launch arguments are flat rather than requiring a `BrowserConfig`.
+
+        `executable_path` / `channel` / `headless` / `cdp_url` are what a user
+        actually reaches for -- "use my Chrome", "use the browser in that
+        container" -- and making them assemble a nested config object to say so
+        is the difference between a one-liner and a paragraph. They override the
+        matching fields on `config.launch`, so a platform that builds its config
+        from the environment still works unchanged.
+        """
+
+        base = config or DEFAULTS
+        self.config = replace(
+            base,
+            launch=replace(
+                base.launch,
+                **{
+                    k: v
+                    for k, v in (
+                        ("executable_path", str(executable_path) if executable_path else None),
+                        ("channel", channel),
+                        ("headless", headless),
+                        ("cdp_url", cdp_url),
+                    )
+                    if v is not None
+                },
+            ),
+        )
         self.lease_ttl_seconds = lease_ttl_seconds
 
         # In-process by default. Correct for one process; a multi-worker
@@ -242,9 +273,33 @@ class Browser:
 
             self._launcher = ProcessLauncher()
             self._driver = PatchrightDriver(
-                self._launcher, block_hooks=self.extensions.blocks
+                self._launcher,
+                block_hooks=self.extensions.blocks,
+                launch=self.config.launch,
             )
         return self._driver
+
+    @classmethod
+    def from_system_chrome(cls, **kwargs: Any) -> Browser:
+        """A `Browser` pinned to the Google Chrome installed on this machine.
+
+        The same thing the default resolution order arrives at, said explicitly:
+        it fails loudly here if Chrome is absent, rather than quietly falling
+        through to a bundled Chromium. Useful when the *point* is real Chrome --
+        a site that fingerprints the browser build, or a debugging session you
+        want to compare against your own browser.
+        """
+
+        from crawlpilot.driver.browser_discovery import (  # noqa: PLC0415
+            INSTALL_HINT,
+            BrowserNotFound,
+            find_system_browser,
+        )
+
+        executable = find_system_browser()
+        if executable is None:
+            raise BrowserNotFound(f"no system Chrome found. {INSTALL_HINT}")
+        return cls(executable_path=executable, **kwargs)
 
     async def __aenter__(self) -> Browser:
         return self

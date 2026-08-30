@@ -47,7 +47,8 @@ from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from crawlpilot import metrics
-from crawlpilot.driver import cdp_element, humanize, mouse, warmup
+from crawlpilot.config import LaunchConfig
+from crawlpilot.driver import browser_discovery, cdp_element, humanize, mouse, warmup
 from crawlpilot.driver.dom_fusion_engine import capture_fused_tree
 from crawlpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
@@ -261,6 +262,53 @@ def _jitter(value: float) -> float:
     return value * (1 + random.uniform(-_SCROLL_JITTER_FRAC, _SCROLL_JITTER_FRAC))
 
 
+def _launch_target(launch: browser_discovery.Launch) -> dict[str, str]:
+    """The one launch kwarg that names the browser.
+
+    `channel` and `executable_path` are mutually exclusive in Playwright --
+    passing both is an error rather than a preference — so `Launch` carries
+    exactly one and this turns it into the right kwarg.
+    """
+
+    if launch.channel is not None:
+        return {"channel": launch.channel}
+    assert launch.executable_path is not None
+    return {"executable_path": launch.executable_path}
+
+
+async def _resolve_cdp_url(url: str) -> str:
+    """Turn a CDP endpoint into something `connect_over_cdp` accepts.
+
+    A `ws://` URL is already the websocket. An `http://` one is the discovery
+    endpoint, and Playwright can take it directly -- but resolving
+    `/json/version` ourselves gives a clear, early error naming the URL when
+    nothing is listening, instead of a timeout deep inside the connect.
+    """
+
+    if url.startswith("ws://") or url.startswith("wss://"):
+        return url
+
+    base = url.rstrip("/")
+    version = base if base.endswith("/json/version") else f"{base}/json/version"
+    host = httpx.URL(version).host
+    try:
+        # `trust_env=False` for loopback: an ambient HTTP_PROXY would otherwise
+        # send a request for 127.0.0.1 through a proxy that cannot route it.
+        local = host in ("localhost", "127.0.0.1", "::1")
+        async with httpx.AsyncClient(timeout=5.0, trust_env=not local) as client:
+            payload = (await client.get(version)).json()
+    except Exception as exc:
+        raise ContextCrashed(
+            f"no browser answering at {url!r}: {exc}. Check the browser is "
+            "running and its remote-debugging port is reachable from here."
+        ) from exc
+
+    websocket = payload.get("webSocketDebuggerUrl")
+    if not websocket:
+        raise ContextCrashed(f"{version} returned no webSocketDebuggerUrl: {payload!r}")
+    return str(websocket)
+
+
 def _scroll_delta(
     direction: str, pages: float, width: float, height: float
 ) -> tuple[float, float]:
@@ -350,6 +398,14 @@ class _Context:
     context: BrowserContext
     pages: dict[str, _Page]
     active_page_id: str
+    remote_browser: Any = None
+    """The `Browser` returned by `connect_over_cdp`, when this context attached
+    to a browser we did not launch.
+
+    Held so `close()` can disconnect the websocket without *killing the browser*:
+    a locally-launched context owns its Chrome and closing it should end the
+    process, but a remote one is shared -- terminating someone else's browser
+    because one client finished would be a surprising thing for a library to do."""
     max_tabs: int = DEFAULT_MAX_TABS_PER_SESSION
     alive: bool = True
     death_reason: str | None = None
@@ -477,10 +533,14 @@ class PatchrightDriver:
         node_id: str = "local",
         block_hooks: BlockHooks | None = None,
         cross_origin_iframes: bool = True,
+        launch: LaunchConfig | None = None,
     ) -> None:
         self._launcher = launcher
         self._max_tabs_per_session = max_tabs_per_session
         self._node_id = node_id
+        self._launch = launch or LaunchConfig()
+        """Which browser to drive, and whether to launch one at all. Defaults to
+        "work it out" -- see `driver.browser_discovery`."""
         # Per-site block detection is contributed by extensions now, not
         # auto-installed at import (plan D12). `None` means the generic
         # classifier only -- correct for a caller that registered nothing.
@@ -590,20 +650,39 @@ class PatchrightDriver:
         # display-less container it degrades to headless rather than failing to
         # launch -- the enhanced tier still keeps its fingerprint + warm-up, it
         # just can't add the (headful-only) OS-level input path yet.
-        effective_headful = headful and self._launcher.ensure_display()
-        if headful and not effective_headful:
+        # An explicit `headless=` on the launch config wins over the per-open
+        # `headful` flag: the caller configured the browser, the session layer
+        # only expressed a preference. `None` leaves the preference intact,
+        # which is what makes it a tri-state rather than a default of False.
+        want_headful = headful if self._launch.headless is None else not self._launch.headless
+        effective_headful = want_headful and self._launcher.ensure_display()
+        if want_headful and not effective_headful:
             log.info("driver.headful_downgraded_no_display", context=str(profile_dir))
 
         playwright = await self._launcher.get_playwright()
-        context = await playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            channel="chrome",
-            headless=not effective_headful,
-            no_viewport=True,
-            proxy=_proxy_settings(proxy),
-            args=launch_args,
-            **context_kwargs,
-        )
+        remote = None
+        if self._launch.cdp_url:
+            context, remote = await self._attach_remote(playwright, context_kwargs)
+        else:
+            launch = browser_discovery.resolve_browser(
+                executable_path=self._launch.executable_path,
+                channel=self._launch.channel,
+            )
+            log.info(
+                "driver.browser_resolved",
+                source=launch.source,
+                channel=launch.channel,
+                executable=launch.executable_path,
+            )
+            context = await playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=not effective_headful,
+                no_viewport=True,
+                proxy=_proxy_settings(proxy),
+                args=launch_args,
+                **_launch_target(launch),
+                **context_kwargs,
+            )
         if init_script is not None:
             # Context-level: applies to every page (current + future) before any
             # page script runs -- the pinned per-identity fingerprint's
@@ -619,7 +698,7 @@ class PatchrightDriver:
             await self._install_resource_blocking(
                 context, tuple(block_resource_types or ()), tuple(block_hosts or ())
             )
-        if enable_cdp:
+        if enable_cdp and remote is None:
             assert cdp_port is not None
             await _wait_for_cdp_ready(cdp_port)
         page = context.pages[0] if context.pages else await context.new_page()
@@ -628,11 +707,18 @@ class PatchrightDriver:
         page_id = str(uuid.uuid4())
         cctx = _Context(
             context=context,
+            remote_browser=remote,
             pages={page_id: _Page(page=page)},
             active_page_id=page_id,
             max_tabs=self._max_tabs_per_session,
             block_popups=block_popups,
-            cdp_http_base=f"http://127.0.0.1:{cdp_port}" if enable_cdp else None,
+            # A remote browser already has whatever debugging endpoint its owner
+            # gave it; we did not open one and must not advertise ours.
+            cdp_http_base=(
+                self._launch.cdp_url
+                if remote is not None
+                else (f"http://127.0.0.1:{cdp_port}" if enable_cdp else None)
+            ),
             warmup=warmup,
             detect_blocks=detect_blocks,
             delay_policy=(
@@ -713,8 +799,22 @@ class PatchrightDriver:
         cctx = self._contexts.pop(ctx.context_id, None)
         if cctx is None:
             return
-        if cctx.alive:
-            await cctx.context.close()
+        for live in cctx.pages.values():
+            for session in live.frame_sessions.values():
+                with contextlib.suppress(Exception):
+                    await session.detach()
+            live.frame_sessions.clear()
+        if not cctx.alive:
+            return
+        if cctx.remote_browser is not None:
+            # Detach, don't destroy. We attached to a browser someone else runs
+            # and may still be using; closing its context would take their pages
+            # with it. `browser.close()` on a connect_over_cdp browser
+            # disconnects the websocket and leaves Chrome running.
+            with contextlib.suppress(Exception):
+                await cctx.remote_browser.close()
+            return
+        await cctx.context.close()
 
     @staticmethod
     def _pid_alive(pid: int | None) -> bool:
@@ -1483,6 +1583,45 @@ class PatchrightDriver:
             await cdp_element.click_at(cdp, *point, click_count=3)
         await cdp_element.press_key(cdp, "ControlOrMeta+a")
         await cdp_element.press_key(cdp, "Delete")
+
+    async def _attach_remote(
+        self, playwright: Any, context_kwargs: dict[str, Any]
+    ) -> tuple[BrowserContext, Any]:
+        """Attach to a browser someone else is running, over CDP.
+
+        This is the deployment shape where the browser lives in its own
+        container: the client library and Chrome scale, crash and restart
+        independently, and one browser can be shared. Everything downstream --
+        pages, the node index, `cdp_element` -- is unchanged, because they only
+        ever touch Playwright objects and those are the same either way.
+
+        **What does not carry over, and is deliberately not faked.** A remote
+        browser was launched by someone else, so the profile directory, the
+        pinned fingerprint's launch arguments and the proxy are already decided
+        and cannot be applied from here. Only the context-level settings that
+        Playwright can still set on an existing browser (locale, timezone, user
+        agent) are passed. A caller asking for a stealth tier over `cdp_url` is
+        getting a weaker guarantee than the same tier locally, so it is logged
+        rather than left to be discovered from behaviour.
+        """
+
+        url = await _resolve_cdp_url(self._launch.cdp_url or "")
+        browser = await playwright.chromium.connect_over_cdp(url)
+
+        # An already-running browser normally has a context; reuse it so we
+        # inherit its cookies and storage rather than starting beside them in a
+        # fresh incognito context the user cannot see.
+        if browser.contexts:
+            context = browser.contexts[0]
+            if context_kwargs:
+                log.info(
+                    "driver.remote_context_settings_skipped",
+                    cdp_url=url,
+                    skipped=sorted(context_kwargs),
+                )
+        else:
+            context = await browser.new_context(**context_kwargs)
+        return context, browser
 
     async def _page_session(self, live: _Page) -> CDPSession:
         """This tab's CDP session, created once and kept.
