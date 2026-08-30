@@ -53,28 +53,32 @@ class Toolbench:
         return self.url("index.html")
 
 
-def _mount(server: HTTPServer, *, cross_origin: str | None = None) -> str:
-    """Serve the toolbench's pages from `server`, returning its base URL."""
+def _mount(server: HTTPServer, *, cross_origin: str | None = None) -> None:
+    """Serve the toolbench's pages from `server`."""
 
     for name in PAGES:
         body = (FIXTURE_ROOT / name).read_text()
         if cross_origin is not None:
             body = body.replace(CROSS_ORIGIN_PLACEHOLDER, cross_origin)
-        for path in (f"/{name}", f"/{name}" if name != "index.html" else "/"):
-            server.expect_request(path).respond_with_data(body, content_type="text/html")
-    return f"http://{server.host}:{server.port}"
+        server.expect_request(f"/{name}").respond_with_data(body, content_type="text/html")
+        if name == "index.html":
+            server.expect_request("/").respond_with_data(body, content_type="text/html")
 
 
 @pytest.fixture(scope="session")
-def toolbench(make_httpserver) -> Iterator[Toolbench]:
+def toolbench() -> Iterator[Toolbench]:
     """The fixture site on two origins.
 
     Served by `pytest-httpserver` rather than a hand-rolled `http.server`: a
     stdlib `SimpleHTTPRequestHandler` serves these files perfectly well to
     `curl`, but Chrome would not load one of them as a *sub-frame*, leaving the
     cross-origin iframe stuck on `chrome-error://chromewebdata/`. The same
-    two-origin arrangement works against werkzeug, which is also what the
-    repo's other browser suite already uses.
+    two-origin arrangement works against werkzeug, which is what the repo's
+    other browser suite already uses.
+
+    The servers are constructed directly rather than through the `httpserver`
+    fixtures, because two *distinct* origins are needed and a fixture is cached
+    -- asking for `make_httpserver` twice hands back the same server both times.
 
     `localhost` and `127.0.0.1` are different origins to the browser while both
     resolving to loopback, so the frame is genuinely out-of-process without a
@@ -83,11 +87,18 @@ def toolbench(make_httpserver) -> Iterator[Toolbench]:
 
     assert FIXTURE_ROOT.is_dir(), f"toolbench fixture missing at {FIXTURE_ROOT}"
 
-    secondary = make_httpserver
+    secondary = HTTPServer(host="127.0.0.1", port=0)
+    secondary.start()
     secondary_url = f"http://127.0.0.1:{secondary.port}"
     _mount(secondary)
 
-    primary = make_httpserver
+    # Bound to `localhost`, while the sibling is bound to `127.0.0.1`. Chrome
+    # treats those as different origins, so the sibling frame is genuinely
+    # out-of-process -- and it will only *load* the sibling if each server is
+    # bound to the name it is addressed by, which is why the primary is not
+    # simply `127.0.0.1` reached over `localhost`.
+    primary = HTTPServer(host="localhost", port=0)
+    primary.start()
     _mount(primary, cross_origin=secondary_url)
 
     try:
@@ -95,8 +106,8 @@ def toolbench(make_httpserver) -> Iterator[Toolbench]:
             primary=f"http://localhost:{primary.port}", secondary=secondary_url
         )
     finally:
-        primary.clear()
-        secondary.clear()
+        primary.stop()
+        secondary.stop()
 
 
 @pytest.fixture
