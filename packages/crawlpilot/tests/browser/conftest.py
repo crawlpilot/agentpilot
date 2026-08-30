@@ -18,11 +18,11 @@ from __future__ import annotations
 import functools
 import http.server
 import io
+import pathlib
 import socketserver
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
-import pathlib
 from pathlib import Path
 
 import pytest

@@ -255,7 +255,6 @@ async def test_interact_inside_a_cross_origin_iframe(page, toolbench) -> None:
     renderer, whose document never appears in the host's DOM."""
 
     await page.navigate(toolbench.index)
-    refs = await _refs(page)
 
     # Both frames expose `frame-field`; the second belongs to the cross-origin
     # one, whose document never appears in the host's DOM at all.
@@ -406,20 +405,34 @@ async def test_find_elements_reads_repeated_structure(page, toolbench) -> None:
     assert "Row 1" in readout and "Row 8" in readout
 
 
-async def test_scroll_pages_scales_and_scrolls_a_container(page, toolbench) -> None:
+async def test_scroll_pages_scales_with_the_viewport(page, toolbench) -> None:
+    """`pages` is what lets one action cover a long list instead of one action
+    per screenful."""
+
     await page.navigate(toolbench.index)
 
     await page.scroll("down", pages=0.5)
     half = await page.execute_js("window.scrollY")
+
     await page.execute_js("window.scrollTo(0, 0)")
     await page.scroll("down", pages=2.0)
+
     assert 0 < half < await page.execute_js("window.scrollY")
 
-    # An element's own overflow, which scrolling the page cannot move.
-    await page.execute_js("window.scrollTo(0, 0)")
+
+async def test_scroll_moves_an_elements_own_overflow(page, toolbench) -> None:
+    """A dropdown list, a virtualised table: scrolling the page does not move
+    them, which is why `scroll` takes a `ref` at all."""
+
+    await page.navigate(toolbench.index)
     refs = await _refs(page)
+
+    before = await page.execute_js("window.scrollY")
     await page.scroll("down", ref=refs["scrollbox"])
+
     assert await page.execute_js("document.getElementById('scrollbox').scrollTop") > 0
+    # ...and the page itself did not move instead of it.
+    assert await page.execute_js("window.scrollY") == before
 
 
 async def test_fill_replaces_by_default_and_appends_on_request(page, toolbench) -> None:

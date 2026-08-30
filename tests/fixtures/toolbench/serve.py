@@ -21,10 +21,10 @@ import functools
 import http.server
 import io
 import os
+import pathlib
 import socketserver
 import sys
 import threading
-import pathlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent

@@ -1395,9 +1395,36 @@ class PatchrightDriver:
         """
 
         box = await cdp_element.element_box(cdp, node, ref)
-        target = await self._approach(cdp, box)
+        await self._approach(cdp, box)
         await policy.pause("click")
+
+        # Re-measure immediately before pressing. The approach above is
+        # deliberately unhurried -- interpolated moves with jittered sleeps, then
+        # a dwell -- which puts a few hundred milliseconds between measuring the
+        # element and clicking it. That is ample time for a lazy image, a late
+        # font or a settling layout to move the target, and the click then lands
+        # on whatever slid into its place: an action that reports success and
+        # does something else, or nothing.
+        target = await self._aim(cdp, node, ref, box)
         await cdp_element.click_at(cdp, *target)
+
+    async def _aim(
+        self,
+        cdp: CDPSession,
+        node: EnhancedDOMTreeNode,
+        ref: str,
+        fallback: mouse.Box,
+    ) -> tuple[float, float]:
+        """The point to click, measured now. Falls back to the earlier box if the
+        element has stopped reporting geometry -- better a click at the last
+        known position than an action that fails outright."""
+
+        try:
+            box = await cdp_element.element_box(cdp, node, ref)
+        except Exception:
+            box = fallback
+        width, height = await cdp_element.viewport_size(cdp)
+        return cdp_element.clamp(mouse.jittered_point_in(box), width, height)
 
     async def _human_fill(
         self,
