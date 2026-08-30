@@ -15,19 +15,24 @@ Chrome-free. Run it with `-m browser`.
 
 from __future__ import annotations
 
-import functools
-import http.server
-import io
-import pathlib
-import socketserver
-import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from pytest_httpserver import HTTPServer
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "toolbench"
+
+PAGES = ("index.html", "article.html", "frame_inner.html", "form_target.html")
+
+CROSS_ORIGIN_PLACEHOLDER = "__CROSS_ORIGIN__"
+"""Stands in for the sibling origin's base URL inside `index.html`.
+
+The port is only known once the server is bound, and the cross-origin iframe's
+`src` has to be a real attribute at parse time -- a frame whose src JavaScript
+assigns afterwards behaves differently, and exercising the out-of-process path is
+the whole reason that iframe exists."""
 
 
 @dataclass(frozen=True)
@@ -37,112 +42,70 @@ class Toolbench:
     primary: str
     secondary: str
 
-    def url(self, page: str = "index.html", **params: str) -> str:
-        query = "&".join(f"{k}={v}" for k, v in params.items())
-        return f"{self.primary}/{page}" + (f"?{query}" if query else "")
+    def url(self, page: str = "index.html") -> str:
+        return f"{self.primary}/{page}"
 
     @property
     def index(self) -> str:
-        """The main page. Its cross-origin iframe already points at the sibling
-        origin -- the server substitutes it into the markup, so the `src` is a
-        real attribute at parse time."""
+        """The main page, with its cross-origin iframe already pointing at the
+        sibling origin."""
 
         return self.url("index.html")
 
 
-class _Handler(http.server.SimpleHTTPRequestHandler):
-    # HTTP/1.1, not the stdlib default of 1.0. A browser opens several
-    # connections per origin and keeps them alive; against an HTTP/1.0 server
-    # that closes after every response, some of those requests are simply lost
-    # -- which shows up as an iframe stuck on `chrome-error://chromewebdata/`
-    # while `curl` on the same URL is perfectly happy.
-    protocol_version = "HTTP/1.1"
+def _mount(server: HTTPServer, *, cross_origin: str | None = None) -> str:
+    """Serve the toolbench's pages from `server`, returning its base URL."""
 
-    def __init__(self, *args: object, cross_origin: str | None = None, **kwargs: object) -> None:
-        self.cross_origin = cross_origin
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-
-    def log_message(self, *args: object) -> None:
-        pass
-
-    def send_head(self):  # noqa: ANN201 - matches the stdlib signature
-        """Substitute the cross-origin placeholder on the way out.
-
-        The sibling origin's port is only known once the server is bound, and
-        the iframe's `src` has to be a real attribute at parse time -- assigning
-        it from JS afterwards produces a frame Chrome treats differently, and
-        this fixture exists precisely to exercise the out-of-process path.
-        """
-
-        path = self.translate_path(self.path)
-        if not path.endswith("index.html") or self.cross_origin is None:
-            return super().send_head()
-
-        body = (
-            pathlib.Path(path)
-            .read_text()
-            .replace("__CROSS_ORIGIN__", self.cross_origin)
-            .encode()
-        )
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        return io.BytesIO(body)
-
-
-    def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
-        super().end_headers()
-
-
-class _Server(socketserver.ThreadingTCPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-    # Otherwise teardown waits out every keep-alive socket the browser is still
-    # holding, and the suite looks like it hung.
-    block_on_close = False
-
-
-def _serve(cross_origin: str | None = None) -> tuple[_Server, int]:
-    handler = functools.partial(
-        _Handler, directory=str(FIXTURE_ROOT), cross_origin=cross_origin
-    )
-    server = _Server(("127.0.0.1", 0), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server, server.server_address[1]
+    for name in PAGES:
+        body = (FIXTURE_ROOT / name).read_text()
+        if cross_origin is not None:
+            body = body.replace(CROSS_ORIGIN_PLACEHOLDER, cross_origin)
+        for path in (f"/{name}", f"/{name}" if name != "index.html" else "/"):
+            server.expect_request(path).respond_with_data(body, content_type="text/html")
+    return f"http://{server.host}:{server.port}"
 
 
 @pytest.fixture(scope="session")
-def toolbench() -> Iterator[Toolbench]:
-    """The fixture site on two ports.
+def toolbench(make_httpserver) -> Iterator[Toolbench]:
+    """The fixture site on two origins.
+
+    Served by `pytest-httpserver` rather than a hand-rolled `http.server`: a
+    stdlib `SimpleHTTPRequestHandler` serves these files perfectly well to
+    `curl`, but Chrome would not load one of them as a *sub-frame*, leaving the
+    cross-origin iframe stuck on `chrome-error://chromewebdata/`. The same
+    two-origin arrangement works against werkzeug, which is also what the
+    repo's other browser suite already uses.
 
     `localhost` and `127.0.0.1` are different origins to the browser while both
-    resolving to loopback, which is what makes the cross-origin iframe genuinely
-    out-of-process without a second machine or any DNS.
+    resolving to loopback, so the frame is genuinely out-of-process without a
+    second machine or any DNS.
     """
 
     assert FIXTURE_ROOT.is_dir(), f"toolbench fixture missing at {FIXTURE_ROOT}"
-    # The sibling has to exist before the primary can be told about it.
-    secondary, secondary_port = _serve()
-    secondary_url = f"http://127.0.0.1:{secondary_port}"
-    primary, primary_port = _serve(cross_origin=secondary_url)
+
+    secondary = make_httpserver
+    secondary_url = f"http://127.0.0.1:{secondary.port}"
+    _mount(secondary)
+
+    primary = make_httpserver
+    _mount(primary, cross_origin=secondary_url)
+
     try:
         yield Toolbench(
-            primary=f"http://localhost:{primary_port}",
-            secondary=secondary_url,
+            primary=f"http://localhost:{primary.port}", secondary=secondary_url
         )
     finally:
-        primary.shutdown()
-        secondary.shutdown()
+        primary.clear()
+        secondary.clear()
 
 
 @pytest.fixture
 async def browser(tmp_path: Path):
     """A `Browser` with a profile root that dies with the test.
 
-    Constructed with no launch arguments on purpose: this is the discovery path
-    a new user hits, so every test in the suite exercises it.
+    Constructed with no launch arguments beyond `headless`, on purpose: the
+    browser-discovery path is the one a new user hits first, so every test in
+    the suite exercises it.
     """
 
     from crawlpilot.api import Browser  # noqa: PLC0415 -- keeps collection Chrome-free
