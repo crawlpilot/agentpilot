@@ -1,17 +1,17 @@
-"""Pure unit test for `agentpilot.session.ephemeral._build_batch` -- no
+"""Pure unit test for `crawlpilot.session.ephemeral._build_batch` -- no
 browser, no network: confirms `ScrapeOptions.include_tags`/`exclude_tags`
 actually reach the `ExtractAction`s it builds (the wiring gap the
 Firecrawl-pipeline port closes)."""
 
 from __future__ import annotations
 
-from agentpilot.session.ephemeral import (
+from crawlpilot.session.ephemeral import (
     _build_batch,
     _effective_formats,
     _search_engine_referer,
 )
-from agentpilot.spi.actions import ExtractAction, NavigateAction
-from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
+from crawlpilot.spi.actions import ExtractAction, NavigateAction
+from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 
 def test_build_batch_threads_include_and_exclude_tags_into_extract_actions() -> None:

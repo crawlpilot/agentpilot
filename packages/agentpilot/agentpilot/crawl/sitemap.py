@@ -13,9 +13,9 @@ from xml.etree import ElementTree
 
 import httpx
 
-from agentpilot.egress.httpx_guard import guarded_get
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import EgressBlocked
+from crawlpilot.egress.httpx_guard import guarded_get
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import EgressBlocked
 
 # Safety cap on the number of sitemap documents followed for one discovery
 # call, mirroring Firecrawl's own bound against a malicious/misconfigured

@@ -31,9 +31,9 @@ from typing import Any
 import structlog
 from patchright.async_api import Page
 
-from agentpilot.driver import mouse
-from agentpilot.driver.humanize import DelayPolicy
-from agentpilot.extraction import block_detect
+from crawlpilot.driver import mouse
+from crawlpilot.driver.humanize import DelayPolicy
+from crawlpilot.extraction import block_detect
 
 log = structlog.get_logger(__name__)
 

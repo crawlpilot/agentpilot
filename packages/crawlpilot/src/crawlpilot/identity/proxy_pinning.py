@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import hashlib
 
-from agentpilot.identity.proxy_health import ProxyHealth
-from agentpilot.policy import ProxyProvider, StateStore, StaticProxies
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.identity.proxy_health import ProxyHealth
+from crawlpilot.policy import ProxyProvider, StateStore, StaticProxies
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxy:"
 _FIELD = "endpoint"

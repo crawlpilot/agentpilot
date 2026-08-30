@@ -7,9 +7,9 @@ to already be `en-US`/`America/*` can't make this pass by accident."""
 from __future__ import annotations
 
 from agentpilot.control.identity import identity_for
-from agentpilot.driver.patchright_driver import PatchrightDriver
-from agentpilot.spi.actions import ExecuteJsAction
-from agentpilot.spi.egress import EgressPolicy
+from crawlpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.spi.actions import ExecuteJsAction
+from crawlpilot.spi.egress import EgressPolicy
 
 _PROBE = (
     "() => [navigator.language, "

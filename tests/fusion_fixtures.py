@@ -7,8 +7,8 @@ a node is addressable as `e<backendNodeId>` and carries its accessibility
 
 from __future__ import annotations
 
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 
 def fnode(

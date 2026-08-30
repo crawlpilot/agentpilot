@@ -2,7 +2,7 @@
 `wiring.placer` places this one-shot scrape on (the real logic is
 `routes/scrape.py`, proxied here to that worker's `/internal/scrape`).
 Mounted **instead of** `routes/scrape.py` when `wiring.role == "gateway"`
-(see `app.py`) -- a gateway process never imports/touches `agentpilot.driver`.
+(see `app.py`) -- a gateway process never imports/touches `crawlpilot.driver`.
 
 Simpler than `gateway_proxy.py`'s `open_session`: that route is necessarily
 two-phase (reserve a node, proxy, *then* commit a route) because the worker
@@ -43,7 +43,7 @@ from agentpilot.gateway.routing import resolve_node_addr
 from agentpilot.gateway.schemas import ScrapeRequest
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
-from agentpilot.spi.errors import NodeLost
+from crawlpilot.spi.errors import NodeLost
 
 log = structlog.get_logger(__name__)
 

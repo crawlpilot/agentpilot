@@ -29,8 +29,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from agentpilot.extensions import BlockHooks, ExtensionManifest
-from agentpilot.extraction.block_detect import SiteChecker, Verdict, has_known_wall_marker
+from crawlpilot.extensions import BlockHooks, ExtensionManifest
+from crawlpilot.extraction.block_detect import SiteChecker, Verdict, has_known_wall_marker
 
 # Amazon CAPTCHA prompt (AmazonHtmlIntegrityChecker.kt:120): a *short* page
 # carrying this exact prompt is a robot check.

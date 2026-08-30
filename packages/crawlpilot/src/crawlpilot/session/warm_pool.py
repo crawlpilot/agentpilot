@@ -30,14 +30,14 @@ from pathlib import Path
 
 import structlog
 
-from agentpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
-from agentpilot.session.reaper import read_meminfo_used_pct
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityRef, ProfileKind
-from agentpilot.spi.lease import ContextRef
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.identity.profile_store import delete_profile_dir, resolve_profile_dir
+from crawlpilot.session.reaper import read_meminfo_used_pct
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.lease import ContextRef
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 log = structlog.get_logger(__name__)
 
@@ -270,7 +270,7 @@ class KeepaliveLoop:
             await asyncio.sleep(self.interval_seconds)
 
     async def tick(self) -> None:
-        from agentpilot.spi.lease import ContextState
+        from crawlpilot.spi.lease import ContextState
 
         for identity, ctx, _lease, _released_at in await self._registry.snapshot():
             if ctx.state is not ContextState.IDLE:

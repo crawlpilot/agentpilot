@@ -20,7 +20,7 @@ compensating-transaction mechanism).
 **What lives where**: this class stores only registry *bookkeeping*
 (`context_id`, `state`, `pid`, `node_id`, lease fields) in Redis --
 never a live Playwright/Patchright object, which still can't leave
-`agentpilot.driver`. The actual browser resources stay in the worker process's
+`crawlpilot.driver`. The actual browser resources stay in the worker process's
 `PatchrightDriver._live` dict, keyed by `context_id`; Redis's job is making
 the identity -> context_id mapping and the <=1-ACTIVE invariant shared and
 crash-resilient across restarts (and, once >1 worker exists, across nodes).
@@ -39,10 +39,10 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from agentpilot.control.identity import identity_for, parts_of
-from agentpilot.session.registry import Opener
-from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
+from crawlpilot.session.registry import Opener
+from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
 def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:

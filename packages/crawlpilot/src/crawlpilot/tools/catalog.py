@@ -15,8 +15,8 @@ from typing import Literal
 from pydantic import Field as PydanticField
 from pydantic import field_validator
 
-from agentpilot.spi import actions as sa
-from agentpilot.tools.spec import REF_DESCRIPTION, ToolSpec
+from crawlpilot.spi import actions as sa
+from crawlpilot.tools.spec import REF_DESCRIPTION, ToolSpec
 
 _REF = {"ref": REF_DESCRIPTION}
 

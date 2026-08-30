@@ -1,14 +1,14 @@
 """Unit tests for the pure fusion builder in
-`agentpilot.driver.dom_fusion_engine` -- AX flattening, attribute conversion,
+`crawlpilot.driver.dom_fusion_engine` -- AX flattening, attribute conversion,
 shadow/child separation, iframe coordinate offset, and viewport visibility.
 Synthetic CDP payloads only; no browser, no async."""
 
 from __future__ import annotations
 
-from agentpilot.driver.dom_fusion import LayoutInfo
-from agentpilot.driver.dom_fusion_engine import build_ax_lookup, build_enhanced_tree
-from agentpilot.spi.dom_tree import NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.driver.dom_fusion import LayoutInfo
+from crawlpilot.driver.dom_fusion_engine import build_ax_lookup, build_enhanced_tree
+from crawlpilot.spi.dom_tree import NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 
 def _rect(x: float, y: float, w: float, h: float) -> BoundingBox:

@@ -22,11 +22,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agentpilot.dom import render
-from agentpilot.dom.clickable_elements import is_interactive
-from agentpilot.dom.paint_order import PaintEntry, compute_occluded
-from agentpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.dom import render
+from crawlpilot.dom.clickable_elements import is_interactive
+from crawlpilot.dom.paint_order import PaintEntry, compute_occluded
+from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 # Tags with no useful content for the agent -- pruned entirely.
 _DISABLED_TAGS = frozenset(

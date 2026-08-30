@@ -20,7 +20,7 @@ from agentpilot.auth.models import AuthedTenant
 from agentpilot.gateway.routes.crawl import cancel_crawl, create_crawl, get_crawl
 from agentpilot.gateway.schemas import CrawlRequest, WebhookIn
 from agentpilot.jobs.store import PostgresJobStore
-from agentpilot.spi.errors import JobNotFound
+from crawlpilot.spi.errors import JobNotFound
 
 _DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")
 

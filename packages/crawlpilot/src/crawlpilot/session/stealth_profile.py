@@ -17,11 +17,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.identity.fingerprint import generate as generate_fingerprint
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.tiers import TierPolicy
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.identity.fingerprint import generate as generate_fingerprint
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.tiers import TierPolicy
 
 
 @dataclass

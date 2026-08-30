@@ -27,8 +27,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 
-from agentpilot.dom.clickable_elements import is_interactive
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.dom.clickable_elements import is_interactive
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _STATE_PROPS = ("checked", "expanded", "pressed", "selected", "disabled")
 

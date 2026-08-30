@@ -24,10 +24,10 @@ from agentpilot.recipe.evaluate import evaluate_field_locator
 from agentpilot.recipe.models import FieldLocator
 from agentpilot.recipe.schema import FieldSpec
 from agentpilot.recipe.selector_synthesis import synthesize_css_candidates
-from agentpilot.session.interactive import InteractiveSession
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.interactive import InteractiveSession
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.driver import BrowserDriver
 
 # Preference order for the final candidate list: structured-data paths are the
 # most redesign-resilient, ax_role (accessibility) next, css last.

@@ -45,12 +45,12 @@ from agentpilot.observability.metrics import (
     agent_step_llm_latency_seconds,
     agent_steps_total,
 )
-from agentpilot.session.interactive import InteractiveSession, execute_on_session
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.errors import StaleRefError
+from crawlpilot.session.interactive import InteractiveSession, execute_on_session
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.errors import StaleRefError
 
 logger = structlog.get_logger(__name__)
 

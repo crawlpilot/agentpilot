@@ -18,7 +18,7 @@ arms of the layer graph and may not import each other -- can depend on it. An
 import-linter `forbidden` contract enforces that purity.
 """
 
-from agentpilot.tiers.policy import (
+from crawlpilot.tiers.policy import (
     ESCALATION,
     PROTECTED,
     Tier,

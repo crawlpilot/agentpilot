@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from agentpilot.config import ProfileConfig
+from crawlpilot.config import ProfileConfig
 from agentpilot.control.prototypes import DirectoryPrototypes
-from agentpilot.identity.profile_store import PROTOTYPE_ENV, seed_profile_dir
-from agentpilot.session.ephemeral import _build_batch, _site_root
-from agentpilot.spi.actions import NavigateAction
-from agentpilot.spi.scrape import ScrapeOptions
+from crawlpilot.identity.profile_store import PROTOTYPE_ENV, seed_profile_dir
+from crawlpilot.session.ephemeral import _build_batch, _site_root
+from crawlpilot.spi.actions import NavigateAction
+from crawlpilot.spi.scrape import ScrapeOptions
 
 
 @pytest.fixture(autouse=True)
@@ -219,7 +219,7 @@ def test_extract_actions_are_unaffected_by_the_extra_navigation() -> None:
     """`run_ephemeral_scrape` zips `_effective_formats` against
     `result.extracts`; an extra navigation must not perturb that pairing."""
 
-    from agentpilot.spi.actions import ExtractAction
+    from crawlpilot.spi.actions import ExtractAction
 
     options = ScrapeOptions(formats=("markdown", "html"))
     plain = _build_batch("https://x.test/a", options)

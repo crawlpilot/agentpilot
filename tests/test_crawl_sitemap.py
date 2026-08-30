@@ -9,7 +9,7 @@ import gzip
 from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl import sitemap
-from agentpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.egress import EgressPolicy
 
 POLICY = EgressPolicy()
 

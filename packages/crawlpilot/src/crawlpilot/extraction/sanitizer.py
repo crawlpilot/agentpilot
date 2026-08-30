@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 from lxml import html as lxml_html
 from lxml.html import HtmlElement
 
-from agentpilot.extraction import selectors
+from crawlpilot.extraction import selectors
 
 log = logging.getLogger(__name__)
 

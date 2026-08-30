@@ -8,7 +8,7 @@ node's accessibility data (`ax_role` / `ax_name`)."""
 
 from __future__ import annotations
 
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
 
 
 def node_ref(node: EnhancedDOMTreeNode) -> str:

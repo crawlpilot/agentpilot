@@ -22,8 +22,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 
 @runtime_checkable

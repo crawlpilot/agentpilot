@@ -1,9 +1,9 @@
-"""Unit tests for `agentpilot.spi.dom_tree.EnhancedDOMTreeNode` -- structural
+"""Unit tests for `crawlpilot.spi.dom_tree.EnhancedDOMTreeNode` -- structural
 identity, xpath, and shadow/child traversal built on synthetic nodes. No CDP."""
 
 from __future__ import annotations
 
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
 
 
 def _el(
@@ -48,7 +48,7 @@ def test_parent_branch_path_element_only() -> None:
 
 
 def test_stable_hash_matches_pure_hashing() -> None:
-    from agentpilot.spi import hashing
+    from crawlpilot.spi import hashing
 
     _, button = _tree()
     assert button.stable_hash() == hashing.stable_hash(

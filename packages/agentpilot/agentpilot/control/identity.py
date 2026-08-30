@@ -1,6 +1,6 @@
 """Composing and decomposing a multi-tenant `IdentityRef`.
 
-`agentpilot.spi.identity.IdentityRef` carries an opaque `key`; the browser layer
+`crawlpilot.spi.identity.IdentityRef` carries an opaque `key`; the browser layer
 never parses it. This module is where the platform's meaning lives: an identity
 is `(tenant, domain, name)`, rendered as `"tenant/domain/name"`.
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agentpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
 
 
 @dataclass(frozen=True)

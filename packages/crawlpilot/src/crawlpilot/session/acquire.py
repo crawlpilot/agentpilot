@@ -17,11 +17,11 @@ import contextlib
 
 import structlog
 
-from agentpilot.session.registry import Opener, RegistryProtocol
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.errors import ContextCrashed
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, Lease
+from crawlpilot.session.registry import Opener, RegistryProtocol
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.errors import ContextCrashed
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, Lease
 
 log = structlog.get_logger(__name__)
 

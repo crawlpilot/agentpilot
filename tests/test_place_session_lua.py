@@ -10,7 +10,7 @@ import pytest
 
 from agentpilot.control.identity import identity_for
 from agentpilot.placement.placer import SessionPlacer
-from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
+from crawlpilot.spi.errors import CapacityExhausted, LeaseConflict
 
 IDENTITY = identity_for("t", "example.com", "a")
 

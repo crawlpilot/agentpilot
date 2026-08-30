@@ -17,8 +17,8 @@ from redis.exceptions import ResponseError
 
 from agentpilot.control.identity import parts_of
 from agentpilot.observability.metrics import placement_decisions_total
-from agentpilot.spi.errors import CapacityExhausted, LeaseConflict
-from agentpilot.spi.identity import IdentityRef
+from crawlpilot.spi.errors import CapacityExhausted, LeaseConflict
+from crawlpilot.spi.identity import IdentityRef
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
 

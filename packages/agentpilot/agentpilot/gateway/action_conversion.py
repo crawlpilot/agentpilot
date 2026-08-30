@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentpilot.spi import actions as spi_actions
-from agentpilot.tools import BY_NAME
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.tools import BY_NAME
 
 
 def to_spi_action(action_in: Any) -> spi_actions.Action:

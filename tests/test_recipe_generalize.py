@@ -5,7 +5,7 @@ given a static fused-tree fixture. No browser."""
 from __future__ import annotations
 
 from agentpilot.recipe.generalize import generalize_option_locator, single_option_fallback
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from tests.fusion_fixtures import fnode
 
 

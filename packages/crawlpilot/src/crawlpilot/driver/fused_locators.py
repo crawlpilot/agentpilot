@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 # Locator kinds the resolver understands.
 #   "css"   -> page.locator(value)

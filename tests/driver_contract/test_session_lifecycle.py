@@ -1,7 +1,7 @@
 """`routes/sessions.py`'s `open_session` -> `execute_session` (called twice,
 proving the same live session survives multiple round trips) -> `release_session`
 -- real Patchright context, real in-memory `Registry`. Exercises the
-`agentpilot.session.interactive` extraction end-to-end (this repo's own
+`crawlpilot.session.interactive` extraction end-to-end (this repo's own
 route-testing convention: call the route functions directly with a fake
 `Wiring`, see `test_scrape_route.py`), since that module is the load-bearing
 foundation the agent-loop feature builds on.
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pytest_httpserver import HTTPServer
 
-from agentpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.sessions import execute_session, open_session, release_session
 from agentpilot.gateway.schemas import (
     ExecuteRequest,
@@ -19,7 +19,7 @@ from agentpilot.gateway.schemas import (
     SessionOpenRequest,
     SnapshotActionIn,
 )
-from agentpilot.session.registry import Registry
+from crawlpilot.session.registry import Registry
 
 ARTICLE_HTML = """<html><body><h1>Session Lifecycle Article</h1></body></html>"""
 

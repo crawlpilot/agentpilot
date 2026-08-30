@@ -1,9 +1,9 @@
-"""Pure-transform unit tests for `agentpilot.extraction.structured_data` --
+"""Pure-transform unit tests for `crawlpilot.extraction.structured_data` --
 static HTML fixtures, zero browser."""
 
 from __future__ import annotations
 
-from agentpilot.extraction.structured_data import extract_structured_data
+from crawlpilot.extraction.structured_data import extract_structured_data
 
 PLAIN_HTML = """<html><head><title>Plain Page</title></head>
 <body><p>Nothing special here.</p></body></html>"""

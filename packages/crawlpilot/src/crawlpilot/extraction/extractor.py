@@ -27,8 +27,8 @@ from typing import Any
 
 from lxml.html import HtmlElement
 
-from agentpilot.extraction import markdown_converter, postprocess, sanitizer, structured_data
-from agentpilot.spi.actions import ExtractFormat
+from crawlpilot.extraction import markdown_converter, postprocess, sanitizer, structured_data
+from crawlpilot.spi.actions import ExtractFormat
 
 
 def extract(

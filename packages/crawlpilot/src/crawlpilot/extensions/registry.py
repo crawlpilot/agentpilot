@@ -17,13 +17,13 @@ from collections.abc import Iterable, Sequence
 
 import structlog
 
-from agentpilot.extensions.manifest import (
+from crawlpilot.extensions.manifest import (
     API_VERSION,
     Compatibility,
     ExtensionManifest,
     check_compatibility,
 )
-from agentpilot.extensions.mounts import (
+from crawlpilot.extensions.mounts import (
     BlockHooks,
     BlockMount,
     BrowseHooks,
@@ -33,11 +33,11 @@ from agentpilot.extensions.mounts import (
     Extension,
     ToolMount,
 )
-from agentpilot.tools import browser_tools
+from crawlpilot.tools import browser_tools
 
 log = structlog.get_logger(__name__)
 
-ENTRY_POINT_GROUP = "agentpilot.extensions"
+ENTRY_POINT_GROUP = "crawlpilot.extensions"
 
 
 class ExtensionRegistry:

@@ -5,7 +5,7 @@ static fused-tree fixture. No browser, no epoch/ref system involved."""
 from __future__ import annotations
 
 from agentpilot.recipe.stabilize import stabilize_action, stabilize_action_dict
-from agentpilot.spi import actions as spi_actions
+from crawlpilot.spi import actions as spi_actions
 from tests.fusion_fixtures import fnode
 
 SNAPSHOT = fnode(

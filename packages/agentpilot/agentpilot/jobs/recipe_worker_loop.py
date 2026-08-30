@@ -17,24 +17,24 @@ from urllib.parse import urlparse
 
 import structlog
 
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore, RecipeOut
 from agentpilot.llm.client import LLMConfig
-from agentpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.recipe.build import DEFAULT_BUILD_MAX_STEPS, build_recipe
 from agentpilot.recipe.codegen import generate_scraper_code
 from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.heal import check_and_heal
 from agentpilot.recipe.models import Recipe, RecipeRunResult
 from agentpilot.recipe.replay import replay_recipe
-from agentpilot.session.interactive import (
+from crawlpilot.session.interactive import (
     InteractiveSession,
     open_interactive_session,
     release_interactive_session,
 )
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.driver import BrowserDriver
 
 log = structlog.get_logger(__name__)
 

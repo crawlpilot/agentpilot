@@ -1,5 +1,5 @@
 """The crawl-processing loop: claims queued `crawl_tasks` rows, runs an
-ephemeral scrape for each (via `agentpilot.session.ephemeral
+ephemeral scrape for each (via `crawlpilot.session.ephemeral
 .run_ephemeral_scrape`, the exact same composition `/v1/scrape` uses),
 persists the result, and -- for `crawl` jobs -- expands the frontier with
 newly discovered links. Folded into the existing `AGENTPILOT_ROLE=worker`
@@ -32,21 +32,22 @@ from urllib.parse import urlparse
 
 import structlog
 
-from agentpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import fetch as fetch_robots
-from agentpilot.extensions.mounts import BlockHooks
-from agentpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.extensions.mounts import BlockHooks
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.options_codec import load_batch_scrape_options, load_crawl_options
 from agentpilot.jobs.store import ClaimedTask, JobForWorker, PostgresJobStore
-from agentpilot.policy import NullPrototypes, PrototypeProvider
-from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.session.warm_pool import WarmPool
-from agentpilot.spi.crawl import CrawlOptions
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.scrape import Document
+from agentpilot.llm.structured import extract_structured
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.session.ephemeral import run_ephemeral_scrape
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.session.warm_pool import WarmPool
+from crawlpilot.spi.crawl import CrawlOptions
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.scrape import Document
 
 log = structlog.get_logger(__name__)
 
@@ -162,6 +163,7 @@ class CrawlWorkerLoop:
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
             block_hooks=self._block_hooks,
+            structured_extractor=extract_structured,
             scope=job.tenant,
             domain=domain,
             url=task.url,

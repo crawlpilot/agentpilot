@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.driver.fused_locators.candidate_selectors` and
+"""Unit tests for `crawlpilot.driver.fused_locators.candidate_selectors` and
 `RefCache` fusion resolution -- the MatchLevel selector cascade for
 `e<backendNodeId>` refs. A fake page stands in for Playwright (no browser)."""
 
@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.driver.fused_locators import candidate_selectors
-from agentpilot.driver.ref_cache import RefCache
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.errors import StaleRefError
+from crawlpilot.driver.fused_locators import candidate_selectors
+from crawlpilot.driver.ref_cache import RefCache
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.errors import StaleRefError
 
 
 def _node(backend: int, *, attrs=None, role=None, name="") -> EnhancedDOMTreeNode:

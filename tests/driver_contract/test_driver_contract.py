@@ -1,7 +1,7 @@
 """One module, parametrized over driver fixtures (just `patchright_driver` in
 P0; `nodriver`/`agent_browser` stubs land with later drivers), asserting
 *behavior* rather than implementation: any new driver should pass this suite
-unmodified -- that's the entire point of `agentpilot.spi`.
+unmodified -- that's the entire point of `crawlpilot.spi`.
 
 Real Patchright contexts against `pytest-httpserver` inline HTML -- never a
 mocked browser, never an external site (browser-use discipline).
@@ -18,8 +18,8 @@ import websockets
 from pytest_httpserver import HTTPServer
 
 from agentpilot.control.identity import identity_for
-from agentpilot.driver.patchright_driver import PatchrightDriver
-from agentpilot.spi.actions import (
+from crawlpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.spi.actions import (
     ClickAction,
     ExecuteJsAction,
     ExtractAction,
@@ -27,9 +27,9 @@ from agentpilot.spi.actions import (
     NavigateAction,
     SnapshotAction,
 )
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import StaleRefError
-from agentpilot.spi.lease import ContextRef
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import StaleRefError
+from crawlpilot.spi.lease import ContextRef
 
 ARTICLE_HTML = """<html><body>
 <nav><a href="#">Home</a><a href="#">About</a></nav>

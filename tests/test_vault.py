@@ -1,4 +1,4 @@
-"""`agentpilot.identity.vault` -- encryption-at-rest round-trip and tamper/foreign
+"""`crawlpilot.identity.vault` -- encryption-at-rest round-trip and tamper/foreign
 -key resilience. Trigger semantics (restore-only-on-fresh-dir,
 checkpoint-on-release) are the *caller's* responsibility (see the module
 docstring), so they're exercised in `test_seam_e2e.py`-level integration,
@@ -9,8 +9,8 @@ from __future__ import annotations
 from cryptography.fernet import Fernet
 
 from agentpilot.control.identity import identity_for
-from agentpilot.identity.vault import Vault
-from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from crawlpilot.identity.vault import Vault
+from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 IDENTITY = identity_for("acme", "example.com", "alice")
 

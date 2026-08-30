@@ -13,7 +13,7 @@ from agentpilot.agent.actions import (
     parse_agent_output,
     render_action_descriptions,
 )
-from agentpilot.spi import actions as spi_actions
+from crawlpilot.spi import actions as spi_actions
 
 
 def test_default_allowed_actions_excludes_execute_js_and_tab_management() -> None:

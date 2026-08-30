@@ -12,15 +12,15 @@ from pathlib import Path
 import pytest
 
 from agentpilot.control.identity import parts_of
-from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.session.registry import Registry
-from agentpilot.spi.actions import Action, ActionResult
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.scrape import ScrapeOptions
+from crawlpilot.session.ephemeral import run_ephemeral_scrape
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.actions import Action, ActionResult
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import ChallengeDetected
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.scrape import ScrapeOptions
 
 
 class _FakeProxyPinner:

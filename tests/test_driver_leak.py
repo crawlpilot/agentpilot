@@ -3,9 +3,9 @@ result/metric surfaces. Pure -- no browser (imports the module only)."""
 
 from __future__ import annotations
 
-from agentpilot.driver.patchright_driver import _ContextHealth, _navigation_leak_reason
+from crawlpilot.driver.patchright_driver import _ContextHealth, _navigation_leak_reason
 from agentpilot.observability import metrics
-from agentpilot.spi.actions import ActionResult
+from crawlpilot.spi.actions import ActionResult
 
 
 def test_navigation_leak_reason_flags_block_statuses() -> None:

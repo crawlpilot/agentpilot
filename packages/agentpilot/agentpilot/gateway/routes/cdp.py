@@ -41,8 +41,8 @@ from websockets.asyncio.client import ClientConnection
 from agentpilot.control.identity import tenant_of
 from agentpilot.gateway.auth_deps import bearer_token, optional_authed_tenant, resolve_query_api_key
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
-from agentpilot.spi.cdp import CdpEndpointCapable
-from agentpilot.spi.errors import CdpNotAvailable
+from crawlpilot.spi.cdp import CdpEndpointCapable
+from crawlpilot.spi.errors import CdpNotAvailable
 
 log = structlog.get_logger(__name__)
 

@@ -1,7 +1,7 @@
 """Interactivity classification for a fused DOM node -- ported from browser-use's
 `ClickableElementDetector.is_interactive` (`dom/serializer/clickable_elements.py`)
 and Browser4's `ClickableElementDetector`, adapted to
-`agentpilot.spi.dom_tree.EnhancedDOMTreeNode`.
+`crawlpilot.spi.dom_tree.EnhancedDOMTreeNode`.
 
 First-match-wins ladder, roughly strongest→weakest signal:
 JS click listener → large iframe → label/span wrapping a control →
@@ -18,7 +18,7 @@ branch derives from the DOM/Snapshot/AX trees (all non-Runtime).
 
 from __future__ import annotations
 
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
 
 _NON_INTERACTIVE_TAGS = frozenset({"html", "body"})
 

@@ -1,7 +1,7 @@
 """`/v1/agent/runs` -- async, Postgres-queue-backed web-agent runs. `POST`
 creates and queues a run, `GET /{id}` polls status + paginated per-step
 history, `DELETE /{id}` cancels. Mounted on the `gateway` (no `_proxy`
-variant): run CRUD never touches `agentpilot.driver`, exactly like
+variant): run CRUD never touches `crawlpilot.driver`, exactly like
 `routes/crawl.py` needs none either. The actual run *processing* happens in
 `agentpilot.jobs.agent_worker_loop.AgentWorkerLoop`, running independently on
 every `worker` process -- this route only creates/reads/cancels rows in

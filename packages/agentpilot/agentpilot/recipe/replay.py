@@ -21,10 +21,10 @@ from agentpilot.recipe.evaluate import evaluate_field_locators, fetch_structured
 from agentpilot.recipe.models import FieldGroup, FieldLocator, Recipe, RecipeRunResult, RevealStep
 from agentpilot.recipe.normalize import normalize_value
 from agentpilot.recipe.schema import FieldNormalization, all_leaf_fields, parse_schema
-from agentpilot.session.interactive import InteractiveSession, execute_on_session
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.interactive import InteractiveSession, execute_on_session
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.driver import BrowserDriver
 
 NormalizationMap = dict[str, FieldNormalization]
 

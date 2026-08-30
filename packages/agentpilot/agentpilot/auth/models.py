@@ -1,6 +1,6 @@
 """Driver-agnostic (and gateway-agnostic) API-key auth types -- kept
 separate from `agentpilot.gateway` so import-linter's layering holds: `agentpilot.auth`
-sits alongside `agentpilot.identity`/`agentpilot.session`, below `agentpilot.gateway`.
+sits alongside `crawlpilot.identity`/`crawlpilot.session`, below `agentpilot.gateway`.
 """
 
 from __future__ import annotations

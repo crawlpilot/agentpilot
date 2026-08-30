@@ -20,11 +20,11 @@ from typing import TYPE_CHECKING
 
 from patchright.async_api import Locator, Page
 
-from agentpilot.driver.fused_locators import candidate_selectors
-from agentpilot.spi.errors import StaleRefError
+from crawlpilot.driver.fused_locators import candidate_selectors
+from crawlpilot.spi.errors import StaleRefError
 
 if TYPE_CHECKING:
-    from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 
 @dataclass
@@ -53,7 +53,7 @@ class RefCache:
         """Index a fused tree so `e<backendNodeId>` refs resolve. Walks children,
         shadow roots, and iframe content documents (never parent back-refs)."""
 
-        from agentpilot.spi.dom_tree import NodeType
+        from crawlpilot.spi.dom_tree import NodeType
 
         self._fused.clear()
         stack = [root]

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from agentpilot.recipe.models import Locator, RepeatSpec
 from agentpilot.recipe.tree import find_matches, find_node, find_parent
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _MIN_SIBLINGS_TO_GENERALIZE = 2
 

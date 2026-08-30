@@ -1,11 +1,11 @@
-"""Unit tests for `agentpilot.driver.humanize` -- the ported InteractSettings
+"""Unit tests for `crawlpilot.driver.humanize` -- the ported InteractSettings
 delay policy. Pure, no browser."""
 
 from __future__ import annotations
 
-import agentpilot.driver.humanize as humanize
-from agentpilot.driver.humanize import DelayPolicy
-from agentpilot.tiers import TierPolicy
+import crawlpilot.driver.humanize as humanize
+from crawlpilot.driver.humanize import DelayPolicy
+from crawlpilot.tiers import TierPolicy
 
 
 def test_stealth_is_slower_than_fast_on_every_action() -> None:

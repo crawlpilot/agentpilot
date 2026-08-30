@@ -20,10 +20,10 @@ from __future__ import annotations
 import json
 
 from agentpilot.recipe.models import FieldLocator
-from agentpilot.session.interactive import InteractiveSession, execute_on_session
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.interactive import InteractiveSession, execute_on_session
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.driver import BrowserDriver
 
 # Max synthesized candidates to keep per field (before merge/verify).
 _MAX_CANDIDATES = 4

@@ -34,7 +34,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from agentpilot.control.identity import tenant_of
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.wiring import get_wiring
-from agentpilot.spi.streaming import (
+from crawlpilot.spi.streaming import (
     InputEvent,
     KeyEvent,
     LiveViewCapable,

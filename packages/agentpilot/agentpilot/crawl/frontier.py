@@ -14,7 +14,7 @@ from __future__ import annotations
 from urllib.robotparser import RobotFileParser
 
 from agentpilot.crawl import dedup, filters, link_extractor
-from agentpilot.spi.crawl import CrawlOptions
+from crawlpilot.spi.crawl import CrawlOptions
 
 
 def expand_frontier(

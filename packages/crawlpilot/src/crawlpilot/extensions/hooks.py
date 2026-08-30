@@ -26,7 +26,7 @@ from typing import Any, cast
 
 import structlog
 
-from agentpilot import metrics
+from crawlpilot import metrics
 
 log = structlog.get_logger(__name__)
 

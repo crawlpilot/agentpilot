@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from agentpilot.control.identity import identity_for
-from agentpilot.identity.profile_store import (
+from crawlpilot.identity.profile_store import (
     PathTraversalError,
     delete_profile_dir,
     resolve_profile_dir,

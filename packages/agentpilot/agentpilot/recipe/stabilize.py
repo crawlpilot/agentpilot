@@ -1,6 +1,6 @@
 """Turns a dispatched, session-scoped action into a re-resolvable `RevealStep`.
 
-`agentpilot.driver.ref_cache.RefCache` ties every `ref` to a specific
+`crawlpilot.driver.ref_cache.RefCache` ties every `ref` to a specific
 page/session epoch -- a `ClickAction(ref="e17")` recorded during exploration
 is meaningless against a fresh page load in a later replay. Every action
 that's captured into a recipe must instead reference the accessible
@@ -15,8 +15,8 @@ from typing import Any
 
 from agentpilot.recipe.models import Locator, RevealStep
 from agentpilot.recipe.tree import find_node
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _DICT_ACTION_BUILDERS: dict[str, Any] = {
     "ClickAction": lambda d: spi_actions.ClickAction(ref=d["ref"]),

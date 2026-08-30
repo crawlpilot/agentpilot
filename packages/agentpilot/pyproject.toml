@@ -1,0 +1,151 @@
+[project]
+name = "agentpilot"
+version = "0.1.0"
+description = "Multi-tenant Browser-as-a-Service platform, built on crawlpilot"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Rahul Bisht", email = "rahulbisht1694@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+dependencies = [
+    # The browser layer, extracted in Phase 7. Declared as an ordinary version
+    # range -- `[tool.uv.sources]` below redirects it to the workspace during
+    # development, and CI resolves the built wheel from the internal index.
+    "crawlpilot>=0.1,<0.2",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "prometheus-client>=0.21",
+    "structlog>=24.4",
+    "redis>=5.0",
+    # `[http2]` pulls `h2`: Chrome always negotiates HTTP/2, and an HTTP/1.1-only
+    # ALPN offer from a client claiming to be Chrome is a standalone tell --
+    # before any HTTP/2 SETTINGS-frame fingerprint is even compared.
+    "httpx[http2]>=0.27",
+    # Content encodings Chrome advertises. httpx only decodes br/zstd when
+    # these are importable, and the `basic` tier must not claim an encoding it
+    # cannot decode -- see `session/browser_headers._supported_accept_encoding`.
+    "brotli>=1.1",
+    "zstandard>=0.22",
+    "websockets>=13.0",
+]
+
+[project.urls]
+Repository = "https://github.com/crawlpilot/agentpilot"
+Issues = "https://github.com/crawlpilot/agentpilot/issues"
+
+[project.optional-dependencies]
+# Chrome-adjacent packages -- only ever imported by agentpilot.driver,
+# agentpilot.extraction, and agentpilot.identity.vault's Fernet encryption. Needed by
+# `AGENTPILOT_ROLE=worker` -- never installed in docker/gateway.Dockerfile's
+# image, which is the whole point of the split (a Chrome-free gateway image).
+driver = ["crawlpilot[all]"]
+# Postgres driver (runtime pool) + Alembic (migrations) for agentpilot.auth
+# .store.PostgresApiKeyStore. Needed by `gateway` (mounts tenant-facing
+# auth-gated routes) and `worker` (runs the queue loops) -- both connect a
+# Postgres store; `worker` just never touches wiring.api_keys.
+postgres = [
+    "psycopg[binary,pool]>=3.2",
+    "alembic>=1.13",
+]
+# Claude in Amazon Bedrock (`AGENTPILOT_LLM_PROVIDER=bedrock`, see
+# agentpilot.llm.bedrock). Optional for the same reason as the extras above:
+# the default OpenAI-compatible backend is plain httpx and must keep working
+# without this installed. The `[bedrock]` sub-extra pulls boto3, needed only
+# for the SigV4 auth path -- a bearer-token deployment can install bare
+# `anthropic`, and this package never imports boto3 itself.
+bedrock = [
+    "anthropic[bedrock]>=0.70",
+]
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentpilot"]
+
+
+[[tool.mypy.overrides]]
+module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
+strict = true
+
+# `anthropic` ships with the optional `bedrock` extra, so a dev env synced
+# without it must still typecheck agentpilot.llm.bedrock's guarded import.
+[[tool.mypy.overrides]]
+module = ["anthropic.*"]
+ignore_missing_imports = true
+
+[tool.importlinter]
+root_package = "agentpilot"
+include_external_packages = true
+
+# The browser layer is a separate distribution now (`crawlpilot`), so the old
+# layer chains that ended in `agentpilot.spi` live in that project's own
+# contracts. What remains here is the platform's internal shape, plus the rule
+# that keeps the split honest: only the composition root builds a driver.
+
+[[tool.importlinter.contracts]]
+name = "gateway -> agent -> llm"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.agent", "agentpilot.llm"]
+
+[[tool.importlinter.contracts]]
+name = "gateway -> recipe -> agent"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.recipe", "agentpilot.agent"]
+
+[[tool.importlinter.contracts]]
+name = "jobs -> recipe -> agent"
+type = "layers"
+layers = ["agentpilot.jobs", "agentpilot.recipe", "agentpilot.agent"]
+
+[[tool.importlinter.contracts]]
+name = "gateway -> crawl -> spi"
+type = "layers"
+layers = ["agentpilot.gateway", "agentpilot.crawl", "agentpilot.auth"]
+
+[[tool.importlinter.contracts]]
+name = "only the composition root imports the concrete driver"
+type = "forbidden"
+source_modules = [
+    "agentpilot.gateway.routes",
+    "agentpilot.gateway.schemas",
+    "agentpilot.gateway.app",
+    "agentpilot.jobs",
+    "agentpilot.crawl",
+    "agentpilot.agent",
+    "agentpilot.recipe",
+    "agentpilot.control",
+]
+forbidden_modules = ["crawlpilot.driver"]
+allow_indirect_imports = true
+
+[tool.uv.sources]
+# One declaration, two resolutions: the editable workspace copy during
+# development, the published wheel everywhere else. Dropping this entry (or
+# building outside the workspace) resolves the real dependency -- which is what
+# the "agentpilot against the published wheel" CI job asserts.
+crawlpilot = { workspace = true }
+
+
+
+[[tool.mypy.overrides]]
+module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
+strict = true
+
+# `anthropic` ships with the optional `bedrock` extra, so a dev env synced
+# without it must still typecheck agentpilot.llm.bedrock's guarded import.
+[[tool.mypy.overrides]]
+module = ["anthropic.*"]
+ignore_missing_imports = true

@@ -9,15 +9,15 @@ model and plain JSON Schema. Provider shapes live in `tools.adapters` as pure
 dict re-shaping, and nothing in this package imports an LLM SDK.
 """
 
-from agentpilot.tools.adapters import to_anthropic, to_mcp, to_openai
-from agentpilot.tools.catalog import BY_NAME, CATALOG
-from agentpilot.tools.registry import (
+from crawlpilot.tools.adapters import to_anthropic, to_mcp, to_openai
+from crawlpilot.tools.catalog import BY_NAME, CATALOG
+from crawlpilot.tools.registry import (
     BROWSER_NAMESPACE,
     DuplicateToolError,
     ToolRegistry,
     browser_tools,
 )
-from agentpilot.tools.spec import REF_DESCRIPTION, ToolSpec, union_of
+from crawlpilot.tools.spec import REF_DESCRIPTION, ToolSpec, union_of
 
 __all__ = [
     "BROWSER_NAMESPACE",

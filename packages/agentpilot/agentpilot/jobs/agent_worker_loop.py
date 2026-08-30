@@ -24,20 +24,20 @@ import structlog
 
 from agentpilot.agent.loop import run_agent_loop
 from agentpilot.agent.state import AgentStepRecord
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import ClaimedAgentRun, PostgresAgentStore
 from agentpilot.llm.client import LLMConfig
-from agentpilot.policy import NullPrototypes, PrototypeProvider
-from agentpilot.session.interactive import open_interactive_session, release_interactive_session
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.session.rotation import RotationConfig
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.tiers import TierPolicy
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.session.interactive import open_interactive_session, release_interactive_session
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.session.rotation import RotationConfig
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.tiers import TierPolicy
 
 if TYPE_CHECKING:
     from agentpilot.placement.placer import SessionPlacer
-    from agentpilot.session.interactive import Session
+    from crawlpilot.session.interactive import Session
 
 log = structlog.get_logger(__name__)
 

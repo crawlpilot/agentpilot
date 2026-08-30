@@ -13,7 +13,7 @@ rather than drifting into two slightly different "run a one-shot scrape"
 implementations. Takes explicit driver/registry/etc. parameters rather than
 a `Wiring` object: `Wiring` lives in `agentpilot.gateway`, which is *above*
 this module in the layering (`gateway -> session -> identity -> ... -> spi`)
--- `agentpilot.session` must never import it.
+-- `crawlpilot.session` must never import it.
 """
 
 from __future__ import annotations
@@ -24,36 +24,35 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import structlog
 
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.extensions.mounts import BlockHooks, Resolution
-from agentpilot.identity.burn_tracker import BurnTracker
-from agentpilot.identity.fingerprint import generate as generate_fingerprint
-from agentpilot.identity.profile_store import (
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.extensions.mounts import BlockHooks, Resolution
+from crawlpilot.identity.burn_tracker import BurnTracker
+from crawlpilot.identity.fingerprint import generate as generate_fingerprint
+from crawlpilot.identity.profile_store import (
     delete_profile_dir,
     resolve_profile_dir,
     seed_profile_dir,
 )
-from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.llm import schema_extract
-from agentpilot.llm.client import LLMConfig
-from agentpilot.policy import NullPrototypes, PrototypeProvider
-from agentpilot.session import browser_headers, stealth_profile
-from agentpilot.session.acquire import acquire_validated
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.session.warm_pool import WarmPool
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.actions import ActionResult, ExtractFormat
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.identity import IdentityRef, ProfileKind
-from agentpilot.spi.lease import ContextRef
-from agentpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
-from agentpilot.tiers import TierPolicy
+from crawlpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.session import browser_headers, stealth_profile
+from crawlpilot.session.acquire import acquire_validated
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.session.warm_pool import WarmPool
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.actions import ActionResult, ExtractFormat
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import ChallengeDetected
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.lease import ContextRef
+from crawlpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
+from crawlpilot.tiers import TierPolicy
 
 log = structlog.get_logger(__name__)
 
@@ -64,6 +63,18 @@ catalog of its own (plan D10)."""
 # The `basic` HTTP fast-path fetcher seam (dependency-injected for tests). Must
 # match `http_fetch.fetch_via_http`'s keyword signature.
 HttpFetcher = Callable[..., Awaitable[ActionResult]]
+
+StructuredExtractor = Callable[..., Awaitable[tuple[Any, str | None]]]
+"""Turns markdown into caller-defined structured JSON, for
+`ScrapeOptions.extract`.
+
+Injected rather than imported. This module used to call `agentpilot.llm`
+directly, which made an LLM client a dependency of the browser layer -- the one
+platform import that survived six phases of layering, and a hard blocker for
+the split. Producing markdown is browsing; deciding to hand that markdown to a
+model is the platform's business. `None` (the default) means the caller did not
+supply one, and `ScrapeOptions.extract` then reports that rather than silently
+returning nothing."""
 
 _DEFAULT_CRAWL_RETRY_MAX = 2
 """How many times a *soft* (CRAWL-scope) verdict -- thin/rate-limited/wrong-geo,
@@ -204,6 +215,7 @@ async def run_ephemeral_scrape(
     browser_config: BrowserConfig = DEFAULTS,
     prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     block_hooks: BlockHooks | None = None,
+    structured_extractor: StructuredExtractor | None = None,
 ) -> tuple[Document, bytes | None]:
     """Returns `(document, screenshot_png_bytes)` -- the raw screenshot
     bytes are handed back separately rather than folded into `Document`
@@ -366,12 +378,12 @@ async def run_ephemeral_scrape(
         # `ChallengeDetected` on a hard wall so the loop escalates to `stealth`.
         #
         # `fetch_via_http` is imported lazily (not at module top) on purpose: it
-        # pulls in `agentpilot.extraction` -> `lxml`, which only the worker image
+        # pulls in `crawlpilot.extraction` -> `lxml`, which only the worker image
         # bundles. The gateway imports this module (via its scrape route) but has
         # no lxml and never runs a scrape, so a top-level import would crash it.
         fetcher = http_fetcher
         if fetcher is None:
-            from agentpilot.session.http_fetch import fetch_via_http
+            from crawlpilot.session.http_fetch import fetch_via_http
 
             fetcher = fetch_via_http
         proxy = None
@@ -578,16 +590,18 @@ async def run_ephemeral_scrape(
     if options.extract is not None:
         if not internal_markdown:
             extract_error = "no markdown content available for structured extraction"
+        elif structured_extractor is None:
+            extract_error = (
+                "structured extraction was requested but no extractor is configured"
+            )
         else:
             try:
-                config = LLMConfig.from_env()
-                extract_result, extract_warning = await schema_extract.extract_structured(
+                extract_result, extract_warning = await structured_extractor(
                     internal_markdown,
                     json_schema=options.extract.json_schema,
                     prompt=options.extract.prompt,
-                    config=config,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- surfaced on the Document
                 extract_error = str(exc)
 
     document = Document(

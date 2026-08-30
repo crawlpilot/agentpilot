@@ -20,10 +20,10 @@ import pytest
 
 from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
-from agentpilot.identity.burn_tracker import MAX_WARNINGS, BurnTracker
-from agentpilot.identity.proxy_health import ProxyHealth
-from agentpilot.policy import InMemoryStateStore, StateStore
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.identity.burn_tracker import MAX_WARNINGS, BurnTracker
+from crawlpilot.identity.proxy_health import ProxyHealth
+from crawlpilot.policy import InMemoryStateStore, StateStore
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 IDENTITY = identity_for("t", "d", "n")
 PROXY = ProxyEndpoint(scheme="http", host="p", port=1)

@@ -1,6 +1,6 @@
 """robots.txt fetch + parse -- via the egress-guarded client, never
 `RobotFileParser.read()` (which does its own raw `urllib` fetch, bypassing
-`agentpilot.egress`'s SSRF/metadata guard entirely -- a robots.txt URL is
+`crawlpilot.egress`'s SSRF/metadata guard entirely -- a robots.txt URL is
 attacker-influenceable the same way any crawl-seed URL is, so it gets the
 same guard as every other discovery fetch in this package).
 """
@@ -12,9 +12,9 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
-from agentpilot.egress.httpx_guard import guarded_get
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import EgressBlocked
+from crawlpilot.egress.httpx_guard import guarded_get
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import EgressBlocked
 
 
 async def fetch(origin: str, policy: EgressPolicy) -> RobotFileParser | None:

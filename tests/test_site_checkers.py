@@ -3,7 +3,7 @@ block/integrity checkers. Pure, no browser."""
 
 from __future__ import annotations
 
-from agentpilot.extraction.block_detect import Verdict
+from crawlpilot.extraction.block_detect import Verdict
 from agentpilot.control.retail_extension import AmazonChecker, JdChecker, WalmartChecker
 
 

@@ -15,8 +15,8 @@ from agentpilot.jobs.options_codec import (
     load_crawl_options,
     load_scrape_options,
 )
-from agentpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
-from agentpilot.spi.scrape import ScrapeOptions
+from crawlpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
+from crawlpilot.spi.scrape import ScrapeOptions
 
 
 def _roundtrip(data: dict) -> dict:

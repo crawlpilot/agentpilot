@@ -35,8 +35,8 @@ from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 from agentpilot.control.identity import tenant_of
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 _ANY = "*"
 
@@ -117,7 +117,7 @@ class ProxyConfig:
         """Reads the environment, which is allowed *here* because this is a
         `from_env()` constructor called once from the composition root
         (`gateway.wiring`), never at the point of use -- the same discipline
-        `agentpilot.config` establishes for the rest of the browser layer."""
+        `crawlpilot.config` establishes for the rest of the browser layer."""
 
         pools: dict[tuple[str, str], tuple[ProxyEndpoint, ...]] = {}
 

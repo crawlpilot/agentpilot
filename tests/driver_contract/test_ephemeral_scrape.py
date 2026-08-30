@@ -1,4 +1,4 @@
-"""`agentpilot.session.ephemeral.run_ephemeral_scrape` -- real Patchright
+"""`crawlpilot.session.ephemeral.run_ephemeral_scrape` -- real Patchright
 context, real in-memory `Registry`. `routes/scrape.py`'s own tests
 (`test_scrape_route.py`) cover this indirectly through the HTTP layer; this
 module tests the shared function directly, since it now has two independent
@@ -12,10 +12,10 @@ import json
 import pytest
 from pytest_httpserver import HTTPServer
 
-from agentpilot.driver.patchright_driver import PatchrightDriver
-from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.session.registry import Registry
-from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
+from crawlpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.session.ephemeral import run_ephemeral_scrape
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 ARTICLE_HTML = """<html><body>
 <article>

@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.session.redis_registry.RedisRegistry` -- against
+"""Unit tests for `crawlpilot.session.redis_registry.RedisRegistry` -- against
 `fakeredis` (with `lupa` for real Lua-script execution), not a live Redis
 server, so these stay fast and Docker-free like `test_session_registry.py`.
 Same behavioral contract as the in-memory `Registry` (`RegistryProtocol`) --
@@ -13,8 +13,8 @@ import pytest
 
 from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_registry import RedisRegistry
-from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 IDENTITY = identity_for("t", "example.com", "a")
 

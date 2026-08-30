@@ -32,8 +32,8 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
 
 
 def _to_json(state: StorageState) -> dict[str, Any]:

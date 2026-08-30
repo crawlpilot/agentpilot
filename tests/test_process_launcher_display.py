@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.driver.process_launcher import ProcessLauncher
+from crawlpilot.driver.process_launcher import ProcessLauncher
 
 
 def test_existing_display_env_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15,14 +15,14 @@ def test_existing_display_env_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_no_display_and_not_linux_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("agentpilot.driver.process_launcher.sys.platform", "darwin")
+    monkeypatch.setattr("crawlpilot.driver.process_launcher.sys.platform", "darwin")
     # macOS/dev: headful not available -> caller degrades to headless, no window.
     assert ProcessLauncher().ensure_display() is False
 
 
 def test_linux_starts_xvfb_and_exports_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("agentpilot.driver.process_launcher.sys.platform", "linux")
+    monkeypatch.setattr("crawlpilot.driver.process_launcher.sys.platform", "linux")
 
     launcher = ProcessLauncher()
 
@@ -38,7 +38,7 @@ def test_linux_starts_xvfb_and_exports_display(monkeypatch: pytest.MonkeyPatch) 
 
 def test_linux_without_xvfb_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("agentpilot.driver.process_launcher.sys.platform", "linux")
+    monkeypatch.setattr("crawlpilot.driver.process_launcher.sys.platform", "linux")
 
     launcher = ProcessLauncher()
     monkeypatch.setattr(launcher, "ensure_xvfb", lambda display=":99": None)  # binary missing

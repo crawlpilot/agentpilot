@@ -15,8 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agentpilot.spi import actions as spi_actions
-from agentpilot.tools import browser_tools
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.tools import browser_tools
 
 DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     "navigate",

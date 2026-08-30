@@ -5,7 +5,7 @@ this split is load-bearing, see the comment at the enqueue call below and
 `agentpilot.jobs.worker_loop`'s own tests, which caught the bug of enqueueing
 the whole batch at depth 0), `GET /{id}` polls status + paginated results,
 `DELETE /{id}` cancels. Mounted on the `gateway` (no `_proxy` variant): job
-CRUD never touches `agentpilot.driver`, exactly like `routes/api_keys.py`
+CRUD never touches `crawlpilot.driver`, exactly like `routes/api_keys.py`
 needs none either. The actual crawl *processing* happens in
 `agentpilot.jobs.worker_loop.CrawlWorkerLoop`, running independently on every
 `worker` process -- this route only creates/reads/cancels rows in
@@ -33,11 +33,11 @@ from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.jobs.options_codec import dump_crawl_options
 from agentpilot.jobs.store import PostgresJobStore
 from agentpilot.observability.metrics import requests_total
-from agentpilot.spi.crawl import CrawlOptions
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import JobNotFound
-from agentpilot.spi.scrape import Document, ExtractConfig, ScrapeOptions
-from agentpilot.spi.webhook import WebhookConfig
+from crawlpilot.spi.crawl import CrawlOptions
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import JobNotFound
+from crawlpilot.spi.scrape import Document, ExtractConfig, ScrapeOptions
+from crawlpilot.spi.webhook import WebhookConfig
 
 log = structlog.get_logger(__name__)
 

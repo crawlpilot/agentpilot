@@ -13,8 +13,8 @@ import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, Lease, LeaseId
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, Lease, LeaseId
 
 
 def new_lease(

@@ -1,12 +1,12 @@
-"""Unit tests for `agentpilot.dom.clickable_elements.is_interactive` -- one case
+"""Unit tests for `crawlpilot.dom.clickable_elements.is_interactive` -- one case
 per branch of the ported interactivity ladder. Pure node inputs, no browser."""
 
 from __future__ import annotations
 
-from agentpilot.dom.clickable_elements import is_interactive
-from agentpilot.driver.dom_fusion import LayoutInfo
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.dom.clickable_elements import is_interactive
+from crawlpilot.driver.dom_fusion import LayoutInfo
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 
 def _node(

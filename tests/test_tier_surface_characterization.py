@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.driver import humanize
-from agentpilot.tiers import ESCALATION, PROTECTED, TierPolicy
+from crawlpilot.driver import humanize
+from crawlpilot.tiers import ESCALATION, PROTECTED, TierPolicy
 
 TIERS = ("basic", "stealth", "enhanced", "auto")
 """The complete vocabulary, as declared by `gateway.schemas`. A new tier must

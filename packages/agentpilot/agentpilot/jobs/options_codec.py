@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
-from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
+from crawlpilot.spi.crawl import BatchScrapeOptions, CrawlOptions
+from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 
 def dump_scrape_options(options: ScrapeOptions) -> dict[str, Any]:

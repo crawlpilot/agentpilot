@@ -19,7 +19,7 @@ see `force_release`'s docstring on `Registry` for why that's IDLE, not gone.
 
 Vault checkpointing (`plan.md`'s "checkpoint on release-to-IDLE, not only
 at destroy") happens at *release* time (the gateway/worker's release-session
-call site, via `agentpilot.identity.vault.Vault.save`), not here -- by the time
+call site, via `crawlpilot.identity.vault.Vault.save`), not here -- by the time
 the reaper destroys an IDLE context, its vault entry should already be
 current, so destroy() itself has nothing further to checkpoint.
 
@@ -36,12 +36,12 @@ import time
 
 import structlog
 
-from agentpilot import metrics
-from agentpilot.session.lease import is_expired
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot import metrics
+from crawlpilot.session.lease import is_expired
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 log = structlog.get_logger(__name__)
 

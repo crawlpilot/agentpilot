@@ -16,8 +16,8 @@ import hashlib
 from dataclasses import dataclass
 
 from agentpilot.agent.dom_diff import DomDiff, diff_snapshots, iter_interactive, render_change_block
-from agentpilot.dom.serializer import serialize
-from agentpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode
+from crawlpilot.dom.serializer import serialize
+from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode
 
 
 @dataclass

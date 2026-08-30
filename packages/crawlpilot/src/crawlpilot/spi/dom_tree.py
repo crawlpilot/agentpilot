@@ -21,7 +21,7 @@ behaviour, and `EnhancedDOMTreeNode.snapshot` -- an `spi` field -- is typed by
 it. Defining it in the driver forced `spi` to import `driver` even under
 `TYPE_CHECKING`, which import-linter counts as a layering violation (it reads
 the AST, not the runtime graph). `driver.dom_fusion` re-exports the name, so
-every existing `from agentpilot.driver.dom_fusion import LayoutInfo` still works.
+every existing `from crawlpilot.driver.dom_fusion import LayoutInfo` still works.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
 
-from agentpilot.spi import hashing
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.spi import hashing
+from crawlpilot.spi.geometry import BoundingBox
 
 
 @dataclass

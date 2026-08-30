@@ -72,7 +72,7 @@ class ProcessLauncher:
         """
 
         # `DISPLAY` is deliberately left as a real environment interaction
-        # rather than moved to `agentpilot.config` with the other knobs: it is
+        # rather than moved to `crawlpilot.config` with the other knobs: it is
         # not application configuration but the X11 protocol's own channel.
         # Chrome, launched as a child process, reads `DISPLAY` from its
         # inherited environment -- so the value must genuinely be *in* the

@@ -26,13 +26,13 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from agentpilot.driver.dom_fusion import (
+from crawlpilot.driver.dom_fusion import (
     REQUIRED_COMPUTED_STYLES,
     LayoutInfo,
     build_snapshot_lookup,
 )
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 if TYPE_CHECKING:
     from patchright.async_api import CDPSession

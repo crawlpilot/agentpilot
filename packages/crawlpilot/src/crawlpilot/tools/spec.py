@@ -21,7 +21,7 @@ projections, instead of two hand-maintained copies that drift.
 
 **Vendor-neutral by construction.** A spec carries a Pydantic model and plain
 JSON Schema; nothing here knows what an LLM provider is. Provider shapes live in
-`tools.adapters` as pure dict re-shaping, and `agentpilot.tools` imports no LLM
+`tools.adapters` as pure dict re-shaping, and `crawlpilot.tools` imports no LLM
 SDK -- asserted by a test.
 """
 

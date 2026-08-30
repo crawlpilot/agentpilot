@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from agentpilot.gateway.routing import resolve_route
-from agentpilot.spi.errors import NodeLost
+from crawlpilot.spi.errors import NodeLost
 
 
 class _FakeWiring:

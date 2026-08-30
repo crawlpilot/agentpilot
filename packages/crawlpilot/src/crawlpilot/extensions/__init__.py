@@ -1,6 +1,6 @@
 """Site- and domain-specific behaviour, contributed by the *caller*.
 
-`agentpilot.policy` sends site knowledge out of the library as data the consumer
+`crawlpilot.policy` sends site knowledge out of the library as data the consumer
 owns; this is the seam it comes back through as *code*, for what data cannot
 express -- rewriting a URL before navigation, running a site-specific warm-up,
 *resolving* a detected block, repairing markup, enriching a document.
@@ -13,14 +13,14 @@ multi-hook, pip-installable registry, keeping the defer convention so porting th
 existing checkers was mechanical.
 """
 
-from agentpilot.extensions.hooks import DEFAULT_HOOK_TIMEOUT_S, HookChain
-from agentpilot.extensions.manifest import (
+from crawlpilot.extensions.hooks import DEFAULT_HOOK_TIMEOUT_S, HookChain
+from crawlpilot.extensions.manifest import (
     API_VERSION,
     Compatibility,
     ExtensionManifest,
     check_compatibility,
 )
-from agentpilot.extensions.mounts import (
+from crawlpilot.extensions.mounts import (
     BlockHooks,
     BlockMount,
     BrowseHooks,
@@ -31,7 +31,7 @@ from agentpilot.extensions.mounts import (
     Resolution,
     ToolMount,
 )
-from agentpilot.extensions.registry import (
+from crawlpilot.extensions.registry import (
     ENTRY_POINT_GROUP,
     ExtensionRegistry,
     discover_extensions,

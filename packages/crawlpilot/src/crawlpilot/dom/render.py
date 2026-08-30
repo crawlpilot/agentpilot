@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agentpilot.dom.serializer import SimplifiedNode
+    from crawlpilot.dom.serializer import SimplifiedNode
 
 # Curated attributes worth showing the model (browser-use DEFAULT_INCLUDE_ATTRIBUTES).
 DEFAULT_INCLUDE_ATTRIBUTES: tuple[str, ...] = (

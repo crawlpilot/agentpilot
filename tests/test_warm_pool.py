@@ -1,5 +1,5 @@
 """Unit tests for the warm-session pool + keepalive loop
-(`agentpilot.session.warm_pool`). A fake driver stands in for Chromium; no
+(`crawlpilot.session.warm_pool`). A fake driver stands in for Chromium; no
 browser. Deterministic: tests drive `tick()`/`take()` directly rather than the
 background loop."""
 
@@ -9,10 +9,10 @@ import uuid
 from pathlib import Path
 
 from agentpilot.control.identity import identity_for
-from agentpilot.session.registry import Registry
-from agentpilot.session.warm_pool import KeepaliveLoop, WarmPool, tier_key
-from agentpilot.spi.lease import ContextRef, ContextState
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.session.registry import Registry
+from crawlpilot.session.warm_pool import KeepaliveLoop, WarmPool, tier_key
+from crawlpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 _PROXY_A = ProxyEndpoint(scheme="http", host="a.example", port=1)
 _PROXY_B = ProxyEndpoint(scheme="http", host="b.example", port=2)
@@ -101,7 +101,7 @@ async def test_target_zero_is_inert(tmp_path: Path) -> None:
 async def test_skips_warming_under_memory_pressure(tmp_path: Path, monkeypatch) -> None:
     driver = FakeDriver()
     pool = _pool(driver, tmp_path, target=2)
-    monkeypatch.setattr("agentpilot.session.warm_pool.read_meminfo_used_pct", lambda: 99.0)
+    monkeypatch.setattr("crawlpilot.session.warm_pool.read_meminfo_used_pct", lambda: 99.0)
     await pool.tick()
     assert driver.open_calls == 0  # pressure -> no speculative warming
 
@@ -198,7 +198,7 @@ async def test_protected_tiers_never_adopt_a_pooled_context() -> None:
     (`WarmPool._open` passes none of them). Adopting one on a stealth run would
     silently downgrade it to a bare browser."""
 
-    from agentpilot.tiers import TierPolicy
+    from crawlpilot.tiers import TierPolicy
 
     assert TierPolicy.for_tier("stealth").protected is True
     assert TierPolicy.for_tier("enhanced").protected is True

@@ -13,7 +13,7 @@ from agentpilot.agent.reliability import (
     RetryStrategy,
     classify_error,
 )
-from agentpilot.spi.errors import CapacityExhausted, NavigationTimeout, StaleRefError
+from crawlpilot.spi.errors import CapacityExhausted, NavigationTimeout, StaleRefError
 
 
 def test_classify_error_taxonomy() -> None:

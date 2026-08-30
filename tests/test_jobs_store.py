@@ -14,8 +14,8 @@ import psycopg
 import pytest
 
 from agentpilot.jobs.store import PostgresJobStore
-from agentpilot.spi.scrape import Document, DocumentMetadata
-from agentpilot.spi.webhook import WebhookConfig
+from crawlpilot.spi.scrape import Document, DocumentMetadata
+from crawlpilot.spi.webhook import WebhookConfig
 
 _DATABASE_URL = os.environ.get("AGENTPILOT_TEST_DATABASE_URL")
 
@@ -95,7 +95,7 @@ async def test_get_job_for_worker_has_no_tenant_filter(store: PostgresJobStore) 
 
 
 async def test_get_job_for_worker_includes_webhook_secret(store: PostgresJobStore) -> None:
-    from agentpilot.spi.webhook import WebhookConfig
+    from crawlpilot.spi.webhook import WebhookConfig
 
     webhook = WebhookConfig(url="https://example.com/hook", secret="shh", events=("completed",))
     job = await store.create_job(_tenant(), "batch_scrape", None, {}, webhook)

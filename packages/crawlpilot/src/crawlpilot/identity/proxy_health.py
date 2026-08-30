@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import random
 
-from agentpilot.config import DEFAULT_PROXY_MAX_SUCCESS
-from agentpilot.policy import StateStore
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.config import DEFAULT_PROXY_MAX_SUCCESS
+from crawlpilot.policy import StateStore
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 _KEY_PREFIX = "proxyhealth:"
 _F_SUCCESS = "successes"

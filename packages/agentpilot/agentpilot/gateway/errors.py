@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agentpilot.observability.metrics import error_responses_total
-from agentpilot.spi import errors as spi_errors
+from crawlpilot.spi import errors as spi_errors
 
 log = structlog.get_logger(__name__)
 

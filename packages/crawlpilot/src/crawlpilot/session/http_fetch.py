@@ -20,15 +20,15 @@ import re
 
 import httpx
 
-from agentpilot.egress.httpx_guard import assert_host_allowed
-from agentpilot.extensions.mounts import BlockHooks
-from agentpilot.extraction import block_detect
-from agentpilot.extraction.extractor import extract
-from agentpilot.spi.actions import ActionResult, ExtractFormat
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.scrape import ScrapeOptions
+from crawlpilot.egress.httpx_guard import assert_host_allowed
+from crawlpilot.extensions.mounts import BlockHooks
+from crawlpilot.extraction import block_detect
+from crawlpilot.extraction.extractor import extract
+from crawlpilot.spi.actions import ActionResult, ExtractFormat
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import ChallengeDetected
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.scrape import ScrapeOptions
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 

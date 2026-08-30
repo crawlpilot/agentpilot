@@ -26,7 +26,7 @@ from websockets.exceptions import InvalidHandshake
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.routing import resolve_route
 from agentpilot.gateway.wiring import get_wiring
-from agentpilot.spi.errors import NodeLost
+from crawlpilot.spi.errors import NodeLost
 
 log = structlog.get_logger(__name__)
 

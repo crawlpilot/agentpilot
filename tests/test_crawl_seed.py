@@ -8,8 +8,8 @@ from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl.dedup import normalize_url
 from agentpilot.crawl.seed import discover_for_crawl, discover_for_map
-from agentpilot.spi.crawl import CrawlOptions, MapOptions
-from agentpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.crawl import CrawlOptions, MapOptions
+from crawlpilot.spi.egress import EgressPolicy
 
 POLICY = EgressPolicy()
 

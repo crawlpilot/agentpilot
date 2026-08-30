@@ -10,7 +10,7 @@ Layering: `gateway -> recipe -> agent -> session -> llm -> spi` (and
 `jobs -> recipe -> agent -> session -> llm -> spi` for the worker/scheduler
 loops that live in `agentpilot.jobs`, mirroring where `agent_worker_loop.py`
 lives relative to `agentpilot.agent`). `agentpilot.recipe` never imports
-`agentpilot.driver` directly -- only through `agentpilot.session.interactive`.
+`crawlpilot.driver` directly -- only through `crawlpilot.session.interactive`.
 """
 
 from __future__ import annotations

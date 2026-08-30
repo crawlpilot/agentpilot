@@ -12,7 +12,7 @@
   `/v1/sessions/{id}/live-view` as a WS relay (`routes/live_view_proxy.py`),
   `/v1/scrape` as a proxy (`routes/scrape_proxy.py`), `/v1/map` and `/v1/crawl`
   served directly (the same `routes/map.py`/`routes/crawl.py` routers -- no
-  proxy needed, since neither touches `agentpilot.driver`), `/v1/agent/runs`
+  proxy needed, since neither touches `crawlpilot.driver`), `/v1/agent/runs`
   and `/v1/recipes` (run/CRUD against the Postgres queues; the worker does the
   browsing out of band), and `/v1/api-keys` (admin-gated). Never
   imports/constructs a driver.

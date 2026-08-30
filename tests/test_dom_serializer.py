@@ -1,15 +1,15 @@
-"""Unit tests for the serializer pipeline (`agentpilot.dom.paint_order` +
-`agentpilot.dom.serializer` + `agentpilot.dom.render`): occlusion, containment
+"""Unit tests for the serializer pipeline (`crawlpilot.dom.paint_order` +
+`crawlpilot.dom.serializer` + `crawlpilot.dom.render`): occlusion, containment
 dedup, backend-id indexing, attribute compression, password redaction, and
 truncation. Synthetic fused trees; no browser."""
 
 from __future__ import annotations
 
-from agentpilot.dom.paint_order import PaintEntry, Rect, RectUnionPure, compute_occluded
-from agentpilot.dom.serializer import serialize
-from agentpilot.driver.dom_fusion import LayoutInfo
-from agentpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.dom.paint_order import PaintEntry, Rect, RectUnionPure, compute_occluded
+from crawlpilot.dom.serializer import serialize
+from crawlpilot.driver.dom_fusion import LayoutInfo
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.geometry import BoundingBox
 
 # --------------------------------------------------------------------- paint order
 

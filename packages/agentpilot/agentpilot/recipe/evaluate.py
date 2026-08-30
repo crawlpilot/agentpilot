@@ -11,11 +11,11 @@ from typing import Any
 from agentpilot.recipe.jsonpath import resolve_path
 from agentpilot.recipe.models import FieldLocator
 from agentpilot.recipe.tree import find_matches, node_ref
-from agentpilot.session.interactive import InteractiveSession, execute_on_session
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.interactive import InteractiveSession, execute_on_session
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.driver import BrowserDriver
 
 _SOURCE_TO_CONTAINER = {"json_ld": "json_ld", "hydration": "hydration", "meta": "metadata"}
 

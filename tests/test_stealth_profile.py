@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.session.stealth_profile` -- the per-tier stealth
+"""Unit tests for `crawlpilot.session.stealth_profile` -- the per-tier stealth
 kwargs shared by the scrape and interactive paths. Pure, no browser.
 
 The parity assertions here are the regression guard for the hole this module
@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 
 from agentpilot.control.identity import identity_for
-from agentpilot.session import stealth_profile
-from agentpilot.spi.identity import ProfileKind
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.tiers import TierPolicy
+from crawlpilot.session import stealth_profile
+from crawlpilot.spi.identity import ProfileKind
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.tiers import TierPolicy
 
 IDENTITY = identity_for("acme", "zara.com", "s1", kind=ProfileKind.DEFAULT)
 
@@ -109,7 +109,7 @@ def test_as_open_kwargs_matches_the_driver_open_signature() -> None:
 
     import inspect
 
-    from agentpilot.spi.driver import BrowserDriver
+    from crawlpilot.spi.driver import BrowserDriver
 
     accepted = set(inspect.signature(BrowserDriver.open).parameters)
     assert set(stealth_profile.resolve(IDENTITY, "stealth").as_open_kwargs()) <= accepted
@@ -132,7 +132,7 @@ def test_humanize_and_spi_agree_on_the_cadence_mapping() -> None:
     """`humanize` resolves the profile name `TierPolicy` hands it, so the two can never
     drift; this asserts the delegation is actually wired."""
 
-    from agentpilot.driver import humanize
+    from crawlpilot.driver import humanize
 
     for tier in ("auto", "stealth", "enhanced", "basic", "nonsense"):
         assert humanize.by_name(TierPolicy.for_tier(tier).interact_profile).name == (

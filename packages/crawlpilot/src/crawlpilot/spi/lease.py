@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import NewType
 
-from agentpilot.spi.identity import IdentityRef
+from crawlpilot.spi.identity import IdentityRef
 
 LeaseId = NewType("LeaseId", str)
 

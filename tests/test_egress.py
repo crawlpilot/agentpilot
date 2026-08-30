@@ -1,4 +1,4 @@
-"""`agentpilot.egress.policy` unit tests. Safe to run anywhere: without `iptables`
+"""`crawlpilot.egress.policy` unit tests. Safe to run anywhere: without `iptables`
 on PATH (macOS dev, most CI runners) it must no-op with a warning rather than
 raise or touch the host network stack."""
 
@@ -8,14 +8,14 @@ import shutil
 
 import pytest
 
-from agentpilot.config import EgressConfig
-from agentpilot.egress.policy import (
+from crawlpilot.config import EgressConfig
+from crawlpilot.egress.policy import (
     _allow_cidrs,
     _deny_ranges,
     _resolve_host_to_cidrs,
     apply_baseline,
 )
-from agentpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.egress import EgressPolicy
 
 
 def test_deny_ranges_includes_metadata_and_private_by_default() -> None:

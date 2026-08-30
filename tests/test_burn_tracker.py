@@ -1,4 +1,4 @@
-"""`agentpilot.identity.burn_tracker.BurnTracker` -- weighted per-identity
+"""`crawlpilot.identity.burn_tracker.BurnTracker` -- weighted per-identity
 warning accounting against `fakeredis`, same pattern as `test_proxy_pinning`."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import pytest
 
 from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
-from agentpilot.identity.burn_tracker import (
+from crawlpilot.identity.burn_tracker import (
     MAX_WARNINGS,
     MINOR_WARNING_FACTOR,
     BurnTracker,

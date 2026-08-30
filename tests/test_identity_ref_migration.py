@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from agentpilot.control.identity import IdentityParts, identity_for, parts_of, tenant_of
-from agentpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
 
 
 def _legacy_slug(tenant: str, domain: str, name: str) -> str:
@@ -28,7 +28,7 @@ def _legacy_slug(tenant: str, domain: str, name: str) -> str:
     than imported -- a test that calls the code under test to compute its own
     expectation cannot detect a change in that code."""
 
-    from agentpilot.spi.identity import _sanitize_segment  # noqa: PLC0415
+    from crawlpilot.spi.identity import _sanitize_segment  # noqa: PLC0415
 
     return "/".join(_sanitize_segment(p) for p in (tenant, domain, name))
 

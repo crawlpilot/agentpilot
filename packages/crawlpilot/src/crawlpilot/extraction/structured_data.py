@@ -4,7 +4,7 @@ tags, and Next.js/Nuxt/SPA hydration-state script tags.
 Runs on a *fresh* `lxml.html` parse of the raw HTML -- deliberately not
 `sanitizer.sanitize()`'s tree, since `sanitizer._drop_always()` strips
 `head`/`meta`/`script` before this module would ever see them. No LLM, no
-network -- pure transform, same discipline as the rest of `agentpilot.extraction`.
+network -- pure transform, same discipline as the rest of `crawlpilot.extraction`.
 """
 
 from __future__ import annotations

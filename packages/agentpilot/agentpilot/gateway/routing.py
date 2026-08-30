@@ -17,7 +17,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from agentpilot.gateway.wiring import Wiring
-from agentpilot.spi.errors import NodeLost
+from crawlpilot.spi.errors import NodeLost
 
 
 def session_route_key(session_id: str) -> str:

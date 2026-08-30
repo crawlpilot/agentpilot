@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.identity.proxy_config.ProxyConfig` -- the
+"""Unit tests for `crawlpilot.identity.proxy_config.ProxyConfig` -- the
 client-configurable, tier-aware proxy resolver. Pure, no Redis/browser."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ import json
 import pytest
 
 from agentpilot.control.proxy_config import ProxyConfig
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 
 def test_from_flat_is_the_default_pool_for_every_tenant_and_tier() -> None:

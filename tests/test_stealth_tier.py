@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentpilot.tiers import TierPolicy
+from crawlpilot.tiers import TierPolicy
 
 
 @pytest.mark.parametrize(

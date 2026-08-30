@@ -28,7 +28,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from agentpilot.config import DEFAULT_CHROME_VERSION
+from crawlpilot.config import DEFAULT_CHROME_VERSION
 
 
 @dataclass(frozen=True)

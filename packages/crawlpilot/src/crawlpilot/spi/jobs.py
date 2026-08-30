@@ -1,7 +1,7 @@
 """Async job types for `/v1/crawl` and `/v1/batch/scrape` -- backed by
 `agentpilot.jobs.store.PostgresJobStore`, a new Postgres-backed queue (not
 Redis/BullMQ/RabbitMQ: this platform's Redis is reserved for the ephemeral
-placement/routing coordination `agentpilot.session`/`agentpilot.placement`
+placement/routing coordination `crawlpilot.session`/`agentpilot.placement`
 already use it for, and a durable job queue wants Postgres's durability
 guarantees regardless -- see `agentpilot/jobs/store.py`'s docstring for the
 full reasoning, ported from Firecrawl's own Postgres-backed "NuQ" queue).

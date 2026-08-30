@@ -4,10 +4,10 @@ import pytest
 import pytest_asyncio
 
 from agentpilot.control.identity import identity_for
-from agentpilot.driver.patchright_driver import PatchrightDriver
-from agentpilot.driver.process_launcher import ProcessLauncher
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.lease import ContextRef
+from crawlpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.driver.process_launcher import ProcessLauncher
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.lease import ContextRef
 
 
 @pytest_asyncio.fixture

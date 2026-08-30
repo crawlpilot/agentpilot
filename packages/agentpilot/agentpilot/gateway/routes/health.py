@@ -10,7 +10,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import contexts_active, contexts_idle
-from agentpilot.spi.lease import ContextState
+from crawlpilot.spi.lease import ContextState
 
 router = APIRouter(tags=["health"])
 

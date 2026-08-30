@@ -2,11 +2,11 @@
 
 Every other file in this directory constructs a `PatchrightDriver` and a
 `ProcessLauncher` and drives them directly. This one deliberately does not: it
-is the proof that a caller who imports nothing but `agentpilot.api` (plus the
+is the proof that a caller who imports nothing but `crawlpilot.api` (plus the
 action dataclasses for real batching) can drive a real browser -- which is what
 Phase 5 claims, and what the extracted `browserpilot` package has to deliver.
 
-If this file ever needs `agentpilot.driver` or `agentpilot.session` to do
+If this file ever needs `crawlpilot.driver` or `crawlpilot.session` to do
 something ordinary, the facade has a hole.
 """
 
@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 from pytest_httpserver import HTTPServer
 
-from agentpilot.api import Browser
-from agentpilot.spi import actions as spi_actions
+from crawlpilot.api import Browser
+from crawlpilot.spi import actions as spi_actions
 
 pytestmark = pytest.mark.asyncio
 

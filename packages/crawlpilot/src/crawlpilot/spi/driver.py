@@ -10,13 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from agentpilot.spi.actions import Action, ActionResult
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.health import ContextHealth, HealthStatus
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.storage_state import StorageState
+from crawlpilot.spi.actions import Action, ActionResult
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.health import ContextHealth, HealthStatus
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.storage_state import StorageState
 
 
 @runtime_checkable

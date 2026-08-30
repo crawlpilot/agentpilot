@@ -4,7 +4,7 @@ browser-use's `index not in selector_map` guard). No browser, no LLM."""
 from __future__ import annotations
 
 from agentpilot.agent.loop import _action_ref, _eval_emoji
-from agentpilot.spi.actions import (
+from crawlpilot.spi.actions import (
     ClickAction,
     FillAction,
     NavigateAction,

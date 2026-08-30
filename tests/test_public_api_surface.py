@@ -23,61 +23,61 @@ import pytest
 
 PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     # The driver-agnostic seam -- becomes `browserpilot.contracts`.
-    "agentpilot.spi.driver": ("BrowserDriver",),
-    "agentpilot.spi.actions": (
+    "crawlpilot.spi.driver": ("BrowserDriver",),
+    "crawlpilot.spi.actions": (
         "NavigateAction", "GoBackAction", "SnapshotAction", "ExtractAction",
         "ScreenshotAction", "WaitAction", "ExecuteJsAction", "ClickAction",
         "FillAction", "SelectOptionAction", "HoverAction", "PressAction",
         "ScrollAction", "NewTabAction", "CloseTabAction", "SwitchTabAction",
         "ListTabsAction", "TabInfo", "ActionResult",
     ),
-    "agentpilot.spi.identity": ("ProfileKind", "IdentityRef"),
-    "agentpilot.spi.lease": ("ContextState", "ContextRef", "Lease"),
-    "agentpilot.spi.scrape": ("ExtractConfig", "ScrapeOptions", "DocumentMetadata", "Document"),
-    "agentpilot.spi.egress": ("EgressPolicy",),
-    "agentpilot.spi.proxy": ("ProxyEndpoint",),
-    "agentpilot.spi.storage_state": ("LocalStorageEntry", "OriginState", "StorageState"),
-    "agentpilot.spi.health": ("HealthStatus", "ContextHealth"),
-    "agentpilot.spi.geometry": ("BoundingBox",),
-    "agentpilot.spi.dom_tree": (
+    "crawlpilot.spi.identity": ("ProfileKind", "IdentityRef"),
+    "crawlpilot.spi.lease": ("ContextState", "ContextRef", "Lease"),
+    "crawlpilot.spi.scrape": ("ExtractConfig", "ScrapeOptions", "DocumentMetadata", "Document"),
+    "crawlpilot.spi.egress": ("EgressPolicy",),
+    "crawlpilot.spi.proxy": ("ProxyEndpoint",),
+    "crawlpilot.spi.storage_state": ("LocalStorageEntry", "OriginState", "StorageState"),
+    "crawlpilot.spi.health": ("HealthStatus", "ContextHealth"),
+    "crawlpilot.spi.geometry": ("BoundingBox",),
+    "crawlpilot.spi.dom_tree": (
         "LayoutInfo", "NodeType", "EnhancedAXNode", "EnhancedDOMTreeNode",
     ),
-    "agentpilot.spi.errors": (
+    "crawlpilot.spi.errors": (
         "DriverError", "NavigationTimeout", "ContextCrashed", "ChallengeDetected",
         "StaleRefError", "TabNotFound", "LeaseConflict", "NodeLost",
         "CapacityExhausted", "EgressBlocked", "CdpNotAvailable",
     ),
     # Pure content pipeline -- becomes `browserpilot.content`. `extract` is the
     # function that Phase 6 also exposes as a tool and as `session.markdown()`.
-    "agentpilot.extraction.extractor": ("extract",),
-    "agentpilot.extraction.block_detect": ("classify_page",),
+    "crawlpilot.extraction.extractor": ("extract",),
+    "crawlpilot.extraction.block_detect": ("classify_page",),
     # Session pooling -- becomes `browserpilot.pool`.
-    "agentpilot.session.registry": ("Registry", "RegistryProtocol"),
+    "crawlpilot.session.registry": ("Registry", "RegistryProtocol"),
     # Identity/stealth -- split across `browserpilot.{identity,proxy,stealth}`.
-    "agentpilot.session.stealth_profile": ("StealthProfile", "resolve"),
+    "crawlpilot.session.stealth_profile": ("StealthProfile", "resolve"),
     # Phase 1 consolidation. `stealth_from_tier`/`interact_profile_for_tier`
     # (was `spi.actions`) and `effective_tier`/`is_protected` (was
     # `session.stealth_profile`) are gone as free functions -- they are now
     # fields on `TierPolicy`, which is the single owner. Recorded here as the
     # deliberate public-API edit this file's maintenance contract requires.
-    "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
+    "crawlpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
     # Phase 3a: the shared-state seam. `InMemoryStateStore` is the shipped
     # default; `control.redis_store.RedisStateStore` is the injected one.
     # Phase 5: the facade -- the entry point a library consumer imports.
-    "agentpilot.api": ("Browser", "BrowserSession"),
+    "crawlpilot.api": ("Browser", "BrowserSession"),
     # Phase 4: the extension seam.
-    "agentpilot.extensions": (
+    "crawlpilot.extensions": (
         "ExtensionRegistry", "ExtensionManifest", "Extension", "Resolution",
         "BrowseHooks", "ContentHooks", "BlockHooks",
         "BrowseMount", "ContentMount", "BlockMount",
         "HookChain", "check_compatibility", "discover_extensions", "API_VERSION",
     ),
-    "agentpilot.policy": (
+    "crawlpilot.policy": (
         "StateStore", "InMemoryStateStore",
         "ProxyProvider", "PrototypeProvider", "StaticProxies", "NullPrototypes",
     ),
     # Phase 2: the only module in the browser layer that reads the environment.
-    "agentpilot.config": (
+    "crawlpilot.config": (
         "BrowserConfig", "FingerprintConfig", "ProfileConfig",
         "ProxyHealthConfig", "EgressConfig", "ContentConfig", "DEFAULTS",
     ),
@@ -85,7 +85,7 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     # the tenant-keyed proxy table moved to `agentpilot.control`, behind the
     # `policy` provider seams. Deliberate public-API edits, per this file's
     # maintenance contract.
-    "agentpilot.identity.profile_store": ("resolve_profile_dir", "seed_profile_dir"),
+    "crawlpilot.identity.profile_store": ("resolve_profile_dir", "seed_profile_dir"),
 }
 
 _CASES = [(mod, name) for mod, names in PUBLIC_SURFACE.items() for name in names]
@@ -229,7 +229,7 @@ def test_the_browser_layer_never_imports_observability() -> None:
 
     This was a *ratchet* through Phases 4-6, pinning the four offenders so the
     debt could not grow while it waited. Phase 7 paid it: the browser layer now
-    emits through `agentpilot.metrics`, a no-op by default, and the platform
+    emits through `crawlpilot.metrics`, a no-op by default, and the platform
     installs a `PrometheusRecorder` at its composition root. The counters, their
     names and their labels are unchanged.
     """
@@ -252,7 +252,7 @@ def test_the_browser_layer_never_imports_observability() -> None:
 
     assert not offenders, (
         "browser-layer dependency on observability (and so prometheus): "
-        f"{offenders}. Emit through `agentpilot.metrics` instead."
+        f"{offenders}. Emit through `crawlpilot.metrics` instead."
     )
 
 
@@ -260,7 +260,7 @@ def test_the_metrics_seam_is_silent_by_default_and_never_raises() -> None:
     """A library consumer that installs no recorder pays nothing, and a metrics
     backend must never be able to fail a crawl."""
 
-    from agentpilot import metrics
+    from crawlpilot import metrics
 
     metrics.set_recorder(None)
     metrics.incr("anything", label="value")  # no-op, no error

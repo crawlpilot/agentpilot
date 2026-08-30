@@ -18,8 +18,8 @@ from pathlib import Path
 
 import structlog
 
-from agentpilot import config
-from agentpilot.spi.identity import IdentityRef
+from crawlpilot import config
+from crawlpilot.spi.identity import IdentityRef
 
 log = structlog.get_logger(__name__)
 

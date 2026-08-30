@@ -25,7 +25,7 @@ import re
 from collections.abc import Mapping
 from typing import Protocol
 
-from agentpilot.extensions.mounts import BlockHooks
+from crawlpilot.extensions.mounts import BlockHooks
 
 
 class Verdict(enum.Enum):

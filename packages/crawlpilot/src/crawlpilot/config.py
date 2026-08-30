@@ -12,7 +12,7 @@ The rule this module establishes: **leaves take values as arguments; only a
 composition root reads the environment.** `gateway.wiring` calls
 `BrowserConfig.from_env()` once and passes the result down.
 
-Deliberately a **pure leaf**, like `agentpilot.tiers`: it imports nothing from
+Deliberately a **pure leaf**, like `crawlpilot.tiers`: it imports nothing from
 `agentpilot`, so every branch of the layer graph can depend on it. An
 import-linter `forbidden` contract enforces that.
 

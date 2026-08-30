@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from agentpilot.spi.jobs import Job, JobId, JobStatus, JobType
-from agentpilot.spi.scrape import Document, DocumentMetadata
-from agentpilot.spi.webhook import WebhookConfig
+from crawlpilot.spi.jobs import Job, JobId, JobStatus, JobType
+from crawlpilot.spi.scrape import Document, DocumentMetadata
+from crawlpilot.spi.webhook import WebhookConfig
 
 if TYPE_CHECKING:
     # Deferred at runtime for the same reason `agentpilot.auth.store` defers
@@ -428,7 +428,7 @@ class PostgresJobStore:
     async def reclaim_stale_tasks(self, stale_after_seconds: float) -> int:
         """Crash recovery: any `active` task whose lock hasn't been renewed
         recently resets to `queued` for a different claimer -- the queue-level
-        analogue of `agentpilot.session.reaper.Reaper`'s expired-lease
+        analogue of `crawlpilot.session.reaper.Reaper`'s expired-lease
         reclamation. Called at the top of every `CrawlWorkerLoop` tick."""
 
         async with self._pool.connection() as conn:

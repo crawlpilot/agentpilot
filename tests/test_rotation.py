@@ -1,15 +1,15 @@
-"""Unit tests for `agentpilot.session.rotation` -- the retire policy and its
+"""Unit tests for `crawlpilot.session.rotation` -- the retire policy and its
 thresholds. Pure -- no browser, no registry."""
 
 from __future__ import annotations
 
-from agentpilot.session.rotation import (
+from crawlpilot.session.rotation import (
     RotationConfig,
     RotationPolicy,
     RotationThresholds,
     should_retire,
 )
-from agentpilot.spi.health import ContextHealth
+from crawlpilot.spi.health import ContextHealth
 
 
 def _health(*, tasks=0, successes=0, failures=0, leak_warnings=0) -> ContextHealth:

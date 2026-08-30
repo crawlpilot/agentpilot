@@ -15,13 +15,13 @@ import pytest
 from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
-from agentpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.build import build_recipe
 from agentpilot.recipe.heal import check_and_heal
 from agentpilot.recipe.replay import replay_recipe
-from agentpilot.session.interactive import open_interactive_session, release_interactive_session
-from agentpilot.session.registry import Registry
+from crawlpilot.session.interactive import open_interactive_session, release_interactive_session
+from crawlpilot.session.registry import Registry
 
 ACCORDION_PAGE_HTML = """<html><body>
 <button id="btn">Show details</button>

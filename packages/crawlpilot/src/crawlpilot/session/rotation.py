@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from agentpilot.spi.health import ContextHealth
+from crawlpilot.spi.health import ContextHealth
 
 
 class RotationPolicy(Enum):

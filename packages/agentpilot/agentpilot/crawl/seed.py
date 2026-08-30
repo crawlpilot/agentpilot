@@ -25,10 +25,10 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from agentpilot.crawl import dedup, filters, link_extractor, rank, robots, sitemap
-from agentpilot.egress.httpx_guard import guarded_get
-from agentpilot.spi.crawl import CrawlOptions, MapLink, MapOptions
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import EgressBlocked
+from crawlpilot.egress.httpx_guard import guarded_get
+from crawlpilot.spi.crawl import CrawlOptions, MapLink, MapOptions
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import EgressBlocked
 
 # Bounded concurrency for the recursive-crawl fallback's per-level page
 # fetches -- matches `CrawlOptions.max_concurrency`'s default so map's

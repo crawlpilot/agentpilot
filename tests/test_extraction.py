@@ -1,12 +1,12 @@
-"""Pure-transform unit tests for `agentpilot.extraction` -- static HTML fixtures,
+"""Pure-transform unit tests for `crawlpilot.extraction` -- static HTML fixtures,
 zero browser."""
 
 from __future__ import annotations
 
 import json
 
-from agentpilot.extraction.extractor import extract
-from agentpilot.extraction.postprocess import escape_link_label_newlines
+from crawlpilot.extraction.extractor import extract
+from crawlpilot.extraction.postprocess import escape_link_label_newlines
 
 ARTICLE_HTML = """<html><body>
 <header><nav>Home | About | Contact | Blog | Careers</nav></header>

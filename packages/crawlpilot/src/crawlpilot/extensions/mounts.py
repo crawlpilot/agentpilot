@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
-from agentpilot.extensions.hooks import HookChain
-from agentpilot.extensions.manifest import ExtensionManifest
+from crawlpilot.extensions.hooks import HookChain
+from crawlpilot.extensions.manifest import ExtensionManifest
 
 
 class Resolution(Enum):

@@ -6,7 +6,7 @@ from __future__ import annotations
 from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl import robots
-from agentpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.egress import EgressPolicy
 
 POLICY = EgressPolicy()
 

@@ -3,7 +3,7 @@ worker a session actually lives on (the exact same route implementations in
 `routes/sessions.py`, just mounted under a different prefix on the worker).
 
 Mounted **instead of** `routes/sessions.py` when `wiring.role == "gateway"`
-(see `app.py`) -- a gateway process never imports/touches `agentpilot.driver`.
+(see `app.py`) -- a gateway process never imports/touches `crawlpilot.driver`.
 Every route here requires `require_tenant_auth` (added at `include_router()`
 time in `app.py`, not per-function, since this router is *only* ever mounted
 at `/v1/sessions` -- there's no internal/trusted-mount ambiguity to handle the
@@ -43,8 +43,8 @@ from agentpilot.gateway.routing import resolve_node_addr, resolve_route, session
 from agentpilot.gateway.schemas import SessionOpenRequest
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.observability.metrics import requests_total, session_open_duration_seconds
-from agentpilot.spi.errors import NodeLost
-from agentpilot.spi.identity import ProfileKind
+from crawlpilot.spi.errors import NodeLost
+from crawlpilot.spi.identity import ProfileKind
 
 log = structlog.get_logger(__name__)
 

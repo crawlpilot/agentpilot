@@ -1,9 +1,9 @@
-"""Unit tests for `agentpilot.identity.fingerprint` -- deterministic, coherent
+"""Unit tests for `crawlpilot.identity.fingerprint` -- deterministic, coherent
 per-identity fingerprints. Pure, no browser."""
 
 from __future__ import annotations
 
-from agentpilot.identity import fingerprint as fp
+from crawlpilot.identity import fingerprint as fp
 
 
 def test_generate_is_deterministic() -> None:

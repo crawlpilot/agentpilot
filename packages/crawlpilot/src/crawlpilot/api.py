@@ -37,24 +37,24 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.extensions import Extension, ExtensionRegistry
-from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.policy import NullPrototypes, PrototypeProvider
-from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.session.interactive import (
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.extensions import Extension, ExtensionRegistry
+from crawlpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.session.ephemeral import run_ephemeral_scrape
+from crawlpilot.session.interactive import (
     InteractiveSession,
     execute_on_session,
     open_interactive_session,
     release_interactive_session,
 )
-from agentpilot.session.registry import Registry, RegistryProtocol
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.actions import ActionResult
-from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.scrape import Document, ScrapeOptions
-from agentpilot.tiers import Tier
+from crawlpilot.session.registry import Registry, RegistryProtocol
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.actions import ActionResult
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.scrape import Document, ScrapeOptions
+from crawlpilot.tiers import Tier
 
 DEFAULT_LEASE_TTL_SECONDS = 300.0
 
@@ -232,13 +232,13 @@ class Browser:
         """The concrete driver, built on first use.
 
         Deferred so that constructing a `Browser` imports no Chrome machinery:
-        `agentpilot.driver` pulls Patchright, which the Chrome-free deployments
+        `crawlpilot.driver` pulls Patchright, which the Chrome-free deployments
         deliberately do not install.
         """
 
         if self._driver is None:
-            from agentpilot.driver.patchright_driver import PatchrightDriver  # noqa: PLC0415
-            from agentpilot.driver.process_launcher import ProcessLauncher  # noqa: PLC0415
+            from crawlpilot.driver.patchright_driver import PatchrightDriver  # noqa: PLC0415
+            from crawlpilot.driver.process_launcher import ProcessLauncher  # noqa: PLC0415
 
             self._launcher = ProcessLauncher()
             self._driver = PatchrightDriver(

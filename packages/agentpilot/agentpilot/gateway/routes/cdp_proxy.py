@@ -34,7 +34,7 @@ from agentpilot.auth.models import AuthedTenant
 from agentpilot.gateway.auth_deps import bearer_token, require_tenant_auth, resolve_query_api_key
 from agentpilot.gateway.routing import resolve_route
 from agentpilot.gateway.wiring import Wiring, get_wiring
-from agentpilot.spi.errors import NodeLost
+from crawlpilot.spi.errors import NodeLost
 
 log = structlog.get_logger(__name__)
 

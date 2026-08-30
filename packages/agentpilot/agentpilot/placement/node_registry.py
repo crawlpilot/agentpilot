@@ -1,7 +1,7 @@
 """Worker-side node self-registration + capacity heartbeat -- the piece that
 turns "one hardcoded AGENTPILOT_WORKER_URL" into a real fleet the gateway's
 `SessionPlacer`/`NodeReaper` can see. Same background-task shape as
-`agentpilot.session.reaper.Reaper`: idempotent start/stop, a `while True`
+`crawlpilot.session.reaper.Reaper`: idempotent start/stop, a `while True`
 loop that logs and keeps going on a bad iteration rather than dying.
 
 Two writes, two different lifetimes:
@@ -24,9 +24,9 @@ import time
 import structlog
 from redis.asyncio import Redis
 
-from agentpilot.session.reaper import read_meminfo_used_pct
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.lease import ContextState
+from crawlpilot.session.reaper import read_meminfo_used_pct
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.lease import ContextState
 
 log = structlog.get_logger(__name__)
 

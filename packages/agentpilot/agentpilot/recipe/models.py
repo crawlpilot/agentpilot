@@ -11,7 +11,7 @@ shaped this phase:
    `array`-typed field carries a `RepeatSpec` describing how to iterate its
    options, not a fixed one-shot click.
 2. A `ref` minted during a live exploration run is epoch-scoped
-   (`agentpilot.driver.ref_cache`) and meaningless against a fresh page load
+   (`crawlpilot.driver.ref_cache`) and meaningless against a fresh page load
    -- so `RevealStep.locator` is always a re-resolvable descriptor (an
    accessibility role+name, or a CSS selector), never a raw `ref`. See
    `agentpilot.recipe.stabilize`.

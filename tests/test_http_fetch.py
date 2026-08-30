@@ -1,4 +1,4 @@
-"""`agentpilot.session.http_fetch.fetch_via_http` -- the basic-tier HTTP
+"""`crawlpilot.session.http_fetch.fetch_via_http` -- the basic-tier HTTP
 fast-path. Driven by an `httpx.MockTransport`, so no network or real proxy."""
 
 from __future__ import annotations
@@ -6,10 +6,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from agentpilot.session.http_fetch import fetch_via_http, proxy_url
-from agentpilot.spi.errors import ChallengeDetected
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.scrape import ScrapeOptions
+from crawlpilot.session.http_fetch import fetch_via_http, proxy_url
+from crawlpilot.spi.errors import ChallengeDetected
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.scrape import ScrapeOptions
 
 _OK_HTML = (
     "<html><head><title>Widget</title></head><body>"

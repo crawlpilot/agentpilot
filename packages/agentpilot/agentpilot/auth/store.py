@@ -1,13 +1,13 @@
 """API-key storage for tenant-facing auth: Postgres-backed (persists across
 restarts, shared across gateway processes) when `AGENTPILOT_DATABASE_URL`
 is set, in-memory otherwise (dev/test only) -- the same dual-backend shape as
-`agentpilot.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
+`crawlpilot.session.registry.RegistryProtocol`. Only a key's sha256 digest is ever
 persisted (`keygen.hash_key`); the plaintext is returned once, at creation,
 and never again.
 
 Postgres, not Redis: this is "user management" data (tenant, key hash, name,
-revocation), not the ephemeral distributed-lock/routing state `agentpilot.session`
-and `agentpilot.identity.proxy_pinning` use Redis for -- see `alembic/versions/
+revocation), not the ephemeral distributed-lock/routing state `crawlpilot.session`
+and `crawlpilot.identity.proxy_pinning` use Redis for -- see `alembic/versions/
 0001_create_api_keys.py` for the schema this store reads and writes.
 """
 
@@ -91,7 +91,7 @@ class PostgresApiKeyStore:
     """Postgres-backed `ApiKeyStoreProtocol` implementation -- hand-written
     SQL against the `api_keys` table (`alembic/versions/0001_create_api_keys
     .py`), matching this codebase's no-ORM house style (the same idea as
-    `agentpilot.session.redis_registry`'s raw Lua scripts, just SQL instead of
+    `crawlpilot.session.redis_registry`'s raw Lua scripts, just SQL instead of
     Lua). Only a key's sha256 digest is ever persisted, same contract as
     `InMemoryApiKeyStore`.
     """

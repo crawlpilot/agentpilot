@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from agentpilot.crawl.frontier import expand_frontier
-from agentpilot.spi.crawl import CrawlOptions
+from crawlpilot.spi.crawl import CrawlOptions
 
 SEED = "https://example.com/blog/"
 PAGE_HTML = """<html><body>

@@ -1,9 +1,9 @@
-"""Unit tests for `agentpilot.spi.hashing` -- pure structural identity hashes.
+"""Unit tests for `crawlpilot.spi.hashing` -- pure structural identity hashes.
 No browser. Mirrors the EXACT vs STABLE guarantees the change-diff relies on."""
 
 from __future__ import annotations
 
-from agentpilot.spi.hashing import (
+from crawlpilot.spi.hashing import (
     MatchLevel,
     element_hash,
     filter_dynamic_classes,

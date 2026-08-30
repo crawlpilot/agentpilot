@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agentpilot.tiers import TierName
-from agentpilot.tools import CATALOG
-from agentpilot.tools.spec import union_of
+from crawlpilot.tiers import TierName
+from crawlpilot.tools import CATALOG
+from crawlpilot.tools.spec import union_of
 
 # --- session lifecycle ---
 
@@ -48,7 +48,7 @@ class SessionOpenResponse(BaseModel):
 
 # --- actions ---
 #
-# Generated from `agentpilot.tools.CATALOG`, which is now the single place a
+# Generated from `crawlpilot.tools.CATALOG`, which is now the single place a
 # browser verb is declared (plan D5). These 17 models and their union used to be
 # written out by hand here, mirroring the `spi.actions` dataclasses, with a
 # third copy in `agent.actions` and a 17-entry converter table in
@@ -162,7 +162,7 @@ class DocumentOut(BaseModel):
     error: str | None = None
     extract: dict[str, Any] | list[Any] | None = None
     """A list when the caller's `extract.json_schema` had an array at its root
-    -- see `agentpilot.spi.scrape.Document.extract`."""
+    -- see `crawlpilot.spi.scrape.Document.extract`."""
     extract_error: str | None = None
     extract_warning: str | None = None
     """Non-fatal degradation of an extraction that still produced a result --

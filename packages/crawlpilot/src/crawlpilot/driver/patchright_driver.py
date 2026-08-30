@@ -1,7 +1,7 @@
 """The one concrete `BrowserDriver` implementation.
 
 Playwright/Patchright objects never leave this module -- everything returned
-to callers is a `agentpilot.spi` dataclass. `execute()` is the single dispatch loop
+to callers is a `crawlpilot.spi` dataclass. `execute()` is the single dispatch loop
 batching a whole `list[Action]` into one `ActionResult`. P1 adds real
 dispatch for the interaction verbs (via `driver/ref_cache.py`), snapshot
 token-budget filtering (`roles`/`max_nodes`/`viewport_only`), and the
@@ -47,21 +47,21 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from agentpilot import metrics
-from agentpilot.driver import humanize, mouse, warmup
-from agentpilot.driver.dom_fusion_engine import capture_fused_tree
-from agentpilot.driver.live_view import (
+from crawlpilot import metrics
+from crawlpilot.driver import humanize, mouse, warmup
+from crawlpilot.driver.dom_fusion_engine import capture_fused_tree
+from crawlpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
     parse_screencast_frame,
     to_cdp_input_params,
 )
-from agentpilot.driver.process_launcher import ProcessLauncher
-from agentpilot.driver.ref_cache import RefCache
-from agentpilot.egress.policy import apply_baseline
-from agentpilot.extensions.mounts import BlockHooks
-from agentpilot.extraction import block_detect
-from agentpilot.extraction.extractor import extract
-from agentpilot.spi.actions import (
+from crawlpilot.driver.process_launcher import ProcessLauncher
+from crawlpilot.driver.ref_cache import RefCache
+from crawlpilot.egress.policy import apply_baseline
+from crawlpilot.extensions.mounts import BlockHooks
+from crawlpilot.extraction import block_detect
+from crawlpilot.extraction.extractor import extract
+from crawlpilot.spi.actions import (
     Action,
     ActionResult,
     ClickAction,
@@ -83,8 +83,8 @@ from agentpilot.spi.actions import (
     TabInfo,
     WaitAction,
 )
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import (
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import (
     CapacityExhausted,
     ChallengeDetected,
     ContextCrashed,
@@ -92,12 +92,12 @@ from agentpilot.spi.errors import (
     StaleRefError,
     TabNotFound,
 )
-from agentpilot.spi.health import ContextHealth, HealthStatus
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState
-from agentpilot.spi.proxy import ProxyEndpoint
-from agentpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
-from agentpilot.spi.streaming import InputEvent, LiveViewFrame
+from crawlpilot.spi.health import ContextHealth, HealthStatus
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
+from crawlpilot.spi.streaming import InputEvent, LiveViewFrame
 
 log = structlog.get_logger(__name__)
 

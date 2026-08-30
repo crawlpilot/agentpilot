@@ -11,7 +11,7 @@ import pytest
 from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_registry import RedisRegistry
 from agentpilot.placement.node_reaper import NodeReaper
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 IDENTITY = identity_for("t", "example.com", "a")
 

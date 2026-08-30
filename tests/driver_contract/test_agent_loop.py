@@ -13,11 +13,11 @@ from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
 from agentpilot.agent.loop import run_agent_loop
-from agentpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.llm.client import LLMConfig
-from agentpilot.session.interactive import open_interactive_session, release_interactive_session
-from agentpilot.session.registry import Registry
-from agentpilot.spi.actions import NavigateAction
+from crawlpilot.session.interactive import open_interactive_session, release_interactive_session
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.actions import NavigateAction
 
 PAGE_HTML = """<html><body>
 <button id="probe" onclick="document.getElementById('result').textContent='clicked'">

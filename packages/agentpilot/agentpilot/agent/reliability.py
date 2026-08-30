@@ -17,7 +17,7 @@ import random
 from collections.abc import Awaitable, Callable
 from enum import Enum
 
-from agentpilot.spi.errors import (
+from crawlpilot.spi.errors import (
     CapacityExhausted,
     ContextCrashed,
     NavigationTimeout,

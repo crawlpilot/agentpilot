@@ -1,5 +1,5 @@
 """The real `/v1/scrape` implementation: a thin HTTP wrapper around
-`agentpilot.session.ephemeral.run_ephemeral_scrape` (the same function the
+`crawlpilot.session.ephemeral.run_ephemeral_scrape` (the same function the
 crawl-worker loop uses per-task, `agentpilot.jobs.worker_loop`), converting
 `ScrapeRequest` into `spi.scrape.ScrapeOptions` and the result into
 `ScrapeResponse`. No baked-in path prefix -- `app.py` mounts this router only
@@ -26,9 +26,10 @@ from agentpilot.gateway.schemas import (
     ScrapeResponse,
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
+from agentpilot.llm.structured import extract_structured
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
-from agentpilot.session.ephemeral import run_ephemeral_scrape
-from agentpilot.spi.scrape import ExtractConfig, ScrapeOptions
+from crawlpilot.session.ephemeral import run_ephemeral_scrape
+from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
@@ -116,6 +117,7 @@ async def scrape(
             browser_config=wiring.browser_config,
             prototype_provider=wiring.prototype_provider,
             block_hooks=wiring.extensions.blocks,
+            structured_extractor=extract_structured,
             scope=req.tenant,
             domain=domain,
             url=req.url,

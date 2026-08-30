@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentpilot.spi.dom_tree import LayoutInfo
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.spi.dom_tree import LayoutInfo
+from crawlpilot.spi.geometry import BoundingBox
 
 __all__ = ["LayoutInfo", "REQUIRED_COMPUTED_STYLES", "build_snapshot_lookup"]
 """`LayoutInfo` now lives in `spi.dom_tree` (see its docstring: `spi` may not

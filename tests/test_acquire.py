@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.session.acquire.acquire_validated` -- validate-on-
+"""Unit tests for `crawlpilot.session.acquire.acquire_validated` -- validate-on-
 acquire + auto-restart, over the real in-memory `Registry` with a fake driver."""
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 
 from agentpilot.control.identity import identity_for
-from agentpilot.session.acquire import acquire_validated
-from agentpilot.session.registry import Registry
-from agentpilot.spi.errors import ContextCrashed, LeaseConflict
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.session.acquire import acquire_validated
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.errors import ContextCrashed, LeaseConflict
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 _IDENTITY = identity_for("t", "d", "n")
 

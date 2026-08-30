@@ -1,4 +1,4 @@
-"""`agentpilot.identity.proxy_health.ProxyHealth` -- per-proxy retirement
+"""`crawlpilot.identity.proxy_health.ProxyHealth` -- per-proxy retirement
 (served-too-many-successes cap + 3-strike connection losses) over fakeredis."""
 
 from __future__ import annotations
@@ -6,8 +6,8 @@ from __future__ import annotations
 import fakeredis
 
 from agentpilot.control.redis_store import RedisStateStore
-from agentpilot.identity.proxy_health import ProxyHealth
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.identity.proxy_health import ProxyHealth
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 PROXY = ProxyEndpoint(scheme="http", host="p", port=8080, tier="residential")
 OTHER = ProxyEndpoint(scheme="http", host="q", port=8080, tier="residential")

@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from agentpilot.api import Browser
+from crawlpilot.api import Browser
 
 DEFAULT_URLS = [
     "https://example.com",

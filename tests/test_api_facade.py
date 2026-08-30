@@ -17,14 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from agentpilot.api import Browser, BrowserSession
-from agentpilot.extensions import ExtensionManifest, ExtensionRegistry
-from agentpilot.policy import NullPrototypes
-from agentpilot.session.registry import Registry
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.actions import ActionResult
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.api import Browser, BrowserSession
+from crawlpilot.extensions import ExtensionManifest, ExtensionRegistry
+from crawlpilot.policy import NullPrototypes
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.actions import ActionResult
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 
 class RecordingDriver:
@@ -77,7 +77,7 @@ def browser(tmp_path: Path) -> Browser:
 
 def test_a_caller_can_pass_nothing() -> None:
     """The headline claim. Constructing must not require -- or import -- Chrome:
-    `agentpilot.driver` pulls Patchright, which Chrome-free deployments
+    `crawlpilot.driver` pulls Patchright, which Chrome-free deployments
     deliberately do not install."""
 
     b = Browser()

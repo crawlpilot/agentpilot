@@ -8,7 +8,7 @@ with a purpose-built image.
   worker loops. Built from `docker/worker.Dockerfile`.
 - `gateway`: stateless; serves the tenant-facing `/v1/...` surface -- a thin
   proxy to a worker's `/internal/...` for driver-backed routes, and directly
-  for job/run CRUD (which never touches `agentpilot.driver`). Never constructs
+  for job/run CRUD (which never touches `crawlpilot.driver`). Never constructs
   a `PatchrightDriver`. Built from `docker/gateway.Dockerfile`, a Chrome-free
   image (no Xvfb/X11/iptables, no `patchright install`).
 

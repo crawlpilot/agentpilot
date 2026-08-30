@@ -13,8 +13,8 @@ import pytest
 from agentpilot.control.identity import identity_for
 from agentpilot.gateway.routes.sessions import list_sessions
 from agentpilot.gateway.wiring import Session
-from agentpilot.spi.identity import IdentityRef
-from agentpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
+from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
 
 
 class _FakeHeaders:

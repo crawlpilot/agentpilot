@@ -6,12 +6,32 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+members = [
+    "agentpilot",
+    "crawlpilot",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "fakeredis", specifier = ">=2.26" },
+    { name = "import-linter", specifier = ">=2.1" },
+    { name = "lupa", specifier = ">=2.1" },
+    { name = "lxml-stubs", specifier = ">=0.5" },
+    { name = "mypy", specifier = ">=1.13" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-httpserver", specifier = ">=1.1" },
+    { name = "ruff", specifier = ">=0.7" },
+]
+
 [[package]]
 name = "agentpilot"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "packages/agentpilot" }
 dependencies = [
     { name = "brotli" },
+    { name = "crawlpilot" },
     { name = "fastapi" },
     { name = "httpx", extra = ["http2"] },
     { name = "prometheus-client" },
@@ -28,28 +48,11 @@ bedrock = [
     { name = "anthropic", extra = ["bedrock"] },
 ]
 driver = [
-    { name = "cryptography" },
-    { name = "cssselect" },
-    { name = "lxml" },
-    { name = "patchright" },
-    { name = "re-cdp-patches" },
+    { name = "crawlpilot", extra = ["all"] },
 ]
 postgres = [
     { name = "alembic" },
     { name = "psycopg", extra = ["binary", "pool"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "fakeredis" },
-    { name = "import-linter" },
-    { name = "lupa" },
-    { name = "lxml-stubs" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-httpserver" },
-    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -57,16 +60,13 @@ requires-dist = [
     { name = "alembic", marker = "extra == 'postgres'", specifier = ">=1.13" },
     { name = "anthropic", extras = ["bedrock"], marker = "extra == 'bedrock'", specifier = ">=0.70" },
     { name = "brotli", specifier = ">=1.1" },
-    { name = "cryptography", marker = "extra == 'driver'", specifier = ">=43.0" },
-    { name = "cssselect", marker = "extra == 'driver'", specifier = ">=1.2.0" },
+    { name = "crawlpilot", editable = "packages/crawlpilot" },
+    { name = "crawlpilot", extras = ["all"], marker = "extra == 'driver'", editable = "packages/crawlpilot" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
-    { name = "lxml", marker = "extra == 'driver'", specifier = ">=6.1.1" },
-    { name = "patchright", marker = "extra == 'driver'", specifier = ">=1.61.2" },
     { name = "prometheus-client", specifier = ">=0.21" },
     { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },
-    { name = "re-cdp-patches", marker = "extra == 'driver'", specifier = ">=0.9.1" },
     { name = "redis", specifier = ">=5.0" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
@@ -74,19 +74,6 @@ requires-dist = [
     { name = "zstandard", specifier = ">=0.22" },
 ]
 provides-extras = ["driver", "postgres", "bedrock"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "fakeredis", specifier = ">=2.26" },
-    { name = "import-linter", specifier = ">=2.1" },
-    { name = "lupa", specifier = ">=2.1" },
-    { name = "lxml-stubs", specifier = ">=0.5" },
-    { name = "mypy", specifier = ">=1.13" },
-    { name = "pytest", specifier = ">=8.3" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "pytest-httpserver", specifier = ">=1.1" },
-    { name = "ruff", specifier = ">=0.7" },
-]
 
 [[package]]
 name = "alembic"
@@ -448,6 +435,58 @@ sdist = { url = "https://files.pythonhosted.org/packages/c6/2a/65274c13327f637ec
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5f/7c/0eb685107290b6221c03c46d39214a4e42a124189691cb83ae3228257f46/comtypes-1.4.16-py3-none-any.whl", hash = "sha256:e18d85179ff12955524c5a8c3bc09cb3c0d890f1da4d7123d14244c7b78f84c8", size = 296230, upload-time = "2026-03-02T23:11:41.049Z" },
 ]
+
+[[package]]
+name = "crawlpilot"
+version = "0.1.0"
+source = { editable = "packages/crawlpilot" }
+dependencies = [
+    { name = "brotli" },
+    { name = "httpx", extra = ["http2"] },
+    { name = "pydantic" },
+    { name = "structlog" },
+    { name = "zstandard" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "cryptography" },
+    { name = "cssselect" },
+    { name = "lxml" },
+    { name = "patchright" },
+    { name = "re-cdp-patches" },
+]
+engine = [
+    { name = "patchright" },
+    { name = "re-cdp-patches" },
+]
+markdown = [
+    { name = "cssselect" },
+    { name = "lxml" },
+]
+vault = [
+    { name = "cryptography" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "brotli", specifier = ">=1.1" },
+    { name = "cryptography", marker = "extra == 'all'", specifier = ">=43.0" },
+    { name = "cryptography", marker = "extra == 'vault'", specifier = ">=43.0" },
+    { name = "cssselect", marker = "extra == 'all'", specifier = ">=1.2.0" },
+    { name = "cssselect", marker = "extra == 'markdown'", specifier = ">=1.2.0" },
+    { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
+    { name = "lxml", marker = "extra == 'all'", specifier = ">=6.1.1" },
+    { name = "lxml", marker = "extra == 'markdown'", specifier = ">=6.1.1" },
+    { name = "patchright", marker = "extra == 'all'", specifier = ">=1.61.2" },
+    { name = "patchright", marker = "extra == 'engine'", specifier = ">=1.61.2" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "re-cdp-patches", marker = "extra == 'all'", specifier = ">=0.9.1" },
+    { name = "re-cdp-patches", marker = "extra == 'engine'", specifier = ">=0.9.1" },
+    { name = "structlog", specifier = ">=24.4" },
+    { name = "zstandard", specifier = ">=0.22" },
+]
+provides-extras = ["engine", "markdown", "vault", "all"]
 
 [[package]]
 name = "cryptography"

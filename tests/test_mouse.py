@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.driver.mouse` -- pure geometry, no browser.
+"""Unit tests for `crawlpilot.driver.mouse` -- pure geometry, no browser.
 
 These assert the three properties that separate a human pointer path from
 Playwright's `mouse.move(steps=n)` linear interpolation, which is what both
@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import random
 
-from agentpilot.driver import mouse
+from crawlpilot.driver import mouse
 
 
 def _straightness(points: list[tuple[float, float]]) -> float:

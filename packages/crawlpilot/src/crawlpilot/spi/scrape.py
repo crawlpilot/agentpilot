@@ -14,14 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentpilot.spi.actions import Action, ExtractFormat
+from crawlpilot.spi.actions import Action, ExtractFormat
 
 
 @dataclass
 class ExtractConfig:
     """LLM-schema-driven structured extraction (`agentpilot.llm.schema_extract`)
     -- a single model call over the scrape's markdown, distinct from the
-    deterministic `structured_data` format (`agentpilot.extraction
+    deterministic `structured_data` format (`crawlpilot.extraction
     .structured_data`, no LLM). `json_schema` is plain JSON Schema, not a
     custom DSL -- it's handed directly to an OpenAI-compatible
     `response_format.json_schema.schema` parameter, no translation layer
@@ -88,7 +88,7 @@ class Document:
     html: str | None = None
     structured_data: dict[str, Any] | None = None
     """JSON-LD/meta-OG-Twitter-DC/Next.js-Nuxt hydration-state bundle, set
-    when `formats` includes `"structured_data"` -- see `agentpilot.extraction
+    when `formats` includes `"structured_data"` -- see `crawlpilot.extraction
     .structured_data`. Deterministic, no LLM; see `extract` for the separate
     LLM-schema-driven counterpart."""
     raw_html: str | None = None

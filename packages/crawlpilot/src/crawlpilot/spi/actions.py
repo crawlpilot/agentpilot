@@ -10,7 +10,7 @@ P0 dispatched the navigate/read/extract verbs. The interaction verbs
 (Click/Fill/SelectOption/Hover/Press/Scroll) were defined from P0 for a
 stable closed set -- so gateway schemas and `spi.driver.BrowserDriver` never
 needed a breaking shape change -- and now dispatch for real in P1 via
-`agentpilot.driver.ref_cache`.
+`crawlpilot.driver.ref_cache`.
 """
 
 from __future__ import annotations
@@ -18,10 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from agentpilot.spi.artifact import ArtifactRef
+from crawlpilot.spi.artifact import ArtifactRef
 
 if TYPE_CHECKING:
-    from agentpilot.spi.dom_tree import EnhancedDOMTreeNode
+    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
@@ -71,7 +71,7 @@ class SnapshotAction:
 @dataclass
 class ExtractAction:
     """The scrape output. `markdown`/`text` route through
-    `agentpilot.extraction`'s sanitize -> convert -> post-process pipeline;
+    `crawlpilot.extraction`'s sanitize -> convert -> post-process pipeline;
     `html` returns `page.content()` raw. `base_url` is used to absolutify
     relative links/images during sanitization -- typically left unset here
     and filled in by the driver from the live page's post-navigation URL."""

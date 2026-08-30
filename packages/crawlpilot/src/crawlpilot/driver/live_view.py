@@ -14,7 +14,7 @@ import base64
 import time
 from typing import Any
 
-from agentpilot.spi.streaming import (
+from crawlpilot.spi.streaming import (
     InputEvent,
     KeyEvent,
     LiveViewFrame,

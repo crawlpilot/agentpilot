@@ -13,7 +13,7 @@ import asyncio
 import pytest
 
 from agentpilot.control.retail_extension import RetailExtension
-from agentpilot.extensions import (
+from crawlpilot.extensions import (
     API_VERSION,
     BlockHooks,
     BrowseHooks,
@@ -24,7 +24,7 @@ from agentpilot.extensions import (
     Resolution,
     check_compatibility,
 )
-from agentpilot.extraction.block_detect import Verdict, classify_page
+from crawlpilot.extraction.block_detect import Verdict, classify_page
 
 # --------------------------------------------------------------- reference
 
@@ -238,7 +238,7 @@ def test_importing_the_content_pipeline_registers_nothing() -> None:
     """The D12 defect, asserted directly: importing `block_detect` used to
     install three retailers' policy into a module-level list."""
 
-    import agentpilot.extraction.block_detect as bd
+    import crawlpilot.extraction.block_detect as bd
 
     # Deliberately *not* `importlib.reload`: reloading rebinds `Verdict` to a new
     # enum class, so every `is` comparison in the rest of this file would then

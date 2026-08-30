@@ -1,4 +1,4 @@
-"""`agentpilot.identity.proxy_pinning` -- assign-once-keep-for-life, race-safe via
+"""`crawlpilot.identity.proxy_pinning` -- assign-once-keep-for-life, race-safe via
 Redis `HSETNX`. Against `fakeredis`, same pattern as `test_redis_registry.py`."""
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import pytest
 
 from agentpilot.control.identity import identity_for
 from agentpilot.control.redis_store import RedisStateStore
-from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.spi.proxy import ProxyEndpoint
 
 POOL = [
     ProxyEndpoint(scheme="http", host="proxy1.example.com", port=8080, vendor="acme"),
@@ -138,7 +138,7 @@ async def test_pin_persists_tier_and_country_across_a_fresh_instance() -> None:
 
 async def test_retired_proxy_is_skipped_and_a_pin_is_repinned() -> None:
     from agentpilot.control.proxy_config import ProxyConfig
-    from agentpilot.identity.proxy_health import ProxyHealth
+    from crawlpilot.identity.proxy_health import ProxyHealth
 
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())
     a = ProxyEndpoint(scheme="http", host="a", port=1, tier="residential")
@@ -158,7 +158,7 @@ async def test_retired_proxy_is_skipped_and_a_pin_is_repinned() -> None:
 
 async def test_pick_ephemeral_avoids_retired_proxies() -> None:
     from agentpilot.control.proxy_config import ProxyConfig
-    from agentpilot.identity.proxy_health import ProxyHealth
+    from crawlpilot.identity.proxy_health import ProxyHealth
 
     store = RedisStateStore(fakeredis.aioredis.FakeRedis())
     a = ProxyEndpoint(scheme="http", host="a", port=1, tier="residential")

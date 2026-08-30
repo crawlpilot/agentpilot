@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from agentpilot.tools.registry import BROWSER_NAMESPACE, ToolRegistry
-from agentpilot.tools.spec import ToolSpec
+from crawlpilot.tools.registry import BROWSER_NAMESPACE, ToolRegistry
+from crawlpilot.tools.spec import ToolSpec
 
 
 def _qualified(spec: ToolSpec, namespace: str) -> str:

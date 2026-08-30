@@ -19,8 +19,8 @@ and clearing this counter, so its next open is a clean first-visit browser.
 
 from __future__ import annotations
 
-from agentpilot.policy import StateStore
-from agentpilot.spi.identity import IdentityRef
+from crawlpilot.policy import StateStore
+from crawlpilot.spi.identity import IdentityRef
 
 MAX_WARNINGS = 8
 """Retire threshold -- Pulsar's `PRIVACY_MAX_WARNINGS`. Must stay in step with

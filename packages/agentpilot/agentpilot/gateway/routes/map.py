@@ -20,13 +20,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agentpilot.auth.models import AuthedTenant
 from agentpilot.crawl.seed import discover_for_map
-from agentpilot.egress.httpx_guard import guarded_get
+from crawlpilot.egress.httpx_guard import guarded_get
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.schemas import MapLinkOut, MapRequest, MapResponse
 from agentpilot.observability.metrics import requests_total
-from agentpilot.spi.crawl import MapOptions
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import EgressBlocked
+from crawlpilot.spi.crawl import MapOptions
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import EgressBlocked
 
 router = APIRouter(tags=["map"])
 

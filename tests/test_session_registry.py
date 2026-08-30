@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.session.registry` -- no browser, no driver: `open()`
+"""Unit tests for `crawlpilot.session.registry` -- no browser, no driver: `open()`
 is a fake `opener` callback returning a bare `ContextRef`, matching how
 `routes/sessions.py` only ever calls `driver.open()` from inside one."""
 
@@ -9,10 +9,10 @@ import asyncio
 import pytest
 
 from agentpilot.control.identity import identity_for
-from agentpilot.session.lease import is_expired
-from agentpilot.session.registry import Registry
-from agentpilot.spi.errors import LeaseConflict
-from agentpilot.spi.lease import ContextRef, ContextState
+from crawlpilot.session.lease import is_expired
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.lease import ContextRef, ContextState
 
 IDENTITY = identity_for("t", "example.com", "a")
 

@@ -11,9 +11,9 @@ from __future__ import annotations
 import pytest
 
 from agentpilot.control.retail_extension import RetailExtension
-from agentpilot.extensions import ExtensionRegistry
-from agentpilot.extraction import block_detect
-from agentpilot.extraction.block_detect import Verdict
+from crawlpilot.extensions import ExtensionRegistry
+from crawlpilot.extraction import block_detect
+from crawlpilot.extraction.block_detect import Verdict
 
 # The retail checkers are no longer auto-installed at import (plan D12): they are
 # an ordinary extension the platform wires in. These tests exercise the same

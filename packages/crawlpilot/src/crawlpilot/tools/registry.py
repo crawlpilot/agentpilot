@@ -18,8 +18,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
 
-from agentpilot.tools.catalog import CATALOG
-from agentpilot.tools.spec import Safety, ToolSpec
+from crawlpilot.tools.catalog import CATALOG
+from crawlpilot.tools.spec import Safety, ToolSpec
 
 BROWSER_NAMESPACE = "browser"
 

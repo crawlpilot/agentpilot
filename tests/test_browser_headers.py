@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.session.browser_headers`. Pure; no network.
+"""Unit tests for `crawlpilot.session.browser_headers`. Pure; no network.
 
 The `basic` tier used to send five headers and nothing else. Every assertion
 here is about a header whose *absence* is a one-line rule at a WAF edge, long
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import importlib
 
-from agentpilot.session import browser_headers as bh
+from crawlpilot.session import browser_headers as bh
 
 HINTS = {
     "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24"',

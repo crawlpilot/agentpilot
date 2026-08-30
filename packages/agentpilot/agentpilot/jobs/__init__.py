@@ -6,7 +6,7 @@ backed queue/store (`store.py`), the crawl-worker processing loop
 A second top-level consumer of `agentpilot.placement`, alongside
 `agentpilot.gateway` -- not a layering violation, the same shape
 `agentpilot.placement` already supports for two independent callers.
-Never imports `agentpilot.driver` directly (see `pyproject.toml`'s
+Never imports `crawlpilot.driver` directly (see `pyproject.toml`'s
 import-linter "only the composition root imports the concrete driver"
 contract, which this package's forbidden-modules list is added to).
 """

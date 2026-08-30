@@ -10,7 +10,7 @@ importing `agentpilot.gateway` (forbidden by the layering: `gateway -> agent
 Takes explicit driver/registry/etc. parameters rather than a `Wiring` object,
 same discipline `session/ephemeral.py` already follows and for the same
 reason: `Wiring` lives in `agentpilot.gateway`, above this module in the
-layering -- `agentpilot.session` must never import it.
+layering -- `crawlpilot.session` must never import it.
 
 Distinct from `session/ephemeral.py`'s `run_ephemeral_scrape()`: that helper
 is architected around exactly one `driver.execute()` call before hard
@@ -28,25 +28,25 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from agentpilot import metrics
-from agentpilot.config import DEFAULTS, BrowserConfig
-from agentpilot.identity.profile_store import (
+from crawlpilot import metrics
+from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.identity.profile_store import (
     delete_profile_dir,
     resolve_profile_dir,
     seed_profile_dir,
 )
-from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.policy import NullPrototypes, PrototypeProvider
-from agentpilot.session import stealth_profile
-from agentpilot.session.acquire import acquire_validated
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.session.rotation import RotationConfig, RotationPolicy, should_retire
-from agentpilot.spi import actions as spi_actions
-from agentpilot.spi.driver import BrowserDriver
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.identity import IdentityRef, ProfileKind
-from agentpilot.spi.lease import ContextRef, LeaseId
-from agentpilot.tiers import TierPolicy
+from crawlpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.policy import NullPrototypes, PrototypeProvider
+from crawlpilot.session import stealth_profile
+from crawlpilot.session.acquire import acquire_validated
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.session.rotation import RotationConfig, RotationPolicy, should_retire
+from crawlpilot.spi import actions as spi_actions
+from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.lease import ContextRef, LeaseId
+from crawlpilot.tiers import TierPolicy
 
 if TYPE_CHECKING:
     # Deferred: `Vault` pulls in `cryptography` (the `driver` extra), which
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
     # (`ModuleNotFoundError: No module named 'cryptography'`) even though
     # this module only ever uses `vault` as a passed-in instance (`.load()`/
     # `.save()`), never the class itself, at runtime.
-    from agentpilot.identity.vault import Vault
+    from crawlpilot.identity.vault import Vault
 
 log = structlog.get_logger(__name__)
 

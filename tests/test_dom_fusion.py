@@ -1,9 +1,9 @@
-"""Unit tests for `agentpilot.driver.dom_fusion.build_snapshot_lookup` --
+"""Unit tests for `crawlpilot.driver.dom_fusion.build_snapshot_lookup` --
 pure parsing of a synthetic CDP DOMSnapshot payload. No browser."""
 
 from __future__ import annotations
 
-from agentpilot.driver.dom_fusion import REQUIRED_COMPUTED_STYLES, build_snapshot_lookup
+from crawlpilot.driver.dom_fusion import REQUIRED_COMPUTED_STYLES, build_snapshot_lookup
 
 
 def _snapshot() -> dict:

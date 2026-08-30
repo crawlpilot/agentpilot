@@ -23,10 +23,10 @@ import urllib.parse
 import pytest_asyncio
 
 from agentpilot.control.identity import identity_for
-from agentpilot.driver.patchright_driver import PatchrightDriver
-from agentpilot.identity.fingerprint import generate
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.lease import ContextRef
+from crawlpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.identity.fingerprint import generate
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.lease import ContextRef
 
 IDENTITY_SLUG = "t/example.com/fingerprint-test"
 
@@ -281,7 +281,7 @@ async def test_click_is_a_curved_approach_to_an_off_centre_point(
     teleport as the last thing the page saw. It now passes `position=`.
     """
 
-    from agentpilot.spi.actions import ClickAction, SnapshotAction
+    from crawlpilot.spi.actions import ClickAction, SnapshotAction
 
     cctx = driver._require_context(fingerprinted_ctx)  # noqa: SLF001
     live = driver._require_page(cctx, None)  # noqa: SLF001

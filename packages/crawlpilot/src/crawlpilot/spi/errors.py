@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class DriverError(Exception):
-    """Base class for all agentpilot.spi driver errors."""
+    """Base class for all crawlpilot.spi driver errors."""
 
 
 class NavigationTimeout(DriverError):

@@ -1,4 +1,4 @@
-"""Unit tests for `agentpilot.driver.warmup` -- the ported CommonRPA.visit
+"""Unit tests for `crawlpilot.driver.warmup` -- the ported CommonRPA.visit
 human warm-up. Uses a fake Patchright page (no browser); `asyncio.sleep` is
 patched to a no-op so the human delays don't slow the suite."""
 
@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from agentpilot.driver import humanize, warmup
+from crawlpilot.driver import humanize, warmup
 
 
 class _FakeMouse:

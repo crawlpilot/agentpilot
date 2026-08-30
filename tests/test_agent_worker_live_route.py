@@ -9,7 +9,7 @@ from typing import Any
 
 from agentpilot.control.identity import identity_for
 from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
-from agentpilot.spi.identity import IdentityRef
+from crawlpilot.spi.identity import IdentityRef
 
 
 @dataclass

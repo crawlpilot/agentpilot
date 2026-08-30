@@ -19,9 +19,9 @@ from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.models import Recipe, RecipeRunResult
 from agentpilot.recipe.replay import replay_recipe
 from agentpilot.recipe.schema import all_leaf_fields, leaf_to_array_map, parse_schema
-from agentpilot.session.interactive import InteractiveSession
-from agentpilot.session.registry import RegistryProtocol
-from agentpilot.spi.driver import BrowserDriver
+from crawlpilot.session.interactive import InteractiveSession
+from crawlpilot.session.registry import RegistryProtocol
+from crawlpilot.spi.driver import BrowserDriver
 
 
 async def check_and_heal(

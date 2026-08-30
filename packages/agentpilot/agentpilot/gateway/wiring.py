@@ -1,16 +1,16 @@
-"""The composition root -- the ONLY file in the repo that imports `agentpilot.driver`.
+"""The composition root -- the ONLY file in the repo that imports `crawlpilot.driver`.
 
 Role-aware (see `agentpilot.gateway.role`): a `worker` process owns the shared
 Patchright singleton, the `PatchrightDriver`, the registry (Redis-backed when
 `AGENTPILOT_REDIS_URL` is set, in-memory otherwise -- see
-`agentpilot.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
+`crawlpilot.session.registry.RegistryProtocol`), the `Reaper`, and P2's identity
 layer (`Vault`/`ProxyPinner`, both optional). A `worker` additionally
 self-registers into the fleet via
 `agentpilot.placement.node_registry.NodeRegistry`, so the gateway's
 `SessionPlacer`/`NodeReaper` can see it. A `gateway` process constructs none
 of the driver-side state -- just an httpx client, a Redis client, and the
 placement layer (`SessionPlacer`, `NodeReaper`, a `RedisRegistry` used only
-for the reaper's lease-eviction calls) -- and never touches `agentpilot.driver`.
+for the reaper's lease-eviction calls) -- and never touches `crawlpilot.driver`.
 
 The `session_id -> Session` dict is worker-local: `Registry` is keyed by
 `IdentityRef`, not `session_id`, since one warm context can be reused across
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     # Deferred (see _start_crawl_worker_loop()'s docstring): this keeps the
     # same "role-specific imports stay out of the module-level call stack"
     # discipline `_init_gateway()`'s own deferred imports already follow,
-    # even though agentpilot.jobs.worker_loop doesn't touch agentpilot.driver
+    # even though agentpilot.jobs.worker_loop doesn't touch crawlpilot.driver
     # and so isn't *required* to be deferred by that contract specifically.
     from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
     from agentpilot.jobs.recipe_scheduler_loop import RecipeSchedulerLoop
@@ -49,26 +49,26 @@ if TYPE_CHECKING:
     from agentpilot.jobs.worker_loop import CrawlWorkerLoop
 
 from agentpilot.auth.store import ApiKeyStoreProtocol, InMemoryApiKeyStore, PostgresApiKeyStore
-from agentpilot.config import BrowserConfig
+from crawlpilot.config import BrowserConfig
 from agentpilot.control.prototypes import DirectoryPrototypes
 from agentpilot.control.proxy_config import ProxyConfig
 from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.control.retail_extension import RetailExtension
-from agentpilot.extensions import ExtensionRegistry
+from crawlpilot.extensions import ExtensionRegistry
 from agentpilot.gateway.role import Role, get_role
-from agentpilot.identity.burn_tracker import BurnTracker
-from agentpilot.identity.proxy_health import ProxyHealth
-from agentpilot.identity.proxy_pinning import ProxyPinner
+from crawlpilot.identity.burn_tracker import BurnTracker
+from crawlpilot.identity.proxy_health import ProxyHealth
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
-from agentpilot.metrics import set_recorder
+from crawlpilot.metrics import set_recorder
 from agentpilot.observability.metrics import PrometheusRecorder
-from agentpilot.policy import InMemoryStateStore, StateStore
-from agentpilot.session.interactive import InteractiveSession
-from agentpilot.spi.proxy import ProxyEndpoint
+from crawlpilot.policy import InMemoryStateStore, StateStore
+from crawlpilot.session.interactive import InteractiveSession
+from crawlpilot.spi.proxy import ProxyEndpoint
 
-# `Session` used to be defined here; it's now `agentpilot.session.interactive
+# `Session` used to be defined here; it's now `crawlpilot.session.interactive
 # .InteractiveSession` (moved so `agentpilot.agent`'s step loop can open/drive
 # a session too, without importing `agentpilot.gateway`). Re-exported under
 # the old name for any external code still importing `gateway.wiring.Session`.
@@ -120,7 +120,7 @@ class Wiring:
         # extraction) -- `identity.fingerprint` used to read the pinned Chrome
         # version at *import* time, so it froze on first import and no embedding
         # caller could change it.
-        # The browser layer emits counters through `agentpilot.metrics`, which
+        # The browser layer emits counters through `crawlpilot.metrics`, which
         # defaults to a no-op so a library consumer pays nothing. The platform
         # installs the Prometheus-backed recorder here -- same counter names and
         # labels as before, only the dependency direction changed (Phase 7).
@@ -250,7 +250,7 @@ class Wiring:
             self.node_registry.start()
 
     def _init_gateway(self) -> None:
-        # Gateway-role graph excludes agentpilot.driver (plan.md) -- these imports
+        # Gateway-role graph excludes crawlpilot.driver (plan.md) -- these imports
         # are deferred into this method (not hoisted to module level) purely
         # so a gateway-role process's *call stack* never touches driver code,
         # even though the module-level import above this class still exists
@@ -272,7 +272,7 @@ class Wiring:
         self.placer = SessionPlacer(self.redis)
         # A second RedisRegistry construction, gateway-side this time (the
         # worker-side one lives in _init_worker()) -- harmless: RedisRegistry
-        # has no dependency on agentpilot.driver, and Redis dedupes
+        # has no dependency on crawlpilot.driver, and Redis dedupes
         # registered Lua scripts by SHA, so this isn't wasted work, just
         # used here only for the node-reaper's registry.evict() calls.
         self._gateway_registry = RedisRegistry(self.redis)
@@ -284,14 +284,14 @@ class Wiring:
         import uuid
 
         from agentpilot.control.redis_registry import RedisRegistry
-        from agentpilot.driver.patchright_driver import PatchrightDriver
-        from agentpilot.driver.process_launcher import ProcessLauncher
-        from agentpilot.identity.vault import Vault
+        from crawlpilot.driver.patchright_driver import PatchrightDriver
+        from crawlpilot.driver.process_launcher import ProcessLauncher
+        from crawlpilot.identity.vault import Vault
         from agentpilot.placement.node_registry import NodeRegistry
-        from agentpilot.session.reaper import Reaper
-        from agentpilot.session.registry import Registry, RegistryProtocol
-        from agentpilot.session.warm_pool import KeepaliveLoop, WarmPool
-        from agentpilot.spi.driver import BrowserDriver
+        from crawlpilot.session.reaper import Reaper
+        from crawlpilot.session.registry import Registry, RegistryProtocol
+        from crawlpilot.session.warm_pool import KeepaliveLoop, WarmPool
+        from crawlpilot.spi.driver import BrowserDriver
 
         self.node_id = os.environ.get(
             "AGENTPILOT_NODE_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
@@ -452,7 +452,7 @@ class Wiring:
             return
         from agentpilot.jobs.agent_worker_loop import AgentWorkerLoop
         from agentpilot.placement.placer import SessionPlacer
-        from agentpilot.session.rotation import RotationConfig, RotationPolicy
+        from crawlpilot.session.rotation import RotationConfig, RotationPolicy
 
         # Publish each run's live-view route so the `gateway` can proxy to this
         # worker. `SessionPlacer.commit_route` only needs Redis, and the worker

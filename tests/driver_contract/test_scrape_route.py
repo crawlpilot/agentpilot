@@ -13,11 +13,11 @@ from pytest_httpserver import HTTPServer
 from werkzeug import Response
 
 from agentpilot.control.identity import identity_for
-from agentpilot.driver.patchright_driver import PatchrightDriver
+from crawlpilot.driver.patchright_driver import PatchrightDriver
 from agentpilot.gateway.routes.scrape import scrape
 from agentpilot.gateway.schemas import ScrapeRequest
-from agentpilot.session.registry import Registry
-from agentpilot.spi.errors import ChallengeDetected
+from crawlpilot.session.registry import Registry
+from crawlpilot.spi.errors import ChallengeDetected
 
 ARTICLE_HTML = """<html><body>
 <article>
@@ -136,9 +136,9 @@ async def test_scrape_does_not_disturb_a_concurrent_interactive_session(
     `LeaseConflict` nor have scrape's `registry.evict()` teardown touch the
     interactive session's still-ACTIVE entry."""
 
-    from agentpilot.identity.profile_store import resolve_profile_dir
-    from agentpilot.spi.egress import EgressPolicy
-    from agentpilot.spi.identity import ProfileKind
+    from crawlpilot.identity.profile_store import resolve_profile_dir
+    from crawlpilot.spi.egress import EgressPolicy
+    from crawlpilot.spi.identity import ProfileKind
 
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     wiring = _FakeWiring(driver, tmp_path)
@@ -209,9 +209,9 @@ async def test_protected_scrape_warms_up_on_the_site_root_first(
     navigations rather than the shape of the action list.
     """
 
-    from agentpilot.session.ephemeral import run_ephemeral_scrape
-    from agentpilot.session.registry import Registry
-    from agentpilot.spi.scrape import ScrapeOptions
+    from crawlpilot.session.ephemeral import run_ephemeral_scrape
+    from crawlpilot.session.registry import Registry
+    from crawlpilot.spi.scrape import ScrapeOptions
 
     seen: list[str] = []
 

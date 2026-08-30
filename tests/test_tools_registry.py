@@ -26,8 +26,8 @@ from agentpilot.agent.actions import (
 )
 from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.schemas import ActionIn
-from agentpilot.spi import actions as sa
-from agentpilot.tools import (
+from crawlpilot.spi import actions as sa
+from crawlpilot.tools import (
     CATALOG,
     DuplicateToolError,
     ToolRegistry,

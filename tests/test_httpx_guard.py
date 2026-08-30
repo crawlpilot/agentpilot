@@ -1,17 +1,17 @@
-"""`agentpilot.egress.httpx_guard` -- post-DNS IP validation for the basic tier.
+"""`crawlpilot.egress.httpx_guard` -- post-DNS IP validation for the basic tier.
 DNS resolution is monkeypatched for the blocked-IP cases so these don't
 depend on real network/DNS; the allowed-path test hits a real local
 `pytest-httpserver` instance (loopback isn't in the blocked-range list --
-same scope as `agentpilot.egress.policy`'s browser-process baseline)."""
+same scope as `crawlpilot.egress.policy`'s browser-process baseline)."""
 
 from __future__ import annotations
 
 import pytest
 from pytest_httpserver import HTTPServer
 
-from agentpilot.egress import httpx_guard
-from agentpilot.spi.egress import EgressPolicy
-from agentpilot.spi.errors import EgressBlocked
+from crawlpilot.egress import httpx_guard
+from crawlpilot.spi.egress import EgressPolicy
+from crawlpilot.spi.errors import EgressBlocked
 
 DEFAULT_POLICY = EgressPolicy()
 
@@ -70,10 +70,10 @@ async def test_basic_tier_fetcher_refuses_a_metadata_address() -> None:
 
     import pytest
 
-    from agentpilot.session.http_fetch import fetch_via_http
-    from agentpilot.spi.egress import EgressPolicy
-    from agentpilot.spi.errors import EgressBlocked
-    from agentpilot.spi.scrape import ScrapeOptions
+    from crawlpilot.session.http_fetch import fetch_via_http
+    from crawlpilot.spi.egress import EgressPolicy
+    from crawlpilot.spi.errors import EgressBlocked
+    from crawlpilot.spi.scrape import ScrapeOptions
 
     with pytest.raises(EgressBlocked):
         await fetch_via_http(

@@ -32,7 +32,7 @@ from agentpilot.observability.metrics import (
     node_reaper_nodes_reaped_total,
     node_reaper_sessions_reclaimed_total,
 )
-from agentpilot.session.registry import RegistryProtocol
+from crawlpilot.session.registry import RegistryProtocol
 
 log = structlog.get_logger(__name__)
 

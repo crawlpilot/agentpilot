@@ -7,7 +7,7 @@ interactive set (a name change or an added element)."""
 from __future__ import annotations
 
 from agentpilot.agent.observation import identity_fingerprint
-from agentpilot.spi.geometry import BoundingBox
+from crawlpilot.spi.geometry import BoundingBox
 from tests.fusion_fixtures import fnode
 
 
