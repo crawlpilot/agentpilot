@@ -36,10 +36,7 @@ import time
 
 import structlog
 
-from agentpilot.observability.metrics import (
-    reaper_destroyed_total,
-    reaper_lease_reclaimed_total,
-)
+from agentpilot import metrics
 from agentpilot.session.lease import is_expired
 from agentpilot.session.registry import RegistryProtocol
 from agentpilot.spi.driver import BrowserDriver
@@ -135,7 +132,7 @@ class Reaper:
                 continue
             if is_expired(lease):
                 log.warning("reaper.lease_expired", identity=identity.slug())
-                reaper_lease_reclaimed_total.inc()
+                metrics.incr("reaper_lease_reclaimed_total")
                 await self._registry.force_release(identity)
 
     async def _enforce_per_process_ceiling(self) -> None:
@@ -191,5 +188,5 @@ class Reaper:
         evicted = await self._registry.evict(identity)
         if evicted is None:
             return
-        reaper_destroyed_total.labels(reason=reason).inc()
+        metrics.incr("reaper_destroyed_total", reason=reason)
         await self._driver.close(evicted)

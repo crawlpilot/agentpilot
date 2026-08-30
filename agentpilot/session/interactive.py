@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from agentpilot import metrics
 from agentpilot.config import DEFAULTS, BrowserConfig
 from agentpilot.identity.profile_store import (
     delete_profile_dir,
@@ -35,7 +36,6 @@ from agentpilot.identity.profile_store import (
     seed_profile_dir,
 )
 from agentpilot.identity.proxy_pinning import ProxyPinner
-from agentpilot.observability.metrics import context_rotations_total
 from agentpilot.policy import NullPrototypes, PrototypeProvider
 from agentpilot.session import stealth_profile
 from agentpilot.session.acquire import acquire_validated
@@ -278,7 +278,7 @@ async def _retire_if_degraded(
         with contextlib.suppress(Exception):
             delete_profile_dir(profiles_root, session.identity)
 
-    context_rotations_total.labels(policy=rotation.policy.value).inc()
+    metrics.incr("context_rotations_total", policy=rotation.policy.value)
     log.info(
         "interactive_session.retired",
         session_id=session.session_id,

@@ -47,6 +47,7 @@ from patchright.async_api import (
 from patchright.async_api import StorageState as PlaywrightStorageState
 from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from agentpilot import metrics
 from agentpilot.driver import humanize, mouse, warmup
 from agentpilot.driver.dom_fusion_engine import capture_fused_tree
 from agentpilot.driver.live_view import (
@@ -60,11 +61,6 @@ from agentpilot.egress.policy import apply_baseline
 from agentpilot.extensions.mounts import BlockHooks
 from agentpilot.extraction import block_detect
 from agentpilot.extraction.extractor import extract
-from agentpilot.observability.metrics import (
-    context_leak_warnings_total,
-    context_task_outcomes_total,
-    context_tasks_total,
-)
 from agentpilot.spi.actions import (
     Action,
     ActionResult,
@@ -694,7 +690,7 @@ class PatchrightDriver:
         result = ActionResult(page_changed=cctx.page_changed)
         cctx.page_changed = False
         cctx.health.tasks += 1
-        context_tasks_total.inc()
+        metrics.incr("context_tasks_total")
 
         succeeded = False
         try:
@@ -738,10 +734,10 @@ class PatchrightDriver:
             # success. Nothing acts on these tallies yet.
             if succeeded:
                 cctx.health.successes += 1
-                context_task_outcomes_total.labels(outcome="success").inc()
+                metrics.incr("context_task_outcomes_total", outcome="success")
             else:
                 cctx.health.failures += 1
-                context_task_outcomes_total.labels(outcome="failure").inc()
+                metrics.incr("context_task_outcomes_total", outcome="failure")
 
     async def _dispatch(
         self, cctx: _Context, live: _Page, action: Action, result: ActionResult
@@ -1022,7 +1018,7 @@ class PatchrightDriver:
             scope = block_detect.retry_scope(verdict)
             if weight:
                 cctx.health.leak_warnings += weight
-                context_leak_warnings_total.labels(reason=verdict.value).inc()
+                metrics.incr("context_leak_warnings_total", reason=verdict.value)
             if scope is block_detect.Scope.PRIVACY:
                 # A hard wall: rotate the whole identity (fresh proxy+fingerprint).
                 raise ChallengeDetected(
@@ -1048,7 +1044,7 @@ class PatchrightDriver:
         reason = _navigation_leak_reason(status)
         if reason is not None:
             cctx.health.leak_warnings += 1
-            context_leak_warnings_total.labels(reason=reason).inc()
+            metrics.incr("context_leak_warnings_total", reason=reason)
             result.verifications.append(
                 f"warning: navigation returned {reason} -- possible block or bot challenge"
             )

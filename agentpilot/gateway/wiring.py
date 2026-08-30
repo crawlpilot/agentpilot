@@ -62,6 +62,8 @@ from agentpilot.identity.proxy_pinning import ProxyPinner
 from agentpilot.jobs.agent_store import PostgresAgentStore
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
+from agentpilot.metrics import set_recorder
+from agentpilot.observability.metrics import PrometheusRecorder
 from agentpilot.policy import InMemoryStateStore, StateStore
 from agentpilot.session.interactive import InteractiveSession
 from agentpilot.spi.proxy import ProxyEndpoint
@@ -118,6 +120,12 @@ class Wiring:
         # extraction) -- `identity.fingerprint` used to read the pinned Chrome
         # version at *import* time, so it froze on first import and no embedding
         # caller could change it.
+        # The browser layer emits counters through `agentpilot.metrics`, which
+        # defaults to a no-op so a library consumer pays nothing. The platform
+        # installs the Prometheus-backed recorder here -- same counter names and
+        # labels as before, only the dependency direction changed (Phase 7).
+        set_recorder(PrometheusRecorder())
+
         self.browser_config = BrowserConfig.from_env()
 
         # The shared-state driver behind burn accounting, proxy health and

@@ -26,7 +26,7 @@ from typing import Any, cast
 
 import structlog
 
-from agentpilot.observability.metrics import extension_hook_calls_total
+from agentpilot import metrics
 
 log = structlog.get_logger(__name__)
 
@@ -61,9 +61,12 @@ class HookChain[T]:
     # ------------------------------------------------------------ dispatch
 
     def _observe(self, handler: _Handler[T], outcome: str) -> None:
-        extension_hook_calls_total.labels(
-            extension=handler.extension, hook=self.name, outcome=outcome
-        ).inc()
+        metrics.incr(
+            "extension_hook_calls_total",
+            extension=handler.extension,
+            hook=self.name,
+            outcome=outcome,
+        )
 
     def first_result(self, *args: Any, **kwargs: Any) -> T | None:
         """Filter-shaped, synchronous. First non-`None` wins."""

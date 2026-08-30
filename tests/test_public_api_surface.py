@@ -222,50 +222,73 @@ def test_browser_layer_has_no_tenancy_vocabulary() -> None:
     assert not offenders, "tenancy leaked back into the browser layer:\n" + "\n".join(offenders)
 
 
-# The browser-layer modules that import `observability` (and so, transitively,
-# `prometheus_client`). This is a **ratchet, not an approval**: the plan's §3.3
-# promises the browser wheel's dependency closure contains no prometheus, and
-# these three contradict it. Pinning the current set means the problem cannot
-# grow while it waits for Phase 7, where metrics need to move behind an
-# injected recorder the way `policy.StateStore` handles shared state.
-_OBSERVABILITY_DEBT = {
-    "driver/patchright_driver.py",
-    "session/interactive.py",
-    "session/reaper.py",
-    "extensions/hooks.py",
-}
+def test_the_browser_layer_never_imports_observability() -> None:
+    """It imports `prometheus_client`, which the extracted wheel must not carry
+    -- and `observability` is used by fourteen platform modules besides, so it
+    could not move across with the browser layer either.
 
-
-def test_observability_coupling_does_not_grow() -> None:
-    """Known debt, pinned so it shrinks rather than spreads.
-
-    `extensions/hooks.py` was added to this set deliberately in Phase 4: it
-    follows the existing precedent rather than inventing a second, divergent
-    metrics pattern for one module. All four move together when the recorder is
-    injected.
+    This was a *ratchet* through Phases 4-6, pinning the four offenders so the
+    debt could not grow while it waited. Phase 7 paid it: the browser layer now
+    emits through `agentpilot.metrics`, a no-op by default, and the platform
+    installs a `PrometheusRecorder` at its composition root. The counters, their
+    names and their labels are unchanged.
     """
 
     import ast
     import pathlib
 
-    found: set[str] = set()
+    offenders: list[str] = []
     for pkg in ("spi", "driver", "identity", "egress", "extraction", "dom",
-                "session", "tiers", "config", "policy", "extensions"):
+                "session", "tiers", "config", "policy", "extensions", "tools"):
         for path in pathlib.Path("agentpilot", pkg).rglob("*.py"):
-            tree = ast.parse(path.read_text())
-            for node in ast.walk(tree):
+            for node in ast.walk(ast.parse(path.read_text())):
                 mod = ""
                 if isinstance(node, ast.ImportFrom):
                     mod = node.module or ""
                 elif isinstance(node, ast.Import):
                     mod = node.names[0].name
                 if mod.startswith("agentpilot.observability"):
-                    found.add(path.relative_to("agentpilot").as_posix())
+                    offenders.append(f"{path.relative_to('agentpilot')}:{node.lineno}")
 
-    new = found - _OBSERVABILITY_DEBT
-    assert not new, (
-        "new browser-layer dependency on observability (and so prometheus): "
-        f"{sorted(new)}. Inject a recorder instead, or add it here with a reason."
+    assert not offenders, (
+        "browser-layer dependency on observability (and so prometheus): "
+        f"{offenders}. Emit through `agentpilot.metrics` instead."
     )
-    gone = _OBSERVABILITY_DEBT - found
-    assert not gone, f"debt paid down -- remove from _OBSERVABILITY_DEBT: {sorted(gone)}"
+
+
+def test_the_metrics_seam_is_silent_by_default_and_never_raises() -> None:
+    """A library consumer that installs no recorder pays nothing, and a metrics
+    backend must never be able to fail a crawl."""
+
+    from agentpilot import metrics
+
+    metrics.set_recorder(None)
+    metrics.incr("anything", label="value")  # no-op, no error
+
+    class Exploding:
+        def incr(self, name: str, amount: float = 1.0, **labels: str) -> None:
+            raise RuntimeError("metrics backend is down")
+
+    metrics.set_recorder(Exploding())
+    try:
+        metrics.incr("context_tasks_total")  # swallowed
+    finally:
+        metrics.set_recorder(None)
+
+
+def test_the_prometheus_recorder_carries_the_same_counters() -> None:
+    """The browser layer's counter names must all be routable, or a metric
+    silently disappears from the platform's /metrics output."""
+
+    from agentpilot.observability.metrics import PrometheusRecorder
+
+    expected = {
+        "context_tasks_total",
+        "context_task_outcomes_total",
+        "context_leak_warnings_total",
+        "context_rotations_total",
+        "reaper_destroyed_total",
+        "reaper_lease_reclaimed_total",
+        "extension_hook_calls_total",
+    }
+    assert set(PrometheusRecorder._COUNTERS) == expected  # noqa: SLF001

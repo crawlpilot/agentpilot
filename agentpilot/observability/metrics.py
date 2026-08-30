@@ -126,3 +126,35 @@ rather than from a reproduction: a chain that silently defers everything, or an
 extension whose `error` rate climbs after a site changes its markup, is
 invisible without this.
 """
+
+
+class PrometheusRecorder:
+    """Forwards the browser layer's `metrics.incr()` calls to the counters above.
+
+    The browser layer stopped importing `prometheus_client` in Phase 7 -- it
+    could not carry that dependency into its own wheel, and `observability` is
+    used by fourteen platform modules besides, so it could not move across
+    either. The counters, their names and their labels are unchanged; only the
+    direction of the dependency is. Installed once by `gateway.wiring`.
+
+    An unknown counter name is dropped with no error: a metric that has not been
+    declared here must not be able to fail a request.
+    """
+
+    _COUNTERS = {
+        "context_tasks_total": lambda: context_tasks_total,
+        "context_task_outcomes_total": lambda: context_task_outcomes_total,
+        "context_leak_warnings_total": lambda: context_leak_warnings_total,
+        "context_rotations_total": lambda: context_rotations_total,
+        "reaper_destroyed_total": lambda: reaper_destroyed_total,
+        "reaper_lease_reclaimed_total": lambda: reaper_lease_reclaimed_total,
+        "extension_hook_calls_total": lambda: extension_hook_calls_total,
+    }
+
+    def incr(self, name: str, amount: float = 1.0, **labels: str) -> None:
+        factory = self._COUNTERS.get(name)
+        if factory is None:
+            return
+        counter = factory()
+        target = counter.labels(**labels) if labels else counter
+        target.inc(amount)
