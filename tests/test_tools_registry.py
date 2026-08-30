@@ -13,6 +13,7 @@ with, would be a behaviour change wearing a refactor's clothes.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 import pathlib
 
@@ -316,3 +317,96 @@ def test_a_registry_can_be_built_from_a_subset_without_duplicate_errors() -> Non
     narrowed = registry.subset(agent_exposed=True)
     assert isinstance(narrowed, ToolRegistry)
     assert len(narrowed) == len(DEFAULT_ALLOWED_ACTIONS)
+
+
+# --------------------------------------------------- per-URL domain filtering
+
+
+def _walmart_only(spec):
+    return dataclasses.replace(spec, domains=("*.walmart.com",))
+
+
+def test_a_domain_restricted_verb_is_offered_only_on_its_own_sites() -> None:
+    """What makes the namespacing here load-bearing rather than decorative.
+
+    `walmart.solve_wall` can be registered permanently and still cost no context
+    on every other site, instead of every run paying for a verb that cannot work
+    where it is.
+    """
+
+    registry = browser_tools()
+    registry.register(_walmart_only(CATALOG[0]), namespace="walmart")
+
+    on_walmart = registry.subset(page_url="https://www.walmart.com/ip/123")
+    assert "walmart.navigate" in on_walmart
+    assert "browser.navigate" in on_walmart, "unrestricted verbs stay available"
+
+    elsewhere = registry.subset(page_url="https://example.test/")
+    assert "walmart.navigate" not in elsewhere
+    assert "browser.navigate" in elsewhere
+
+
+def test_a_domain_restricted_verb_fails_closed_without_a_url() -> None:
+    """A restricted verb exists because it is meaningless or unsafe elsewhere,
+    so "we don't know where we are" must not be treated as permission --
+    browser-use makes the same call (`tools/registry/views.py:107-111`)."""
+
+    spec = _walmart_only(CATALOG[0])
+    assert not spec.applies_to(None)
+    assert not spec.applies_to("")
+    assert spec.applies_to("https://cart.walmart.com/")
+    # A lookalike host must not match: the pattern is anchored on the hostname,
+    # not a substring of the URL.
+    assert not spec.applies_to("https://walmart.com.evil.test/")
+
+
+def test_an_unrestricted_verb_applies_everywhere_including_no_url() -> None:
+    assert browser_tools()["browser.click"].applies_to(None)
+    assert browser_tools()["browser.click"].applies_to("https://anything.test/")
+
+
+# ------------------------------------------------------ the ported verb set
+
+
+@pytest.mark.parametrize(
+    "verb",
+    ["send_keys", "find_text", "dropdown_options", "search_page", "find_elements"],
+)
+def test_the_ported_browser_use_verbs_reach_the_agent(verb: str) -> None:
+    """The catalog was 11 agent verbs against browser-use's 24. These are the
+    ones a model reaches for when a click will not do -- a shortcut, content
+    below the serializer's budget, the real options of a dropdown."""
+
+    registry = browser_tools()
+    assert registry[f"browser.{verb}"].agent_fields is not None
+    assert verb in DEFAULT_ALLOWED_ACTIONS
+
+
+def test_every_agent_verb_builds_a_schema_and_a_dataclass() -> None:
+    """A verb that cannot round-trip is worse than a missing one: the model is
+    shown a tool whose output fails to parse, and burns the step finding out."""
+
+    for spec in browser_tools().subset(agent_exposed=True):
+        schema = spec.json_schema()
+        assert schema["properties"]["type"]["const"] == spec.name
+        required = {f for f in spec.agent_fields or () if f in schema.get("required", [])}
+        payload = {"type": spec.name, **{f: _sample(schema, f) for f in required}}
+        assert spec.from_model(spec.agent_model().model_validate(payload)) is not None
+
+
+def _sample(schema: dict, field: str):
+    prop = schema["properties"][field]
+    if "const" in prop:
+        return prop["const"]
+    if "enum" in prop:
+        return prop["enum"][0]
+    kind = prop.get("type")
+    if kind == "array":
+        return []
+    if kind == "integer":
+        return 1
+    if kind == "number":
+        return 1.0
+    if kind == "boolean":
+        return True
+    return "https://example.test/" if field == "url" else "x"
