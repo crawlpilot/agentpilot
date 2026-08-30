@@ -219,7 +219,12 @@ def render_change_block(diff: DomDiff) -> str:
             node = change.node
             # Must match what the serializer rendered, or the change block would
             # hand the model a ref the ref index cannot resolve.
-            ref = f"e{node.selector_index if node.selector_index is not None else node.backend_node_id}"
+            index = (
+                node.selector_index
+                if node.selector_index is not None
+                else node.backend_node_id
+            )
+            ref = f"e{index}"
             name = f' "{node.ax_name}"' if node.ax_name else ""
             role = node.ax_role or node.tag_name
             suffix = f" ({change.detail})" if change.detail else ""

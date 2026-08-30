@@ -7,11 +7,10 @@ Deliberately pure and driver-free: given the raw snapshot dict, produce
 no live page or CDP session. Runtime-free by construction (it only reads
 DOMSnapshot output), so it respects Patchright's no-Runtime stealth posture.
 
-Not yet wired into the live snapshot path -- later slices fuse this with the
-DOM + accessibility trees and index elements by `backendNodeId` (stable across
-snapshots, unlike Playwright's re-minted `aria-ref`), behind a
-`SnapshotAction.engine` flag. Ported from browser-use's
-`dom/enhanced_snapshot.py::build_snapshot_lookup`.
+`driver.dom_fusion_engine` fuses this with the DOM + accessibility trees; the
+elements are then indexed by `backendNodeId` (stable across snapshots, unlike
+Playwright's re-minted `aria-ref`), which is what a `ref` resolves through.
+Ported from browser-use's `dom/enhanced_snapshot.py::build_snapshot_lookup`.
 """
 
 from __future__ import annotations

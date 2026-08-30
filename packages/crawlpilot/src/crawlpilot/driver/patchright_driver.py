@@ -88,6 +88,7 @@ from crawlpilot.spi.actions import (
     UploadFileAction,
     WaitAction,
 )
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.errors import (
     CapacityExhausted,
@@ -99,7 +100,6 @@ from crawlpilot.spi.errors import (
 )
 from crawlpilot.spi.health import ContextHealth, HealthStatus
 from crawlpilot.spi.identity import IdentityRef
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from crawlpilot.spi.lease import ContextRef, ContextState
 from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
@@ -185,7 +185,9 @@ _FIND_ELEMENTS_JS = """(opts) => {
         }
         elements.push({
             tag: el.tagName.toLowerCase(),
-            text: opts.includeText ? (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300) : '',
+            text: opts.includeText
+                ? (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300)
+                : '',
             attrs,
         });
     }
@@ -308,22 +310,26 @@ class _Page:
 
 @dataclass
 class _ContextHealth:
-    """Per-context health tallies -- Wave 0 instrumentation only. Counters are
-    recorded but nothing acts on them yet; a later pass adds leak detection
-    (`leak_warnings`) and quality signals (`small_pages`), then a
-    `should_retire` policy that rotates a flagged profile (mirrors Browser4's
-    `AbstractPrivacyContext`: `privacyLeakWarnings`, `failureRate`,
-    `smallPageRate`). A "task" here is one `execute()` batch."""
+    """Per-context health tallies feeding `session.rotation.should_retire`, which
+    rotates a flagged profile (mirrors Browser4's `AbstractPrivacyContext`:
+    `privacyLeakWarnings`, `failureRate`, `smallPageRate`). A "task" here is one
+    `execute()` batch."""
 
     tasks: int = 0
     successes: int = 0
     failures: int = 0
     small_pages: int = 0
-    """Reserved: batches that returned a suspiciously small/blocked page.
-    Populated by a later leak/quality-detection pass, not in Wave 0."""
+    """Batches that returned a suspiciously small/blocked page.
+
+    Read by `should_retire` but never incremented -- the quality-detection pass
+    that would populate it does not exist, so this rung of the rotation policy is
+    currently inert. Kept because the threshold that reads it is real and the
+    signal is the one Browser4 rotates on; noted here because a zero that is
+    never written looks like a healthy context rather than an unmeasured one."""
     leak_warnings: int = 0
-    """Reserved: bot-detection signals (captcha/challenge/block). Populated by
-    a later leak-detection pass, not in Wave 0."""
+    """Weighted bot-detection signals (captcha/challenge/block), accrued by
+    `_post_navigate` and tripping rotation at `RotationThresholds
+    .max_leak_warnings`."""
 
     @property
     def failure_rate(self) -> float:
@@ -1383,7 +1389,8 @@ class PatchrightDriver:
         found = matches.get("matches") or []
         if not found:
             return f"search_page: no match for {action.pattern!r} on this page"
-        lines = [f"search_page: {matches.get('total', len(found))} match(es) for {action.pattern!r}"]
+        total = matches.get("total", len(found))
+        lines = [f"search_page: {total} match(es) for {action.pattern!r}"]
         lines += [f"[{i}] …{m}…" for i, m in enumerate(found, start=1)]
         return "\n".join(lines)
 

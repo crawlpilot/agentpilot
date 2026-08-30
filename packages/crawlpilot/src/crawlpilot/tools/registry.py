@@ -16,7 +16,6 @@ means an extension can shadow a built-in verb and nothing says so.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
-from typing import Any
 
 from crawlpilot.tools.catalog import CATALOG
 from crawlpilot.tools.spec import Safety, ToolSpec
@@ -67,9 +66,6 @@ class ToolRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(self._specs)
 
-    def specs(self) -> tuple[ToolSpec, ...]:
-        return tuple(self._specs.values())
-
     def get(self, name: str, *, namespace: str = BROWSER_NAMESPACE) -> ToolSpec | None:
         return self._specs.get(name if "." in name else f"{namespace}.{name}")
 
@@ -82,13 +78,21 @@ class ToolRegistry:
         exclude: Iterable[str] = (),
         safety: Safety | None = None,
         agent_exposed: bool = False,
+        page_url: str | None = None,
     ) -> ToolRegistry:
         """A narrower registry.
 
-        `agent_exposed=True` keeps only verbs a model may call -- the
-        replacement for `agent.actions.DEFAULT_ALLOWED_ACTIONS`, except that the
-        exclusion now lives with the verb (`agent_fields=None`) instead of in a
-        separate tuple that had to be kept in step with it.
+        `agent_exposed=True` keeps only verbs a model may call -- the replacement
+        for `agent.actions.DEFAULT_ALLOWED_ACTIONS`, except that the exclusion
+        lives with the verb (`agent_fields=None`) rather than in a separate tuple
+        that had to be kept in step with it.
+
+        `page_url` applies each spec's `domains`, so a site-specific verb is
+        offered only on the sites it works on (browser-use's per-page action
+        filtering, `tools/registry/views.py:96-149`). Passing `None` keeps only
+        the unrestricted verbs, which is the right default for a schema built
+        before any page is open: a verb that needs a URL to be applicable cannot
+        be applicable when there is no URL.
         """
 
         excluded = set(exclude)
@@ -103,15 +107,10 @@ class ToolRegistry:
                 continue
             if agent_exposed and spec.agent_fields is None:
                 continue
+            if not spec.applies_to(page_url):
+                continue
             out._specs[key] = spec  # noqa: SLF001 -- same class, bypasses the dup check
         return out
-
-    # ---------------------------------------------------------------- schema
-
-    def json_schemas(self) -> dict[str, dict[str, Any]]:
-        """`{qualified_name: JSON Schema}` -- the vendor-neutral artifact."""
-
-        return {key: spec.json_schema() for key, spec in self._specs.items()}
 
 
 def browser_tools() -> ToolRegistry:

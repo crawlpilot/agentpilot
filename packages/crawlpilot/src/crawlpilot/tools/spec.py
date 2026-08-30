@@ -30,7 +30,9 @@ from __future__ import annotations
 import dataclasses
 import typing
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any, Literal, get_type_hints
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
@@ -91,6 +93,34 @@ class ToolSpec:
     tidiness."""
 
     safety: Safety = "safe"
+
+    domains: tuple[str, ...] | None = None
+    """Host glob patterns this verb applies to (`("*.walmart.com",)`), or `None`
+    for every site.
+
+    Ported from browser-use's `RegisteredAction.domains`. It is what makes the
+    namespacing in this registry useful rather than decorative: a
+    `walmart.solve_wall` can be registered permanently and still only reach a
+    model's schema on Walmart, instead of every run paying context for a verb
+    that cannot work where it is."""
+
+    # ------------------------------------------------------------ applicability
+
+    def applies_to(self, page_url: str | None) -> bool:
+        """Whether this verb should be offered while `page_url` is open.
+
+        Fails closed on an unknown URL, as browser-use does
+        (`tools/registry/views.py:107-111`): a domain-restricted verb exists
+        precisely because it is unsafe or meaningless elsewhere, so "we don't
+        know where we are" is not a reason to offer it.
+        """
+
+        if self.domains is None:
+            return True
+        if not page_url:
+            return False
+        host = urlparse(page_url).hostname or ""
+        return any(fnmatch(host, pattern) for pattern in self.domains)
 
     # ------------------------------------------------------------ projections
 
