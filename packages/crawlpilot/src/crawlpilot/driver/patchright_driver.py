@@ -40,7 +40,6 @@ from patchright._impl._errors import TargetClosedError
 from patchright.async_api import (
     BrowserContext,
     CDPSession,
-    Locator,
     Page,
     ProxySettings,
 )
@@ -94,6 +93,7 @@ from crawlpilot.spi.errors import (
 )
 from crawlpilot.spi.health import ContextHealth, HealthStatus
 from crawlpilot.spi.identity import IdentityRef
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from crawlpilot.spi.lease import ContextRef, ContextState
 from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.spi.storage_state import LocalStorageEntry, OriginState, StorageState
@@ -117,11 +117,6 @@ _GAP_BEFORE = (
     PressAction,
     ScrollAction,
 )
-
-_BOUNDING_BOX_TIMEOUT_MS = 3_000
-"""Bounded well below Playwright's 30s default -- see `_resolve_ref`'s
-docstring for why an unbounded wait here is a real observed hang, not a
-hypothetical one."""
 
 _LIVENESS_TIMEOUT_S = 2.0
 """Upper bound on the CDP liveness/keepalive ping. A responsive context answers
@@ -827,50 +822,42 @@ class PatchrightDriver:
             result.screenshots.append(await live.page.screenshot(full_page=action.full_page))
         elif isinstance(action, WaitAction):
             if action.ref is not None:
-                await self._resolve_ref(live, action.ref)
+                node, cdp = await self._resolve_ref(live, action.ref)
+                await cdp_element.element_box(cdp, node, action.ref)
             else:
                 await asyncio.sleep((action.ms or 0) / 1000)
         elif isinstance(action, ExecuteJsAction):
             result.js_returns.append(await live.page.evaluate(action.script))
         elif isinstance(action, ClickAction):
             pre_click_url = live.page.url
-            locator = await self._resolve_ref(live, action.ref)
-            if action.all:
-                for i in range(await locator.count()):
-                    await self._human_click(live, locator.nth(i), cctx.delay_policy)
-            else:
-                await self._human_click(live, locator, cctx.delay_policy)
+            node, cdp = await self._resolve_ref(live, action.ref)
+            await self._human_click(cdp, node, action.ref, cctx.delay_policy)
             if live.page.url != pre_click_url:
                 result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
             else:
                 result.verifications.append(f"clicked {action.ref}")
         elif isinstance(action, FillAction):
-            locator = await self._resolve_ref(live, action.ref)
-            await self._human_fill(live, locator, action.text, cctx.delay_policy)
+            node, cdp = await self._resolve_ref(live, action.ref)
+            await self._human_fill(cdp, node, action.ref, action.text, cctx.delay_policy)
             # Read-back grounding: confirm the value actually landed in the
             # field rather than assuming success. Best-effort -- a field that
             # can't report its value must not fail the fill.
-            with contextlib.suppress(Exception):
-                value = await locator.input_value()
+            value = await cdp_element.read_value(cdp, node)
+            if value is not None:
                 result.verifications.append(
                     f"filled {action.ref}: field now contains {value[:80]!r}"
                 )
         elif isinstance(action, SelectOptionAction):
-            locator = await self._resolve_ref(live, action.ref)
-            await locator.select_option(action.values)
+            await self._select_option(live, action, result)
         elif isinstance(action, HoverAction):
-            locator = await self._resolve_ref(live, action.ref)
-            await locator.hover()
+            node, cdp = await self._resolve_ref(live, action.ref)
+            box = await cdp_element.element_box(cdp, node, action.ref)
+            await self._approach(cdp, box)
         elif isinstance(action, PressAction):
-            await live.page.keyboard.press(action.key)
+            await cdp_element.press_key(await self._page_session(live), action.key)
             await cctx.delay_policy.pause("press")
         elif isinstance(action, ScrollAction):
-            if action.ref is not None:
-                locator = await self._resolve_ref(live, action.ref)
-                await locator.scroll_into_view_if_needed()
-            else:
-                dx, dy = _jittered_scroll_delta(action.direction)
-                await live.page.mouse.wheel(dx, dy)
+            await self._scroll(live, action)
         elif isinstance(action, NewTabAction):
             new_page_id = await self._create_tab(cctx, action.url)
             cctx.active_page_id = new_page_id
@@ -917,6 +904,12 @@ class PatchrightDriver:
             with contextlib.suppress(Exception):
                 await live.cdp_session.send("Page.stopScreencast")
                 await live.cdp_session.detach()
+        # Frame sessions outlive a single snapshot now, so closing the tab is
+        # what releases them.
+        for session in live.frame_sessions.values():
+            with contextlib.suppress(Exception):
+                await session.detach()
+        live.frame_sessions.clear()
         with contextlib.suppress(Exception):
             await live.page.close()
         del cctx.pages[page_id]
@@ -1074,87 +1067,190 @@ class PatchrightDriver:
         with contextlib.suppress(Exception):
             await live.page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
 
-    async def _resolve_ref(self, live: _Page, ref: str) -> Locator:
-        """Resolves via `RefCache`, then enforces visibility: a ref that
-        resolves to a zero-size box (`display:none`, collapsed, off-canvas)
-        is treated the same as a ref that failed to resolve at all -- both
-        mean "don't dispatch a click/fill nobody would see land".
+    async def _resolve_ref(
+        self, live: _Page, ref: str
+    ) -> tuple[EnhancedDOMTreeNode, CDPSession]:
+        """A ref to the captured node plus the CDP session that owns it.
 
-        `bounding_box()`'s own actionability wait can take its full default
-        30s to time out when a ref genuinely can't be resolved (observed
-        directly: `aria-ref=` locators sometimes hang the entire default
-        timeout rather than failing fast) -- a bounded timeout here means
-        that failure surfaces as a typed `StaleRefError` in ~3s instead of
-        stalling the whole `execute()` batch for 30s."""
+        A dictionary lookup and nothing more -- this is browser-use's model
+        (`browser/session.py:2451-2466`, "pure in-memory dict lookup, zero CDP").
+        The previous implementation tried to *re-derive* a CSS/XPath selector for
+        an element it had already captured and required the selector to match
+        exactly one live element, which duplicate ids and repeated
+        `name`/`aria-label` routinely broke, and which could not reach into an
+        iframe at all.
 
-        locator = await live.ref_cache.resolve(live.page, ref)
-        try:
-            box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
-        except PlaywrightTimeoutError as exc:
-            raise StaleRefError(ref, epoch_superseded=False) from exc
-        if box is None or box["width"] <= 0 or box["height"] <= 0:
+        No visibility gate here either. The old one called `bounding_box()` with
+        a 3s cap and treated a zero-size box as a stale ref, which quietly
+        rejected elements that are legitimately actionable while having no box of
+        their own -- a hidden `input[type=file]`, a checkbox behind a styled
+        label. Geometry is now the concern of whichever verb actually needs a
+        point to aim at, and `element_box` raises there if it truly has none.
+        """
+
+        node = live.nodes.get(ref)
+        if node is None:
             raise StaleRefError(ref, epoch_superseded=False)
-        return locator
+        cdp = cdp_element.session_for_node(
+            node,
+            page_session=await self._page_session(live),
+            frame_sessions=live.frame_sessions,
+        )
+        return node, cdp
+
+    async def _approach(self, cdp: CDPSession, box: mouse.Box) -> tuple[float, float]:
+        """Move the pointer to a jittered point inside `box` along an
+        interpolated path, and return the point landed on.
+
+        The approach matters more than the destination: a pointer that
+        materialises inside an element never emits the mouseover/mouseenter
+        transition a real one does, and keystroke/pointer telemetry reads a
+        single teleport to an element's exact geometric centre as synthetic.
+        Best effort -- if any move fails the caller still has a valid target.
+        """
+
+        width, height = await cdp_element.viewport_size(cdp)
+        target = cdp_element.clamp(mouse.jittered_point_in(box), width, height)
+        with contextlib.suppress(Exception):
+            start = cdp_element.clamp(mouse.approach_from_outside(box), width, height)
+            await cdp_element.move_to(cdp, *start)
+            for x, y in mouse.path(start, target):
+                await cdp_element.move_to(cdp, x, y)
+                await asyncio.sleep(random.uniform(0.006, 0.018))
+        return target
 
     async def _human_click(
-        self, live: _Page, locator: Locator, policy: humanize.DelayPolicy
+        self,
+        cdp: CDPSession,
+        node: EnhancedDOMTreeNode,
+        ref: str,
+        policy: humanize.DelayPolicy,
     ) -> None:
-        """Approach the target over several interpolated `mouse.move` steps
-        to a jittered point *inside* the element, then click -- versus
-        Playwright's default single teleport to the exact center. A short
-        `click`-preset dwell precedes the click (settling on the target, as a
-        human does). Best effort: if the box can't be resolved quickly, fall
-        straight through to a plain `.click()` (which does its own actionability
-        wait) rather than failing the action for the sake of the flourish."""
+        """Scroll into view, approach, dwell, click -- all as CDP input events on
+        the node's own session.
 
-        try:
-            box = await locator.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            box = None
-        if box is None or box["width"] <= 0 or box["height"] <= 0:
-            await locator.click()
-            return
+        Dispatching on that session rather than through `page.mouse` is what lets
+        a click land inside a cross-origin iframe: the frame is a separate
+        renderer, its geometry is reported in its own coordinate space, and a
+        page-level mouse event never reaches it.
+        """
 
-        target = mouse.jittered_point_in(box)
-        with contextlib.suppress(Exception):
-            # Approach from outside the element so the browser emits a real
-            # mouseover/mouseenter transition -- a pointer that materialises
-            # inside the element never produces one (Browser4's `hover`,
-            # `EmulationHandler.kt:829-866`).
-            start = mouse.approach_from_outside(box)
-            await live.page.mouse.move(*start)
-            for x, y in mouse.path(start, target):
-                await live.page.mouse.move(x, y)
-                await asyncio.sleep(random.uniform(0.006, 0.018))
+        box = await cdp_element.element_box(cdp, node, ref)
+        target = await self._approach(cdp, box)
         await policy.pause("click")
-
-        # `position` is element-relative and is what stops Playwright from
-        # doing its own `mouse.move` to the element's exact geometric centre
-        # just before dispatching -- which is what used to discard the whole
-        # approach above, leaving a teleport to dead-centre as the last thing
-        # the page saw. Actionability checks still run.
-        await locator.click(
-            position={"x": target[0] - box["x"], "y": target[1] - box["y"]}
-        )
+        await cdp_element.click_at(cdp, *target)
 
     async def _human_fill(
-        self, live: _Page, locator: Locator, text: str, policy: humanize.DelayPolicy
+        self,
+        cdp: CDPSession,
+        node: EnhancedDOMTreeNode,
+        ref: str,
+        text: str,
+        policy: humanize.DelayPolicy,
     ) -> None:
-        """Clear, then type character-by-character with a randomized inter-key
-        delay from the tier's `type` preset -- versus `locator.fill()`'s single
-        instantaneous DOM write, which is a strong automation tell to
-        keystroke-timing telemetry. The delay now scales with the tier (STEALTH
-        types slower than FAST) instead of one hardcoded range. `fill("")` clears
-        any existing value first; the final field value is identical to what
-        `fill(text)` would have produced."""
+        """Focus, clear, then type character-by-character with a randomized
+        inter-key delay from the tier's `type` preset.
 
-        await locator.fill("")
-        if not text:
-            return
-        await locator.focus()
+        Not a single value write: an instantaneous DOM set is a strong automation
+        tell to keystroke-timing telemetry, and it skips the per-keystroke
+        handlers autocomplete and validation widgets hang off. The delay scales
+        with the tier (STEALTH types slower than FAST).
+
+        Focus is `DOM.focus` with a click fallback, which is how a person focuses
+        a field and is what works for the custom widgets whose real focus target
+        is a child element.
+        """
+
+        if not await cdp_element.focus(cdp, node):
+            box = await cdp_element.element_box(cdp, node, ref)
+            target = await self._approach(cdp, box)
+            await cdp_element.click_at(cdp, *target)
+
+        await self._clear_field(cdp, node, ref)
         for ch in text:
-            await live.page.keyboard.type(ch)
+            await cdp_element.type_character(cdp, ch)
             await policy.pause("type")
+
+    async def _scroll(self, live: _Page, action: ScrollAction) -> None:
+        """Scroll the page, or an element's own scroll container.
+
+        With a `ref`, the wheel event is dispatched at the element's centre in
+        its own session rather than scrolling the element into view: a dropdown
+        list, a virtualised table or an iframe scrolls its *own* overflow, which
+        `scrollIntoView` on the container cannot do and which is what an agent
+        working through a long list actually needs.
+        """
+
+        dx, dy = _jittered_scroll_delta(action.direction)
+        if action.ref is None:
+            cdp = await self._page_session(live)
+            width, height = await cdp_element.viewport_size(cdp)
+            await cdp_element.wheel_at(cdp, width / 2, height / 2, dx, dy)
+            return
+
+        node, cdp = await self._resolve_ref(live, action.ref)
+        box = await cdp_element.element_box(cdp, node, action.ref)
+        await cdp_element.wheel_at(
+            cdp, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, dx, dy
+        )
+
+    async def _select_option(
+        self, live: _Page, action: SelectOptionAction, result: ActionResult
+    ) -> None:
+        """Choose options in a `<select>`.
+
+        The one verb that cannot be driven by input events: a native select popup
+        is browser chrome, not page content, so there is no coordinate to click.
+        browser-use resolves the node and calls into it with
+        `Runtime.callFunctionOn` (`default_action_watchdog.py:3288-3746`); this
+        does the same, and is the only place in the interaction path that needs
+        the `Runtime` domain.
+
+        Matching accepts an option's visible text as well as its `value` --
+        a model reads the label, not the markup. The available options come off
+        the captured tree, so a value that matches nothing is reported *with the
+        real choices*, which is a correctable answer rather than a bare failure.
+        """
+
+        node, cdp = await self._resolve_ref(live, action.ref)
+        options = cdp_element.dropdown_options(node)
+        if options:
+            known = {opt["value"] for opt in options} | {opt["text"] for opt in options}
+            unknown = set(action.values) - known
+            if unknown:
+                available = ", ".join(repr(opt["text"]) for opt in options[:20])
+                result.verifications.append(
+                    f"select_option on {action.ref}: no option matching {sorted(unknown)!r}. "
+                    f"Available: {available}"
+                )
+                return
+
+        outcome = await cdp_element.select_options(cdp, node, list(action.values))
+        error = outcome.get("error")
+        if error:
+            result.verifications.append(f"select_option on {action.ref} failed: {error}")
+        else:
+            result.verifications.append(
+                f"select_option on {action.ref}: selected {outcome.get('selected')}"
+            )
+
+    async def _clear_field(self, cdp: CDPSession, node: EnhancedDOMTreeNode, ref: str) -> None:
+        """Empty a focused field by selecting its contents and deleting them.
+
+        Triple-click then Delete, rather than a JS value assignment: it needs no
+        `Runtime` call, so it works under the stealth tier, and it produces the
+        same input/change events a person clearing a field would. Best effort --
+        a field with no box to triple-click (a custom widget) still gets the
+        select-all shortcut.
+        """
+
+        with contextlib.suppress(Exception):
+            box = await cdp_element.element_box(cdp, node, ref)
+            width, height = await cdp_element.viewport_size(cdp)
+            point = cdp_element.clamp(mouse.jittered_point_in(box), width, height)
+            await cdp_element.click_at(cdp, *point, click_count=3)
+        await cdp_element.press_key(cdp, "ControlOrMeta+a")
+        await cdp_element.press_key(cdp, "Delete")
 
     async def _page_session(self, live: _Page) -> CDPSession:
         """This tab's CDP session, created once and kept.

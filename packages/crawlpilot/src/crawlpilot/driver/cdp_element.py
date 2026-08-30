@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sys
 from typing import TYPE_CHECKING, Any
 
 from crawlpilot.driver import mouse
@@ -224,9 +225,23 @@ _NAMED_KEYS: dict[str, tuple[str, int]] = {
     "PageUp": ("PageUp", 33),
     "PageDown": ("PageDown", 34),
     "Space": ("Space", 32),
+    # Modifiers are dispatched as key events in their own right (see
+    # `press_key`), so they need descriptors too. `code` is the physical key,
+    # which is side-specific -- pages that distinguish left from right read it.
+    "Control": ("ControlLeft", 17),
+    "Shift": ("ShiftLeft", 16),
+    "Alt": ("AltLeft", 18),
+    "Meta": ("MetaLeft", 91),
 }
 
 _MODIFIER_BITS = {"Alt": 1, "Control": 2, "Meta": 4, "Shift": 8}
+
+PRIMARY_MODIFIER = "Meta" if sys.platform == "darwin" else "Control"
+"""The "do the thing" modifier for this host: Cmd on macOS, Ctrl elsewhere.
+
+Chrome binds select-all, copy and friends to whichever the platform uses, and
+the browser runs on the host, so `Control+a` is simply not select-all on a Mac.
+Spelling a shortcut `ControlOrMeta+a` (Playwright's convention) resolves here."""
 
 _MODIFIER_ALIASES = {
     "ctrl": "Control",
@@ -237,6 +252,9 @@ _MODIFIER_ALIASES = {
     "alt": "Alt",
     "option": "Alt",
     "shift": "Shift",
+    "controlormeta": PRIMARY_MODIFIER,
+    "commandorcontrol": PRIMARY_MODIFIER,
+    "mod": PRIMARY_MODIFIER,
 }
 
 
@@ -257,12 +275,22 @@ def parse_key(keys: str) -> tuple[list[str], str]:
 
 
 def _key_descriptor(key: str) -> dict[str, Any]:
+    """CDP's shape for one key: the `key` value a page sees, the physical `code`,
+    and the legacy `windowsVirtualKeyCode` that `keyCode`/`which` are derived
+    from -- still what a lot of shortcut handlers actually read."""
+
     if key in _NAMED_KEYS:
-        name, vk = _NAMED_KEYS[key]
-        return {"key": name, "code": name, "windowsVirtualKeyCode": vk}
-    # Single printable character.
-    code = f"Key{key.upper()}" if key.isalpha() else ""
-    return {"key": key, "code": code, "windowsVirtualKeyCode": ord(key.upper()) if key else 0}
+        code, vk = _NAMED_KEYS[key]
+        # `key` is the name ("Control"); `code` is the physical key
+        # ("ControlLeft"). They differ for modifiers and coincide for the rest.
+        return {"key": key, "code": code, "windowsVirtualKeyCode": vk}
+    if len(key) != 1:
+        # An unrecognised named key (a rarely-used F-key, a vendor spelling).
+        # Pass the name through rather than raising: Chrome ignores what it does
+        # not know, and one unsupported key should not fail the whole action.
+        return {"key": key, "code": key, "windowsVirtualKeyCode": 0}
+    code = f"Key{key.upper()}" if key.isalpha() else f"Digit{key}" if key.isdigit() else ""
+    return {"key": key, "code": code, "windowsVirtualKeyCode": ord(key.upper())}
 
 
 async def press_key(cdp: CDPSession, keys: str) -> None:
@@ -379,6 +407,70 @@ async def set_file_input(cdp: CDPSession, node: EnhancedDOMTreeNode, paths: list
     await cdp.send(
         "DOM.setFileInputFiles", {"files": paths, "backendNodeId": node.backend_node_id}
     )
+
+
+_SELECT_JS = """
+function(values) {
+    if (this.tagName !== 'SELECT') {
+        return {error: 'element is a <' + this.tagName.toLowerCase() + '>, not a <select>'};
+    }
+    const wanted = new Set(values);
+    const selected = [];
+    for (const option of this.options) {
+        const hit = wanted.has(option.value) || wanted.has(option.text.trim());
+        option.selected = hit;
+        if (hit) selected.push(option.value);
+    }
+    if (selected.length === 0) return {error: 'no option matched'};
+    this.dispatchEvent(new Event('input', {bubbles: true}));
+    this.dispatchEvent(new Event('change', {bubbles: true}));
+    return {selected: selected};
+}
+"""
+
+
+async def select_options(
+    cdp: CDPSession, node: EnhancedDOMTreeNode, values: list[str]
+) -> dict[str, Any]:
+    """Select options in a `<select>`, matching on `value` or visible text.
+
+    **The only Runtime call in the interaction path.** A native select popup is
+    browser chrome rather than page content, so there is no coordinate an input
+    event could target; browser-use reaches for `Runtime.callFunctionOn` here for
+    the same reason. Callers running under the stealth tier should weigh that.
+
+    The explicit `input` and `change` dispatch is what makes frameworks notice:
+    assigning `selected` mutates the DOM without emitting either, so a React or
+    Vue control would keep rendering its old value and the selection would appear
+    to silently revert.
+    """
+
+    try:
+        resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": node.backend_node_id})
+    except Exception:
+        return {"error": "element is no longer on the page"}
+    object_id = (resolved.get("object") or {}).get("objectId")
+    if object_id is None:
+        return {"error": "element is no longer on the page"}
+
+    try:
+        outcome = await cdp.send(
+            "Runtime.callFunctionOn",
+            {
+                "objectId": object_id,
+                "functionDeclaration": _SELECT_JS,
+                "arguments": [{"value": values}],
+                "returnByValue": True,
+            },
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+    finally:
+        with contextlib.suppress(Exception):
+            await cdp.send("Runtime.releaseObject", {"objectId": object_id})
+
+    result = (outcome.get("result") or {}).get("value")
+    return result if isinstance(result, dict) else {"error": "select returned no result"}
 
 
 def dropdown_options(node: EnhancedDOMTreeNode) -> list[dict[str, str]]:
