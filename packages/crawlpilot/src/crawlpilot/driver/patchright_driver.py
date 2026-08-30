@@ -65,9 +65,12 @@ from crawlpilot.spi.actions import (
     ActionResult,
     ClickAction,
     CloseTabAction,
+    DropdownOptionsAction,
     ExecuteJsAction,
     ExtractAction,
     FillAction,
+    FindElementsAction,
+    FindTextAction,
     GoBackAction,
     HoverAction,
     ListTabsAction,
@@ -76,10 +79,13 @@ from crawlpilot.spi.actions import (
     PressAction,
     ScreenshotAction,
     ScrollAction,
+    SearchPageAction,
     SelectOptionAction,
+    SendKeysAction,
     SnapshotAction,
     SwitchTabAction,
     TabInfo,
+    UploadFileAction,
     WaitAction,
 )
 from crawlpilot.spi.egress import EgressPolicy
@@ -101,7 +107,17 @@ from crawlpilot.spi.streaming import InputEvent, LiveViewFrame
 
 log = structlog.get_logger(__name__)
 
-_REF_CONSUMING = (ClickAction, FillAction, SelectOptionAction, HoverAction)
+_REF_CONSUMING = (
+    ClickAction,
+    FillAction,
+    SelectOptionAction,
+    HoverAction,
+    DropdownOptionsAction,
+    UploadFileAction,
+)
+"""Actions carrying a mandatory `ref`, so the batch loop knows to abort them once
+an earlier action has invalidated the refs it would use. `WaitAction`/
+`ScrollAction` are checked separately -- their `ref` is optional."""
 
 # Interactive actions that get a human `gap` pause *before* them when they
 # follow another action in the same batch -- the between-actions dwell Pulsar
@@ -115,8 +131,75 @@ _GAP_BEFORE = (
     SelectOptionAction,
     HoverAction,
     PressAction,
+    SendKeysAction,
     ScrollAction,
 )
+
+# Parameters arrive as one argument object rather than interpolated into the
+# source: the pattern and selector come from a model, and a quote or backslash
+# in either would otherwise break out of the script.
+_SEARCH_PAGE_JS = """(opts) => {
+    const scope = opts.cssScope ? document.querySelector(opts.cssScope) : document.body;
+    if (!scope) return {matches: [], total: 0};
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    const parts = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.nodeValue);
+    const text = parts.join(' ').replace(/\\s+/g, ' ');
+
+    const flags = opts.caseSensitive ? 'g' : 'gi';
+    const source = opts.regex
+        ? opts.pattern
+        : opts.pattern.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+    let re;
+    try { re = new RegExp(source, flags); } catch (e) { return {error: String(e)}; }
+
+    const matches = [];
+    let total = 0;
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+        total += 1;
+        if (matches.length < opts.maxResults) {
+            const from = Math.max(0, m.index - opts.contextChars);
+            const to = Math.min(text.length, m.index + m[0].length + opts.contextChars);
+            matches.push(text.slice(from, to));
+        }
+        if (m[0] === '') re.lastIndex += 1;  // zero-width match would loop forever
+        if (total > 5000) break;
+    }
+    return {matches, total};
+}"""
+
+_FIND_ELEMENTS_JS = """(opts) => {
+    let nodes;
+    try { nodes = document.querySelectorAll(opts.selector); }
+    catch (e) { return {error: String(e)}; }
+    const elements = [];
+    for (const el of Array.from(nodes).slice(0, opts.maxResults)) {
+        const attrs = {};
+        for (const name of opts.attributes) {
+            // Read href/src off the property so the value is the absolute URL a
+            // caller can actually use, not the raw relative attribute.
+            const value = (name === 'href' || name === 'src') && el[name] != null
+                ? el[name]
+                : el.getAttribute(name);
+            if (value != null) attrs[name] = String(value).slice(0, 500);
+        }
+        elements.push({
+            tag: el.tagName.toLowerCase(),
+            text: opts.includeText ? (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300) : '',
+            attrs,
+        });
+    }
+    return {elements, total: nodes.length};
+}"""
+
+
+def _render_dropdown_options(ref: str, options: list[dict[str, str]]) -> str:
+    if not options:
+        return f"dropdown_options: {ref} has no <option> children (is it a real <select>?)"
+    lines = [f"dropdown_options for {ref}:"]
+    lines += [f"  {opt['text']!r} (value={opt['value']!r})" for opt in options]
+    return "\n".join(lines)
+
 
 _LIVENESS_TIMEOUT_S = 2.0
 """Upper bound on the CDP liveness/keepalive ping. A responsive context answers
@@ -132,12 +215,16 @@ beacons); on those the wait simply caps out and the snapshot proceeds. A
 MutationObserver-based probe that returns early on DOM quiescence (Browser4's
 `waitForDOMSettle`) is a later refinement -- this is the cheap first cut."""
 
-_SCROLL_DELTAS: dict[str, tuple[float, float]] = {
-    "down": (0, 600),
-    "up": (0, -600),
-    "right": (600, 0),
-    "left": (-600, 0),
+_SCROLL_UNIT: dict[str, tuple[float, float]] = {
+    "down": (0.0, 1.0),
+    "up": (0.0, -1.0),
+    "right": (1.0, 0.0),
+    "left": (-1.0, 0.0),
 }
+"""Direction as a unit vector. The distance is `pages` multiplied by the size of
+whatever is being scrolled -- the viewport, or the element's own box -- rather
+than the flat 600px this used to be, so "one page" means a screenful on a
+laptop and on a 4K display alike."""
 
 # --- Behavioral-realism knobs (anti-detection). Real users don't fill an
 # input in a single instantaneous DOM write, teleport the pointer to an
@@ -172,9 +259,17 @@ def _jitter(value: float) -> float:
     return value * (1 + random.uniform(-_SCROLL_JITTER_FRAC, _SCROLL_JITTER_FRAC))
 
 
-def _jittered_scroll_delta(direction: str) -> tuple[float, float]:
-    dx, dy = _SCROLL_DELTAS[direction]
-    return _jitter(dx), _jitter(dy)
+def _scroll_delta(
+    direction: str, pages: float, width: float, height: float
+) -> tuple[float, float]:
+    """Wheel delta for `pages` screenfuls in `direction`, jittered.
+
+    The jitter is behavioural: a wheel event whose delta is the same round number
+    every time is not something a physical wheel or trackpad produces.
+    """
+
+    ux, uy = _SCROLL_UNIT[direction]
+    return _jitter(ux * pages * width), _jitter(uy * pages * height)
 
 
 DEFAULT_MAX_TABS_PER_SESSION = 10
@@ -838,7 +933,9 @@ class PatchrightDriver:
                 result.verifications.append(f"clicked {action.ref}")
         elif isinstance(action, FillAction):
             node, cdp = await self._resolve_ref(live, action.ref)
-            await self._human_fill(cdp, node, action.ref, action.text, cctx.delay_policy)
+            await self._human_fill(
+                cdp, node, action.ref, action.text, cctx.delay_policy, clear=action.clear
+            )
             # Read-back grounding: confirm the value actually landed in the
             # field rather than assuming success. Best-effort -- a field that
             # can't report its value must not fail the fill.
@@ -858,6 +955,28 @@ class PatchrightDriver:
             await cctx.delay_policy.pause("press")
         elif isinstance(action, ScrollAction):
             await self._scroll(live, action)
+        elif isinstance(action, SendKeysAction):
+            await cdp_element.press_key(await self._page_session(live), action.keys)
+            await cctx.delay_policy.pause("press")
+        elif isinstance(action, FindTextAction):
+            found = await self._find_text(live, action.text)
+            result.verifications.append(
+                f"scrolled to {action.text!r}"
+                if found
+                else f"text {action.text!r} was not found on this page"
+            )
+        elif isinstance(action, DropdownOptionsAction):
+            node, _ = await self._resolve_ref(live, action.ref)
+            options = cdp_element.dropdown_options(node)
+            result.readouts.append(_render_dropdown_options(action.ref, options))
+        elif isinstance(action, SearchPageAction):
+            result.readouts.append(await self._search_page(live, action))
+        elif isinstance(action, FindElementsAction):
+            result.readouts.append(await self._find_elements(live, action))
+        elif isinstance(action, UploadFileAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            await cdp_element.set_file_input(cdp, node, [action.path])
+            result.verifications.append(f"attached {action.path} to {action.ref}")
         elif isinstance(action, NewTabAction):
             new_page_id = await self._create_tab(cctx, action.url)
             cctx.active_page_id = new_page_id
@@ -1147,9 +1266,11 @@ class PatchrightDriver:
         ref: str,
         text: str,
         policy: humanize.DelayPolicy,
+        *,
+        clear: bool = True,
     ) -> None:
-        """Focus, clear, then type character-by-character with a randomized
-        inter-key delay from the tier's `type` preset.
+        """Focus, optionally clear, then type character-by-character with a
+        randomized inter-key delay from the tier's `type` preset.
 
         Not a single value write: an instantaneous DOM set is a strong automation
         tell to keystroke-timing telemetry, and it skips the per-keystroke
@@ -1166,7 +1287,12 @@ class PatchrightDriver:
             target = await self._approach(cdp, box)
             await cdp_element.click_at(cdp, *target)
 
-        await self._clear_field(cdp, node, ref)
+        if clear:
+            await self._clear_field(cdp, node, ref)
+        else:
+            # Appending: put the caret at the end, or the typed text lands
+            # wherever the click left it -- usually mid-value.
+            await cdp_element.press_key(cdp, "End")
         for ch in text:
             await cdp_element.type_character(cdp, ch)
             await policy.pause("type")
@@ -1181,18 +1307,117 @@ class PatchrightDriver:
         working through a long list actually needs.
         """
 
-        dx, dy = _jittered_scroll_delta(action.direction)
         if action.ref is None:
             cdp = await self._page_session(live)
             width, height = await cdp_element.viewport_size(cdp)
+            dx, dy = _scroll_delta(action.direction, action.pages, width, height)
             await cdp_element.wheel_at(cdp, width / 2, height / 2, dx, dy)
             return
 
         node, cdp = await self._resolve_ref(live, action.ref)
         box = await cdp_element.element_box(cdp, node, action.ref)
+        # An element's own scroll distance is measured in *its* height, not the
+        # viewport's: one "page" of a short dropdown list is a short scroll.
+        dx, dy = _scroll_delta(action.direction, action.pages, box["width"], box["height"])
         await cdp_element.wheel_at(
             cdp, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, dx, dy
         )
+
+    async def _find_text(self, live: _Page, text: str) -> bool:
+        """Scroll to the first node containing `text`, via Chrome's own
+        find-in-page.
+
+        `DOM.performSearch` takes a plain string and handles the escaping and the
+        text-node walking itself, which is why this does not build an XPath --
+        browser-use interpolates the model's text straight into
+        `//*[contains(text(), "...")]`, where a quote in the search term breaks
+        the expression.
+        """
+
+        cdp = await self._page_session(live)
+        try:
+            search = await cdp.send("DOM.performSearch", {"query": text})
+            search_id, count = search.get("searchId"), search.get("resultCount", 0)
+            if not search_id or not count:
+                return False
+            try:
+                found = await cdp.send(
+                    "DOM.getSearchResults",
+                    {"searchId": search_id, "fromIndex": 0, "toIndex": min(count, 1)},
+                )
+                node_ids = found.get("nodeIds") or []
+                if not node_ids:
+                    return False
+                await cdp.send("DOM.scrollIntoViewIfNeeded", {"nodeId": node_ids[0]})
+                return True
+            finally:
+                with contextlib.suppress(Exception):
+                    await cdp.send("DOM.discardSearchResults", {"searchId": search_id})
+        except Exception:
+            return False
+
+    async def _search_page(self, live: _Page, action: SearchPageAction) -> str:
+        """Grep the page's rendered text.
+
+        Runs in the page because the text has to come from the *rendered* DOM,
+        which the fused tree deliberately prunes and truncates. Parameters are
+        passed as arguments rather than interpolated into the source, so a regex
+        containing a quote or a backslash cannot break out of the script.
+        """
+
+        try:
+            matches = await live.page.evaluate(
+                _SEARCH_PAGE_JS,
+                {
+                    "pattern": action.pattern,
+                    "regex": action.regex,
+                    "caseSensitive": action.case_sensitive,
+                    "contextChars": action.context_chars,
+                    "maxResults": action.max_results,
+                    "cssScope": action.css_scope,
+                },
+            )
+        except Exception as exc:
+            return f"search_page for {action.pattern!r} failed: {exc}"
+
+        found = matches.get("matches") or []
+        if not found:
+            return f"search_page: no match for {action.pattern!r} on this page"
+        lines = [f"search_page: {matches.get('total', len(found))} match(es) for {action.pattern!r}"]
+        lines += [f"[{i}] …{m}…" for i, m in enumerate(found, start=1)]
+        return "\n".join(lines)
+
+    async def _find_elements(self, live: _Page, action: FindElementsAction) -> str:
+        """Query the DOM by CSS selector and read back what matched."""
+
+        try:
+            found = await live.page.evaluate(
+                _FIND_ELEMENTS_JS,
+                {
+                    "selector": action.selector,
+                    "attributes": list(action.attributes),
+                    "maxResults": action.max_results,
+                    "includeText": action.include_text,
+                },
+            )
+        except Exception as exc:
+            return f"find_elements for {action.selector!r} failed: {exc}"
+
+        elements = found.get("elements") or []
+        if not elements:
+            return f"find_elements: nothing matched {action.selector!r}"
+        lines = [
+            f"find_elements: {found.get('total', len(elements))} match(es) "
+            f"for {action.selector!r} (showing {len(elements)})"
+        ]
+        for i, element in enumerate(elements, start=1):
+            parts = [f"<{element.get('tag')}>"]
+            if element.get("text"):
+                parts.append(repr(element["text"]))
+            for key, value in (element.get("attrs") or {}).items():
+                parts.append(f"{key}={value!r}")
+            lines.append(f"[{i}] " + " ".join(parts))
+        return "\n".join(lines)
 
     async def _select_option(
         self, live: _Page, action: SelectOptionAction, result: ActionResult

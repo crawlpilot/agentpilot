@@ -100,10 +100,13 @@ CATALOG: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="fill",
-        description="Fill a text input/textarea identified by `ref` with `text`.",
+        description=(
+            "Fill a text input/textarea identified by `ref` with `text`. Replaces "
+            "any existing value; pass clear=false to append instead."
+        ),
         action_cls=sa.FillAction,
-        wire_fields=("ref", "text"),
-        agent_fields=("ref", "text"),
+        wire_fields=("ref", "text", "clear"),
+        agent_fields=("ref", "text", "clear"),
         field_descriptions=_REF,
     ),
     ToolSpec(
@@ -131,38 +134,124 @@ CATALOG: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="scroll",
-        description="Scroll the page (or an element identified by `ref`) in `direction`.",
+        description=(
+            "Scroll the page, or an element identified by `ref`, in `direction`. "
+            "`pages` is how far in screenfuls: 0.5 is half a screen, 10 effectively "
+            "reaches the end."
+        ),
         action_cls=sa.ScrollAction,
-        wire_fields=("direction", "ref"),
-        agent_fields=("direction", "ref"),
+        wire_fields=("direction", "pages", "ref"),
+        agent_fields=("direction", "pages", "ref"),
         field_descriptions=_REF,
     ),
-    # Tab management: complexity without a clear agent-facing need, so wire-only.
+    ToolSpec(
+        name="send_keys",
+        description=(
+            "Send a key or keyboard shortcut to whatever has focus, e.g. 'Escape', "
+            "'PageDown', 'Control+a'. Use this for shortcuts and for keys that have "
+            "no element to click."
+        ),
+        action_cls=sa.SendKeysAction,
+        wire_fields=("keys",),
+        agent_fields=("keys",),
+    ),
+    ToolSpec(
+        name="find_text",
+        description=(
+            "Scroll to the first occurrence of `text` on the page. Use this to reach "
+            "content you know is present but which is not listed in the page state."
+        ),
+        action_cls=sa.FindTextAction,
+        wire_fields=("text",),
+        agent_fields=("text",),
+    ),
+    ToolSpec(
+        name="dropdown_options",
+        description=(
+            "List the options of a <select> identified by `ref`. Call this before "
+            "select_option when you do not already know the exact option text."
+        ),
+        action_cls=sa.DropdownOptionsAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="search_page",
+        description=(
+            "Search the page's text for a pattern and return the matches with "
+            "surrounding context. Cheap and instant -- prefer it over extract when "
+            "you only need to check whether something is present or find where it is."
+        ),
+        action_cls=sa.SearchPageAction,
+        wire_fields=(
+            "pattern",
+            "regex",
+            "case_sensitive",
+            "context_chars",
+            "max_results",
+            "css_scope",
+        ),
+        agent_fields=("pattern", "regex"),
+    ),
+    ToolSpec(
+        name="find_elements",
+        description=(
+            "Query the page with a CSS selector and return each match's tag, text and "
+            "requested attributes. Use it to read repeated structure -- table rows, "
+            "product cards, links -- without spending a full page observation."
+        ),
+        action_cls=sa.FindElementsAction,
+        wire_fields=("selector", "attributes", "max_results", "include_text"),
+        agent_fields=("selector", "attributes"),
+        wire_overrides={"attributes": (list[str], PydanticField(default_factory=list))},
+        agent_overrides={"attributes": (list[str], PydanticField(default_factory=list))},
+    ),
+    ToolSpec(
+        name="upload_file",
+        description="Attach a local file to a file input identified by `ref`.",
+        action_cls=sa.UploadFileAction,
+        wire_fields=("ref", "path"),
+        # Never offered to an agent: `path` is read from the machine the driver
+        # runs on, so a model choosing it could upload any file the worker can
+        # read to a site it controls. Safe exposure needs a caller-supplied path
+        # allowlist (browser-use's `available_file_paths`), which is a
+        # session-config concept crawlpilot does not have yet.
+        agent_fields=None,
+        safety="sensitive",
+    ),
+    # Tab management. Agent-exposed, as in browser-use: a link that opens in a
+    # new tab, a checkout that pops one, a comparison across two pages are all
+    # ordinary tasks, and without these verbs the agent is stranded on whichever
+    # tab it happens to be on. The tab list is already in every observation, so
+    # the model has the `page_id`s to name.
     ToolSpec(
         name="new_tab",
-        description="Open a new tab, optionally at a URL.",
+        description="Open a new tab, optionally at a URL, and make it active.",
         action_cls=sa.NewTabAction,
         wire_fields=("url",),
-        agent_fields=None,
+        agent_fields=("url",),
     ),
     ToolSpec(
         name="close_tab",
-        description="Close a tab by page id.",
+        description="Close a tab by page id, as shown in the tab list.",
         action_cls=sa.CloseTabAction,
         wire_fields=("page_id",),
-        agent_fields=None,
+        agent_fields=("page_id",),
     ),
     ToolSpec(
         name="switch_tab",
-        description="Make a tab active by page id.",
+        description="Make a tab active by page id, as shown in the tab list.",
         action_cls=sa.SwitchTabAction,
         wire_fields=("page_id",),
-        agent_fields=None,
+        agent_fields=("page_id",),
     ),
     ToolSpec(
         name="list_tabs",
         description="List the tabs open in this session.",
         action_cls=sa.ListTabsAction,
+        # Not agent-exposed: every observation already carries the tab list, so
+        # this could only ever return what the model was just shown.
         agent_fields=None,
     ),
 )

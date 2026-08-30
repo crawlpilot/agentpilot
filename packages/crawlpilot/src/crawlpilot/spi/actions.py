@@ -103,7 +103,7 @@ class ExecuteJsAction:
     terminates_sequence: bool = False
 
 
-# --- Interaction verbs (P1: need spi.driver.ref_cache to resolve `ref`) ---
+# --- Interaction verbs (resolve `ref` through the driver's node index) ---
 
 
 @dataclass
@@ -117,6 +117,99 @@ class ClickAction:
 class FillAction:
     ref: str
     text: str
+    clear: bool = True
+    """Whether to empty the field first. `clear=False` appends, which is how a
+    model adds to a field it has already partly filled -- browser-use's
+    `InputTextAction.clear`. With `clear=True`, `text=""` empties the field."""
+    terminates_sequence: bool = False
+
+
+@dataclass
+class SendKeysAction:
+    """A key or shortcut sent to whatever currently has focus.
+
+    Distinct from `PressAction` in intent rather than mechanism: `press` is a
+    single named key, this accepts modifier combinations (`Control+o`,
+    `Shift+Tab`). Ported from browser-use's `SendKeysAction`, including its
+    tolerance for the spellings models actually emit (`ctrl`, `cmd`, `mod`).
+    """
+
+    keys: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class FindTextAction:
+    """Scroll to the first occurrence of `text`.
+
+    The one place a selector legitimately goes to the browser: `DOM.performSearch`
+    is Chrome's own find-in-page, which searches text nodes the serializer may
+    have truncated out of the observation. Lets a model reach content it can see
+    described but not addressed (browser-use's `find_text`).
+    """
+
+    text: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class DropdownOptionsAction:
+    """List the options of a `<select>`, so a model can choose a real value
+    rather than guess one and burn a step on the failure."""
+
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class SearchPageAction:
+    """Grep the rendered page text. Zero LLM cost, no model round trip.
+
+    Answers "is this here, and where" without spending an observation on it --
+    for verifying content exists, or locating something on a page far larger than
+    the serializer's budget (browser-use's `search_page`).
+    """
+
+    pattern: str
+    regex: bool = False
+    case_sensitive: bool = False
+    context_chars: int = 150
+    max_results: int = 25
+    css_scope: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class FindElementsAction:
+    """Query the DOM by CSS selector and read back tags, text and attributes.
+
+    The structured counterpart to `search_page`: cheap bulk extraction of
+    repeated structure (every row, every link) that would otherwise cost a full
+    observation per page (browser-use's `find_elements`).
+    """
+
+    selector: str
+    attributes: list[str] = field(default_factory=list)
+    max_results: int = 50
+    include_text: bool = True
+    terminates_sequence: bool = False
+
+
+@dataclass
+class UploadFileAction:
+    """Attach a local file to an `<input type=file>`.
+
+    Wire-only, never offered to an agent -- for the same reason `execute_js` is
+    not. `path` is read from the machine the driver runs on, so a model able to
+    choose it could exfiltrate any file the worker can read by uploading it to a
+    site it also controls. Exposing this safely needs a caller-supplied allowlist
+    of paths (browser-use's `available_file_paths`), which is a session-config
+    concept crawlpilot does not have yet; until it does, an integrator passes the
+    path explicitly and owns that decision.
+    """
+
+    ref: str
+    path: str
     terminates_sequence: bool = False
 
 
@@ -142,6 +235,11 @@ class PressAction:
 @dataclass
 class ScrollAction:
     direction: Literal["up", "down", "left", "right"]
+    pages: float = 1.0
+    """How far, in viewport-fulls. `0.5` is half a screen, `10` effectively
+    reaches the end. Without it a model working down a long list had to emit one
+    scroll per step and spend an observation on each (browser-use's
+    `ScrollAction.pages`)."""
     ref: str | None = None
     terminates_sequence: bool = False
 
@@ -195,6 +293,12 @@ Action = (
     | HoverAction
     | PressAction
     | ScrollAction
+    | SendKeysAction
+    | FindTextAction
+    | DropdownOptionsAction
+    | SearchPageAction
+    | FindElementsAction
+    | UploadFileAction
     | NewTabAction
     | CloseTabAction
     | SwitchTabAction
@@ -240,6 +344,15 @@ class ActionResult:
     navigation's landed URL, a click that changed the page). Lets the agent
     loop tell the model *what actually happened* instead of assuming success
     from the absence of an exception -- the driver's per-action grounding."""
+    readouts: list[str] = field(default_factory=list)
+    """One entry per read-only query action (`search_page`, `find_elements`,
+    `dropdown_options`), in the order they ran.
+
+    Separate from `verifications` because the two answer different questions: a
+    verification says what an action *did*, a readout is the information the
+    action was asked to *fetch*. Collapsing them would make a page search look
+    like a side effect, and would leave a caller no way to distinguish grounding
+    it can summarise from data it must pass through intact."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""

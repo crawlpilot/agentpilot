@@ -19,17 +19,29 @@ from crawlpilot.spi import actions as spi_actions
 from crawlpilot.tools import browser_tools
 
 DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
+    # Navigation and the core interaction verbs first -- most-used, and the ones
+    # a model should reach for by default.
     "navigate",
     "go_back",
     "click",
     "fill",
     "select_option",
+    "dropdown_options",
     "hover",
     "press",
+    "send_keys",
     "scroll",
+    "find_text",
     "wait",
+    # Reading the page: the cheap targeted queries before the expensive full read.
+    "search_page",
+    "find_elements",
     "extract",
     "screenshot",
+    # Tabs last -- needed, but rarely the right first move.
+    "new_tab",
+    "switch_tab",
+    "close_tab",
 )
 """Order is a presentation choice -- most-used first, since it is the order a
 model reads the schema in -- so it stays written out rather than derived from
@@ -37,11 +49,12 @@ catalog order. *Membership* is not: `test_tools_registry` asserts this set equal
 the registry's `agent_exposed` subset, so a verb cannot be exposed to agents in
 one place and forgotten in the other.
 
-`execute_js` and tab management are absent because their catalog entries declare
-`agent_fields=None`: arbitrary JS is security-sensitive, and tab management adds
-complexity without a clear need. Both remain reachable by passing a wider
-`allowed_actions`, and the exclusion now lives *with* the verb instead of in a
-separate tuple that had to be kept in step with it.
+`execute_js`, `upload_file`, `snapshot` and `list_tabs` are absent because their
+catalog entries declare `agent_fields=None` -- arbitrary JS and a driver-side
+file path are security-sensitive, and the other two would only return what the
+model was just shown. All remain reachable by passing a wider `allowed_actions`,
+and the exclusion lives *with* the verb rather than in a separate tuple that had
+to be kept in step with it.
 """
 
 _AGENT_TOOLS = browser_tools().subset(agent_exposed=True)
