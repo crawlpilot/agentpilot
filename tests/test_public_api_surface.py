@@ -63,6 +63,8 @@ PUBLIC_SURFACE: dict[str, tuple[str, ...]] = {
     "agentpilot.tiers": ("Tier", "TierName", "TierPolicy", "PROTECTED", "ESCALATION"),
     # Phase 3a: the shared-state seam. `InMemoryStateStore` is the shipped
     # default; `control.redis_store.RedisStateStore` is the injected one.
+    # Phase 5: the facade -- the entry point a library consumer imports.
+    "agentpilot.api": ("Browser", "BrowserSession"),
     # Phase 4: the extension seam.
     "agentpilot.extensions": (
         "ExtensionRegistry", "ExtensionManifest", "Extension", "Resolution",
