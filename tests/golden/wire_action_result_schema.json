@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "BoundingBoxWire": {
+      "properties": {
+        "height": {
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "title": "Width",
+          "type": "number"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "BoundingBoxWire",
+      "type": "object"
+    },
+    "DialogInfoWire": {
+      "properties": {
+        "default_value": {
+          "default": "",
+          "title": "Default Value",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "title": "DialogInfoWire",
+      "type": "object"
+    },
+    "DownloadWire": {
+      "properties": {
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "size_bytes": {
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "filename",
+        "size_bytes"
+      ],
+      "title": "DownloadWire",
+      "type": "object"
+    },
+    "FrameInfoWire": {
+      "properties": {
+        "frame_id": {
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "is_main": {
+          "default": false,
+          "title": "Is Main",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frame_id",
+        "url"
+      ],
+      "title": "FrameInfoWire",
+      "type": "object"
+    },
+    "RefInfoWire": {
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoundingBoxWire"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "name"
+      ],
+      "title": "RefInfoWire",
+      "type": "object"
+    },
+    "SnapshotWire": {
+      "properties": {
+        "llm_text": {
+          "title": "Llm Text",
+          "type": "string"
+        },
+        "refs": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RefInfoWire"
+          },
+          "title": "Refs",
+          "type": "object"
+        }
+      },
+      "required": [
+        "llm_text"
+      ],
+      "title": "SnapshotWire",
+      "type": "object"
+    },
+    "TabInfoWire": {
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "page_id": {
+          "title": "Page Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "url",
+        "title",
+        "active"
+      ],
+      "title": "TabInfoWire",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "dialog": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DialogInfoWire"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "downloads": {
+      "items": {
+        "$ref": "#/$defs/DownloadWire"
+      },
+      "title": "Downloads",
+      "type": "array"
+    },
+    "extracts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Extracts",
+      "type": "array"
+    },
+    "frames": {
+      "items": {
+        "items": {
+          "$ref": "#/$defs/FrameInfoWire"
+        },
+        "type": "array"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "js_returns": {
+      "items": {},
+      "title": "Js Returns",
+      "type": "array"
+    },
+    "page_changed": {
+      "default": false,
+      "title": "Page Changed",
+      "type": "boolean"
+    },
+    "page_title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Page Title"
+    },
+    "pdfs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Pdfs",
+      "type": "array"
+    },
+    "readouts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Readouts",
+      "type": "array"
+    },
+    "screenshots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Screenshots",
+      "type": "array"
+    },
+    "sequence_aborted": {
+      "default": false,
+      "title": "Sequence Aborted",
+      "type": "boolean"
+    },
+    "snapshots": {
+      "items": {
+        "$ref": "#/$defs/SnapshotWire"
+      },
+      "title": "Snapshots",
+      "type": "array"
+    },
+    "soft_verdict": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Soft Verdict"
+    },
+    "soft_weight": {
+      "default": 0,
+      "title": "Soft Weight",
+      "type": "integer"
+    },
+    "status_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status Code"
+    },
+    "tabs": {
+      "items": {
+        "items": {
+          "$ref": "#/$defs/TabInfoWire"
+        },
+        "type": "array"
+      },
+      "title": "Tabs",
+      "type": "array"
+    },
+    "values": {
+      "items": {},
+      "title": "Values",
+      "type": "array"
+    },
+    "verifications": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Verifications",
+      "type": "array"
+    }
+  },
+  "title": "ActionResultWire",
+  "type": "object"
+}

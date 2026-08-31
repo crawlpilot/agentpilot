@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
+    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, Snapshot, SnapshotView
 
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
@@ -918,6 +918,20 @@ class ActionResult:
     fused_trees: list[EnhancedDOMTreeNode] = field(default_factory=list)
     """One fused `EnhancedDOMTreeNode` per `SnapshotAction` in the batch,
     index-correlated with the other per-type output lists."""
+    snapshots: list[Snapshot] = field(default_factory=list)
+    """The *serialized* form of each `fused_trees` entry, index-correlated with
+    it -- the indexed-element text plus the role/name/box per ref.
+
+    Both exist because they are read by different consumers. An in-process
+    caller wants the tree (`agent.observation` diffs it, `recipe.*` walks it);
+    anything across a network hop can only be given this, and it is what a model
+    reads either way. The driver populates `fused_trees`; whoever serializes
+    fills this in beside it (`wire.to_wire` on the server, `wire.from_wire` on a
+    client, where `fused_trees` is necessarily empty).
+
+    So a remote `ActionResult` has `snapshots` and no `fused_trees`, and code
+    that reads `snapshots` works unchanged on both sides. That is the one
+    deliberate asymmetry between the two transports."""
     snapshot_views: list[SnapshotView] = field(default_factory=list)
     """The offered-set filters for each `fused_trees` entry, index-correlated
     with it.

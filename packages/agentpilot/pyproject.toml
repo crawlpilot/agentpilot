@@ -20,7 +20,7 @@ dependencies = [
     # The browser layer, extracted in Phase 7. Declared as an ordinary version
     # range -- `[tool.uv.sources]` below redirects it to the workspace during
     # development, and CI resolves the built wheel from the internal index.
-    "crawlpilot>=0.1,<0.2",
+    "crawlpilot>=0.2,<0.3",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
@@ -31,11 +31,12 @@ dependencies = [
     # ALPN offer from a client claiming to be Chrome is a standalone tell --
     # before any HTTP/2 SETTINGS-frame fingerprint is even compared.
     "httpx[http2]>=0.27",
-    # Content encodings Chrome advertises. httpx only decodes br/zstd when
-    # these are importable, and the `basic` tier must not claim an encoding it
-    # cannot decode -- see `session/browser_headers._supported_accept_encoding`.
-    "brotli>=1.1",
-    "zstandard>=0.22",
+    # `brotli`/`zstandard` used to be declared here, for
+    # `session/browser_headers._supported_accept_encoding` -- which moved to
+    # crawlpilot in Phase 7 and takes them with it. Nothing under `agentpilot/`
+    # imports either any more, and they arrive transitively as crawlpilot base
+    # dependencies, so declaring them here only claimed an ownership that had
+    # already moved.
     "websockets>=13.0",
 ]
 
@@ -76,15 +77,14 @@ build-backend = "hatchling.build"
 packages = ["agentpilot"]
 
 
-[[tool.mypy.overrides]]
-module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
-strict = true
-
-# `anthropic` ships with the optional `bedrock` extra, so a dev env synced
-# without it must still typecheck agentpilot.llm.bedrock's guarded import.
-[[tool.mypy.overrides]]
-module = ["anthropic.*"]
-ignore_missing_imports = true
+# No mypy configuration here, deliberately. This file used to carry two
+# identical pairs of `[[tool.mypy.overrides]]` blocks with no `[tool.mypy]`
+# table above them -- orphans mypy never read, since it takes its config from
+# the `pyproject.toml` at the invocation root. They also still named
+# `agentpilot.spi`, `agentpilot.driver`, `agentpilot.identity` and
+# `agentpilot.session`, none of which have existed since the crawlpilot
+# extraction. Dead config that *looked* like it was making this package strict.
+# The root `pyproject.toml`'s `[tool.mypy]` is the single owner.
 
 [tool.importlinter]
 root_package = "agentpilot"
@@ -111,7 +111,7 @@ type = "layers"
 layers = ["agentpilot.jobs", "agentpilot.recipe", "agentpilot.agent"]
 
 [[tool.importlinter.contracts]]
-name = "gateway -> crawl -> spi"
+name = "gateway -> crawl -> auth"
 type = "layers"
 layers = ["agentpilot.gateway", "agentpilot.crawl", "agentpilot.auth"]
 
@@ -127,15 +127,3 @@ layers = ["agentpilot.gateway", "agentpilot.crawl", "agentpilot.auth"]
 # building outside the workspace) resolves the real dependency -- which is what
 # the "agentpilot against the published wheel" CI job asserts.
 crawlpilot = { workspace = true }
-
-
-
-[[tool.mypy.overrides]]
-module = ["agentpilot.spi.*", "agentpilot.driver.*", "agentpilot.identity.*", "agentpilot.session.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
-strict = true
-
-# `anthropic` ships with the optional `bedrock` extra, so a dev env synced
-# without it must still typecheck agentpilot.llm.bedrock's guarded import.
-[[tool.mypy.overrides]]
-module = ["anthropic.*"]
-ignore_missing_imports = true

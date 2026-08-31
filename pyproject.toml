@@ -59,8 +59,24 @@ python_version = "3.12"
 strict = false
 mypy_path = "packages/crawlpilot/src:packages/agentpilot"
 
+# The single owner of mypy strictness for both projects. `packages/agentpilot/
+# pyproject.toml` used to carry its own duplicated `[[tool.mypy.overrides]]`
+# blocks with no `[tool.mypy]` table above them -- orphans mypy never read,
+# still naming `agentpilot.spi`/`driver`/`identity`/`session`, none of which
+# have existed since the crawlpilot extraction. They are gone; this is the list.
+#
+# `agentpilot.control` is the platform's implementation of crawlpilot's
+# injectable seams (registry, prototypes, proxy config, identity) -- the code on
+# the far side of a Protocol boundary is exactly where a type error is most
+# expensive, and it was already clean, so it costs nothing to hold it here.
 [[tool.mypy.overrides]]
-module = ["crawlpilot.*", "agentpilot.auth.*", "agentpilot.jobs.*", "agentpilot.crawl.*"]
+module = [
+    "crawlpilot.*",
+    "agentpilot.auth.*",
+    "agentpilot.jobs.*",
+    "agentpilot.crawl.*",
+    "agentpilot.control.*",
+]
 strict = true
 
 # `anthropic` ships with the optional `bedrock` extra, so a dev env synced

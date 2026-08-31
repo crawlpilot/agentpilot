@@ -24,6 +24,10 @@ PUBLIC_SUBMODULES = {
     "crawlpilot.api",
     "crawlpilot.config",
     "crawlpilot.metrics",
+    # The HTTP form of `ActionResult`, projected from the dataclass. Published
+    # because the platform *and* any client both encode/decode against it -- a
+    # shape owned by one side would be the drift this module exists to remove.
+    "crawlpilot.wire",
     "crawlpilot.tiers",
     "crawlpilot.policy",
     "crawlpilot.extensions",

@@ -109,7 +109,7 @@ async def test_interaction_through_the_facade(tmp_path: Path, httpserver: HTTPSe
     async with Browser(profiles_root=tmp_path) as browser:
         async with browser.session() as page:
             await page.navigate(url)
-            tree = await page.snapshot()
+            tree = await page.tree()
             assert tree is not None
 
             textbox = _find_role(tree, "textbox")

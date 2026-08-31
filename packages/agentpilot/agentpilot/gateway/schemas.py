@@ -14,6 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from crawlpilot.tiers import TierName
 from crawlpilot.tools import CATALOG
 from crawlpilot.tools.spec import union_of
+from crawlpilot.wire import (
+    ActionResultWire,
+    BoundingBoxWire,
+    DownloadWire,
+    RefInfoWire,
+    SnapshotWire,
+    TabInfoWire,
+)
 
 # --- session lifecycle ---
 
@@ -466,72 +474,46 @@ class RecipeCodegenRequest(BaseModel):
 
 
 # --- action results ---
-
-
-class BoundingBoxOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    x: float
-    y: float
-    width: float
-    height: float
-
-
-class RefInfoOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    role: str
-    name: str
-    bbox: BoundingBoxOut | None = None
-
-
-class FusedTreeOut(BaseModel):
-    """The fusion perception output for one `SnapshotAction`: the model-facing
-    indexed-element text (`llm_text`) plus, per interactive `e<backendNodeId>`
-    ref shown in it, its accessible role/name and bounding box."""
-
-    model_config = ConfigDict(extra="forbid")
-    llm_text: str
-    refs: dict[str, RefInfoOut] = Field(default_factory=dict)
-
-
-class ArtifactRefOut(BaseModel):
-    """The shape a captured download *would* serialize as.
-
-    Nothing populates it: `ActionResultOut.downloads` is always `[]`, because
-    download capture was never implemented. Kept so the documented response
-    shape stays stable for existing clients, and so the field has a type when
-    capture does land. Its crawlpilot-side twin (`spi/artifact.py::ArtifactRef`,
-    declared "for shape completeness ... until P2") is gone -- a browser library
-    should not carry a type only an unbuilt platform feature would produce.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-    artifact_id: str
-    tenant: str
-    kind: str
-    size: int
-    sha256: str
-
-
-class TabInfoOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    page_id: str
-    url: str
-    title: str
-    active: bool
-
-
-class ActionResultOut(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    fused_trees: list[FusedTreeOut] = Field(default_factory=list)
-    screenshots: list[str] = Field(default_factory=list)
-    """Base64-encoded PNG bytes."""
-    extracts: list[str] = Field(default_factory=list)
-    js_returns: list[Any] = Field(default_factory=list)
-    downloads: list[ArtifactRefOut] = Field(default_factory=list)
-    tabs: list[list[TabInfoOut]] = Field(default_factory=list)
-    """One entry per `list_tabs` action in the batch."""
-    sequence_aborted: bool = False
-    page_changed: bool = False
+#
+# Not defined here any more. These were hand-written mirrors of
+# `spi.actions.ActionResult`, and being hand-written they had drifted: the
+# response omitted `values`, `readouts`, `verifications`, `pdfs`, `frames`,
+# `page_title`, `status_code`, `soft_verdict`, `soft_weight` and `dialog`.
+#
+# `values` in particular is what `api.BrowserSession`'s getters read, so its
+# absence made this HTTP API strictly weaker than the library it fronts -- no
+# client on the far side could implement `get_text`, `is_visible`, `get_count`,
+# `dropdown_options`, `pdf()` or `list_frames()` at all.
+#
+# `crawlpilot.wire` projects them from the dataclass instead, the same way
+# `tools.ToolSpec` already projects the *request* union from `tools/catalog.py`.
+# Requests were a projection and responses were a copy; now both are
+# projections, and a field added to `ActionResult` reaches the wire with no edit
+# in this file. The names are re-exported so routes and any importer are
+# unchanged.
+#
+# `FusedTreeOut` is kept as an alias for `SnapshotWire`: the wire field is
+# `snapshots` now (it never carried a fused tree -- always the serialized
+# `{llm_text, refs}` view), and `crawlpilot.wire` still *accepts* `fused_trees`
+# on input, so no existing payload stops decoding.
+#
+# Split on TYPE_CHECKING for the same reason `ActionIn` above is: these are
+# built by `create_model` at import, so a type checker sees a variable rather
+# than a class and rejects it in an annotation.
+if TYPE_CHECKING:
+    ActionResultOut = Any
+    BoundingBoxOut = Any
+    RefInfoOut = Any
+    TabInfoOut = Any
+    ArtifactRefOut = Any
+    FusedTreeOut = Any
+else:
+    ActionResultOut = ActionResultWire
+    BoundingBoxOut = BoundingBoxWire
+    RefInfoOut = RefInfoWire
+    TabInfoOut = TabInfoWire
+    ArtifactRefOut = DownloadWire
+    FusedTreeOut = SnapshotWire
 
 
 # --- sessions list (enterprise UI) ---

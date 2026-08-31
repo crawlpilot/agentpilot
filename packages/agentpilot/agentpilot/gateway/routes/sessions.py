@@ -13,8 +13,6 @@ route).
 
 from __future__ import annotations
 
-import base64
-import itertools
 import time
 import uuid
 
@@ -25,16 +23,12 @@ from agentpilot.gateway.action_conversion import to_spi_action
 from agentpilot.gateway.auth_deps import optional_authed_tenant
 from agentpilot.gateway.schemas import (
     ActionResultOut,
-    BoundingBoxOut,
     ExecuteRequest,
-    FusedTreeOut,
-    RefInfoOut,
     SessionListOut,
     SessionMetadata,
     SessionOpenRequest,
     SessionOpenResponse,
     SessionOut,
-    TabInfoOut,
 )
 from agentpilot.gateway.wiring import Session, Wiring, get_wiring
 from agentpilot.observability.metrics import (
@@ -50,65 +44,23 @@ from crawlpilot.session.interactive import (
 )
 from crawlpilot.session.reaper import _read_pid_rss_mb
 from crawlpilot.spi import actions as spi_actions
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
 from crawlpilot.spi.errors import NodeLost
+from crawlpilot.wire import to_wire
 
 router = APIRouter(tags=["sessions"])
 
 
-def _fused_tree_out(tree: EnhancedDOMTreeNode, view: SnapshotView | None = None) -> FusedTreeOut:
-    """Serialize a fused tree to the model-facing indexed-element text plus a
-    per-ref role/name/bbox map (interactive `e<backendNodeId>` refs only).
+def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
+    """Every field of the dataclass, projected -- see `crawlpilot.wire`.
 
-    `view` carries the snapshot request's own filters (`selector`, `roles`,
-    `viewport_only`, `max_nodes`, `depth`), which the driver resolved against the
-    live page. Passing it is what makes those request fields do anything: they
-    have been on this boundary since P1 and, until the driver started reporting
-    a `SnapshotView` alongside each tree, nothing read them.
+    This was a hand-written converter that named eight fields and silently
+    dropped ten others, `values` among them. The serializer is passed in rather
+    than imported by `wire` so that module stays free of `crawlpilot.dom`, which
+    is what lets a client import it to *decode* a reply without acquiring the
+    DOM pipeline.
     """
 
-    serialized = serialize(tree, view=view)
-    refs: dict[str, RefInfoOut] = {}
-    for backend_node_id, node in serialized.selector_map.items():
-        pos = node.absolute_position
-        bbox = (
-            BoundingBoxOut(x=pos.x, y=pos.y, width=pos.width, height=pos.height)
-            if pos is not None
-            else None
-        )
-        refs[f"e{backend_node_id}"] = RefInfoOut(
-            role=node.ax_role, name=node.ax_name, bbox=bbox
-        )
-    return FusedTreeOut(llm_text=serialized.llm_text, refs=refs)
-
-
-def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
-    return ActionResultOut(
-        fused_trees=[
-            # `snapshot_views` is index-correlated with `fused_trees`, but a
-            # result built by an older driver (or a test double) may carry none;
-            # `zip_longest` leaves those unfiltered rather than dropping trees.
-            _fused_tree_out(tree, view)
-            for tree, view in itertools.zip_longest(result.fused_trees, result.snapshot_views)
-            if tree is not None
-        ],
-        screenshots=[base64.b64encode(b).decode("ascii") for b in result.screenshots],
-        extracts=result.extracts,
-        js_returns=result.js_returns,
-        # Always empty: download capture is not implemented, and the driver has
-        # never populated this. The field stays on the wire so the response
-        # shape does not change under existing clients -- see `ArtifactRefOut`.
-        downloads=[],
-        tabs=[
-            [
-                TabInfoOut(page_id=t.page_id, url=t.url, title=t.title, active=t.active)
-                for t in tab_list
-            ]
-            for tab_list in result.tabs
-        ],
-        sequence_aborted=result.sequence_aborted,
-        page_changed=result.page_changed,
-    )
+    return to_wire(result, serialize_tree=lambda tree, view: serialize(tree, view=view))
 
 
 def _get_session(wiring: Wiring, session_id: str) -> Session:

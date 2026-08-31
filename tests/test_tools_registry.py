@@ -37,6 +37,7 @@ from crawlpilot.tools import (
     to_mcp,
     to_openai,
 )
+from crawlpilot.wire import ActionResultWire
 
 GOLDEN = pathlib.Path(__file__).parent / "golden"
 
@@ -59,6 +60,21 @@ def test_the_agent_schema_matches_its_golden() -> None:
 
     golden = json.loads((GOLDEN / "agent_action_schema.json").read_text())
     assert build_action_schema(DEFAULT_ALLOWED_ACTIONS) == golden
+
+
+def test_the_response_schema_matches_its_golden() -> None:
+    """The other half of the boundary, pinned the same way.
+
+    The request union has been a projection since D5; the *response* stayed a
+    hand-written mirror of `spi.actions.ActionResult` and had quietly drifted ten
+    fields away from it. `crawlpilot.wire` projects it now, which removes the
+    drift but makes the published shape follow the dataclass automatically --
+    so it needs a golden even more than the request side did: adding a field to
+    `ActionResult` is now an API change, and this is what says so in review.
+    """
+
+    golden = json.loads((GOLDEN / "wire_action_result_schema.json").read_text())
+    assert ActionResultWire.model_json_schema() == golden
 
 
 # The verbs a port deliberately widened, and what it added to each. Listed

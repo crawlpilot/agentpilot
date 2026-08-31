@@ -27,14 +27,15 @@ SDK -- asserted by a test.
 
 from __future__ import annotations
 
-import dataclasses
 import typing
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
-from typing import Any, Literal, get_type_hints
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
+
+from crawlpilot._modelgen import dataclass_fields
 
 Safety = Literal["safe", "sensitive"]
 
@@ -179,29 +180,6 @@ class ToolSpec:
         return self.build(**data)
 
 
-def _dataclass_fields(action_cls: type) -> dict[str, tuple[Any, Any]]:
-    """`{name: (type, default)}` read off the dataclass, so a field's type and
-    default have exactly one definition.
-
-    A `default_factory` is passed through to Pydantic as a factory rather than
-    called here. Resolving it to a literal would emit `"default": []` into the
-    JSON Schema, where the hand-written model emitted no `default` at all --
-    a visible wire-schema change for what should be a pure refactor.
-    """
-
-    hints = get_type_hints(action_cls)
-    out: dict[str, tuple[Any, Any]] = {}
-    for f in dataclasses.fields(action_cls):
-        if f.default is not dataclasses.MISSING:
-            default: Any = f.default
-        elif f.default_factory is not dataclasses.MISSING:
-            default = Field(default_factory=f.default_factory)
-        else:
-            default = ...  # required
-        out[f.name] = (hints[f.name], default)
-    return out
-
-
 def _build_model(
     spec: ToolSpec,
     names: tuple[str, ...],
@@ -212,7 +190,7 @@ def _build_model(
     with_docstring: bool = True,
     validators: dict[str, Any] | None = None,
 ) -> type[BaseModel]:
-    available = {**_dataclass_fields(spec.action_cls), **(overrides or {})}
+    available = {**dataclass_fields(spec.action_cls), **(overrides or {})}
     unknown = set(names) - available.keys()
     if unknown:
         raise ValueError(f"{spec.name!r} exposes unknown field(s) {sorted(unknown)}")

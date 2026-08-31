@@ -30,7 +30,6 @@ name = "agentpilot"
 version = "0.1.0"
 source = { editable = "packages/agentpilot" }
 dependencies = [
-    { name = "brotli" },
     { name = "crawlpilot" },
     { name = "fastapi" },
     { name = "httpx", extra = ["http2"] },
@@ -40,7 +39,6 @@ dependencies = [
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
-    { name = "zstandard" },
 ]
 
 [package.optional-dependencies]
@@ -59,7 +57,6 @@ postgres = [
 requires-dist = [
     { name = "alembic", marker = "extra == 'postgres'", specifier = ">=1.13" },
     { name = "anthropic", extras = ["bedrock"], marker = "extra == 'bedrock'", specifier = ">=0.70" },
-    { name = "brotli", specifier = ">=1.1" },
     { name = "crawlpilot", editable = "packages/crawlpilot" },
     { name = "crawlpilot", extras = ["all"], marker = "extra == 'driver'", editable = "packages/crawlpilot" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -71,7 +68,6 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
     { name = "websockets", specifier = ">=13.0" },
-    { name = "zstandard", specifier = ">=0.22" },
 ]
 provides-extras = ["driver", "postgres", "bedrock"]
 
@@ -438,7 +434,7 @@ wheels = [
 
 [[package]]
 name = "crawlpilot"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/crawlpilot" }
 dependencies = [
     { name = "brotli" },

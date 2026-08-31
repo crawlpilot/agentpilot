@@ -323,6 +323,38 @@ def _sibling_position(element: EnhancedDOMTreeNode) -> int:
 DOMSelectorMap = dict[int, EnhancedDOMTreeNode]
 
 
+@dataclass(frozen=True)
+class RefInfo:
+    """What one addressable ref *is* -- its accessible role and name, and where
+    it sits on the page."""
+
+    role: str
+    name: str
+    bbox: BoundingBox | None = None
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """A serialized act of perception: the indexed-element text a model reads,
+    plus the role/name/box behind each `e<id>` ref shown in it.
+
+    Distinct from `EnhancedDOMTreeNode`, which is the *tree* -- every node, every
+    attribute, parent pointers, shadow roots. The tree is what a driver produces
+    and what in-process consumers (`agent.observation`, `recipe.*`) walk; this is
+    what survives a network hop, and it is what an agent actually reads.
+
+    That distinction is why it exists. A remote caller cannot be handed the tree
+    -- serializing a full fused DOM per snapshot would dwarf every other payload
+    on the wire, and the parent/shadow-root back-references do not survive JSON
+    at all -- but it can be handed this, which is the same information the model
+    would have had. So `Snapshot` is the return type of the snapshot verb on
+    *both* transports, and reaching the tree stays a local-only escape hatch.
+    """
+
+    llm_text: str
+    refs: dict[str, RefInfo] = field(default_factory=dict)
+
+
 def iter_elements(root: EnhancedDOMTreeNode):
     """Every element node at or under `root`, in document order, descending
     shadow roots and iframe content documents. Never follows `parent_node`, so

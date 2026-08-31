@@ -93,6 +93,23 @@ source_modules = [
     "crawlpilot.dom",
     "crawlpilot.tools",
     "crawlpilot.policy",
+    "crawlpilot.wire",
 ]
 forbidden_modules = ["crawlpilot.driver"]
 allow_indirect_imports = true
+
+# `wire` is *serialization*, not transport. It is the one module both this
+# library and a remote client import in order to agree on a shape, which is
+# exactly why it must never grow an opinion about how that shape travels: the
+# moment it imports an HTTP client or a web framework, every consumer of the
+# shape acquires one too -- and the reason a client can depend on crawlpilot
+# without taking on a server's dependency closure is gone.
+#
+# `crawlpilot.dom` is forbidden for the same reason in miniature: `to_wire`
+# takes the tree serializer as an argument precisely so that *decoding* a reply
+# does not drag in the DOM pipeline.
+[[tool.importlinter.contracts]]
+name = "wire serializes, it does not transport"
+type = "forbidden"
+source_modules = ["crawlpilot.wire", "crawlpilot._modelgen"]
+forbidden_modules = ["httpx", "fastapi", "starlette", "crawlpilot.dom", "crawlpilot.driver"]

@@ -29,7 +29,7 @@ async def _ref(page, name: str) -> str:
 
     from crawlpilot.dom.serializer import serialize  # noqa: PLC0415
 
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None
     serialized = serialize(tree)
     for index, node in serialized.selector_map.items():

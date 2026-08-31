@@ -65,7 +65,7 @@ async def _refs(page) -> dict[str, str]:
 
     from crawlpilot.spi.dom_tree import iter_elements
 
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None, "snapshot returned no tree"
     found: dict[str, str] = {}
     for node in iter_elements(tree):
@@ -82,7 +82,7 @@ async def _all_refs(page, element_id: str) -> list[str]:
 
     from crawlpilot.spi.dom_tree import iter_elements
 
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None
     return [
         f"e{n.selector_index}"
@@ -120,7 +120,7 @@ async def _offered(page) -> set[str]:
 
     from crawlpilot.dom.serializer import serialize
 
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None
     return {
         node.attributes["id"]
@@ -322,7 +322,7 @@ async def test_interact_inside_a_cross_origin_iframe(page, toolbench) -> None:
     # per-target capture in the first place.
     from crawlpilot.spi.dom_tree import iter_elements
 
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None
     typed = [
         n
@@ -373,7 +373,7 @@ async def test_an_aria_listbox_is_driven_by_clicking(page, toolbench) -> None:
     select, only divs to click -- so it must be indexed as clickable."""
 
     await _open(page, toolbench)
-    tree = await page.snapshot()
+    tree = await page.tree()
     assert tree is not None
 
     from crawlpilot.spi.dom_tree import iter_elements
