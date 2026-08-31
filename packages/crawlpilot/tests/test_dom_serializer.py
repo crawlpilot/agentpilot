@@ -9,7 +9,7 @@ from crawlpilot.dom.paint_order import PaintEntry, Rect, RectUnionPure, compute_
 from crawlpilot.dom.render import normalize_text
 from crawlpilot.dom.serializer import serialize
 from crawlpilot.driver.dom_fusion import LayoutInfo
-from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
+from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType, SnapshotView
 from crawlpilot.spi.geometry import BoundingBox
 
 # --------------------------------------------------------------------- paint order
@@ -296,3 +296,149 @@ def test_only_radios_and_checkboxes_are_promoted() -> None:
         hide={"display": "none"}, attrs={"type": "hidden", "name": "csrf"}
     )
     assert "<radio" not in serialize(body).llm_text
+
+
+# ------------------------------------------------------------- SnapshotView
+
+
+def _page_of_buttons(count: int = 4, *, y_step: float = 100.0) -> EnhancedDOMTreeNode:
+    """`count` buttons stacked down the page, ids 10, 11, 12..."""
+
+    body = _node("body", 1)
+    for i in range(count):
+        _child(
+            body,
+            _node(
+                "button",
+                10 + i,
+                ax_name=f"Button {i}",
+                bounds=BoundingBox(0, i * y_step, 80, 30),
+            ),
+        )
+    return body
+
+
+def _offered(body: EnhancedDOMTreeNode, view: SnapshotView | None = None) -> set[int]:
+    return set(serialize(body, view=view).selector_map)
+
+
+def test_no_view_offers_everything_addressable() -> None:
+    body = _page_of_buttons()
+    assert _offered(body) == {10, 11, 12, 13}
+    assert _offered(body, SnapshotView()) == {10, 11, 12, 13}
+
+
+def test_max_nodes_keeps_the_elements_nearest_the_top_of_the_page() -> None:
+    """In document order, not an arbitrary subset -- the cap should keep what a
+    reader reaches first."""
+
+    assert _offered(_page_of_buttons(), SnapshotView(max_nodes=2)) == {10, 11}
+
+
+def test_roles_filter_offers_only_the_named_roles() -> None:
+    body = _node("body", 1)
+    _child(
+        body,
+        _node("button", 20, ax_role="button", ax_name="Go", bounds=BoundingBox(0, 0, 40, 20)),
+    )
+    _child(body, _node("a", 21, ax_role="link", ax_name="Home", bounds=BoundingBox(0, 30, 40, 20)))
+
+    assert _offered(body, SnapshotView(roles=("link",))) == {21}
+    assert _offered(body, SnapshotView(roles=("button", "link"))) == {20, 21}
+
+
+def test_viewport_only_drops_what_is_below_the_fold() -> None:
+    body = _page_of_buttons(count=4, y_step=500)
+    viewport = BoundingBox(0, 0, 1280, 720)
+
+    # Buttons at y=0 and y=500 intersect a 720-tall viewport; y=1000 and 1500 do not.
+    assert _offered(body, SnapshotView(viewport=viewport)) == {10, 11}
+
+
+def test_viewport_only_keeps_an_element_that_has_no_geometry_at_all() -> None:
+    """A hidden file input or a checkbox behind a styled label reports no box.
+    That is not "outside the viewport" -- dropping it would silently remove
+    controls that work perfectly well."""
+
+    body = _node("body", 1)
+    _child(body, _node("input", 30, attrs={"type": "file"}))  # no bounds
+    _child(body, _node("button", 31, ax_name="Go", bounds=BoundingBox(0, 0, 40, 20)))
+
+    assert _offered(body, SnapshotView(viewport=BoundingBox(0, 0, 1280, 720))) == {30, 31}
+
+
+def test_scope_offers_only_the_selectors_subtree() -> None:
+    body = _page_of_buttons()
+    assert _offered(body, SnapshotView(scope=frozenset({11, 13}))) == {11, 13}
+
+
+def test_filters_compose() -> None:
+    body = _page_of_buttons(count=4, y_step=10)
+    view = SnapshotView(scope=frozenset({10, 11, 12}), max_nodes=2)
+    assert _offered(body, view) == {10, 11}
+
+
+def test_a_hidden_element_is_still_addressable_it_is_only_not_offered() -> None:
+    """The view narrows what the model is *shown*. Nothing is pruned from the
+    tree, so occlusion still works and a caller naming the ref still resolves
+    it -- which is why the flag is `excluded_by_view`, not a deletion."""
+
+    body = _page_of_buttons()
+    text = serialize(body, view=SnapshotView(max_nodes=1)).llm_text
+
+    assert "[e10]" in text
+    assert "[e11]" not in text, "not offered"
+    # But the full tree is untouched: serializing again without a view sees it.
+    assert 11 in serialize(body).selector_map
+
+
+def test_an_occluder_the_view_hides_still_occludes() -> None:
+    """The reason the filters run *after* paint-order: a modal scrim dropped by a
+    role filter must not stop hiding the buttons behind it."""
+
+    body = _node("body", 1)
+    _child(
+        body,
+        _node("button", 40, ax_role="button", ax_name="Behind",
+              bounds=BoundingBox(0, 0, 100, 100), paint_order=1),
+    )
+    _child(
+        body,
+        _node("div", 41, ax_role="generic",
+              bounds=BoundingBox(0, 0, 200, 200), paint_order=9, bg="rgb(0, 0, 0)"),
+    )
+
+    # The scrim's role is filtered out, yet the button it covers stays hidden.
+    assert _offered(body, SnapshotView(roles=("button",))) == set()
+
+
+# ---------------------------------------------------------------- depth
+
+
+def test_depth_caps_how_deep_a_rendered_line_may_sit() -> None:
+    body = _node("body", 1)
+    outer = _child(body, _node("button", 50, ax_name="Outer", bounds=BoundingBox(0, 0, 200, 200)))
+    inner = _child(
+        outer, _node("span", 51, attrs={"onclick": "f()"}, bounds=BoundingBox(0, 0, 10, 10))
+    )
+    _child(inner, _node("#text", 52, node_type=NodeType.TEXT_NODE, value="deep text"))
+
+    full = serialize(body).llm_text
+    assert "deep text" in full
+
+    shallow = serialize(body, view=SnapshotView(depth=0)).llm_text
+    assert "[e50]" in shallow, "the top level still renders"
+    assert "deep text" not in shallow
+
+
+def test_depth_counts_rendered_lines_not_dom_nesting() -> None:
+    """Ten structural wrappers above a button do not make it deep: they emit no
+    lines, so it is still the reader's first level."""
+
+    body = _node("body", 1)
+    parent = body
+    for i in range(10):
+        parent = _child(parent, _node("div", 60 + i))
+    _child(parent, _node("button", 90, ax_name="Buried", bounds=BoundingBox(0, 0, 40, 20)))
+
+    assert "[e90]" in serialize(body, view=SnapshotView(depth=0)).llm_text

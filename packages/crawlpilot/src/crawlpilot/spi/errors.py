@@ -117,3 +117,16 @@ class NoDialogOpen(DriverError):
 
     def __init__(self) -> None:
         super().__init__("no JavaScript dialog is currently open on this page")
+
+
+class SelectorNotFound(DriverError):
+    """A CSS selector scoping a snapshot matched no element.
+
+    Raised rather than scoping the observation to the empty set: a snapshot that
+    came back blank because of a typo in the selector should say so, not look
+    like an empty page.
+    """
+
+    def __init__(self, selector: str) -> None:
+        self.selector = selector
+        super().__init__(f"selector {selector!r} matched no element on this page")

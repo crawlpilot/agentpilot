@@ -574,3 +574,69 @@ async def test_call_tool_validates_its_arguments(page) -> None:
 
     with pytest.raises(ValidationError):
         await page.call_tool("navigate", {"url": "file:///etc/passwd"})
+
+
+# ----------------------------------------------------------- snapshot filters
+#
+# `viewport_only`, `max_nodes` and `roles` have been on the HTTP boundary since
+# P1 and were read by nobody: the driver returns a tree and the caller
+# serializes it, so the options had no route from the one to the other. These
+# assert the route exists, using the driver's own `snapshot_views` exactly as
+# the gateway does.
+
+
+async def _offered(page, **options) -> set[int]:
+    """The refs a snapshot with these options offers a model."""
+
+    from crawlpilot.dom.serializer import serialize
+    from crawlpilot.spi import actions as sa
+
+    result = await page.execute([sa.SnapshotAction(**options)])
+    assert result.fused_trees, "snapshot returned no tree"
+    view = result.snapshot_views[0] if result.snapshot_views else None
+    return set(serialize(result.fused_trees[0], view=view).selector_map)
+
+
+async def test_an_unfiltered_snapshot_offers_everything(page, toolbench) -> None:
+    await _open(page, toolbench)
+    assert len(await _offered(page)) > 10
+
+
+async def test_max_nodes_caps_what_the_snapshot_offers(page, toolbench) -> None:
+    await _open(page, toolbench)
+    assert len(await _offered(page, max_nodes=3)) == 3
+
+
+async def test_roles_filters_the_snapshot_to_one_role(page, toolbench) -> None:
+    await _open(page, toolbench)
+    offered = await _offered(page, roles=("textbox",))
+
+    assert offered, "the toolbench has text inputs"
+    assert offered < await _offered(page), "a role filter must narrow the set"
+
+
+async def test_viewport_only_drops_what_is_below_the_fold(page, toolbench) -> None:
+    """The toolbench has a tall spacer and `#deep` far beneath it, which is the
+    whole reason that spacer exists."""
+
+    await _open(page, toolbench)
+    assert await _offered(page, viewport_only=True) < await _offered(page)
+
+
+async def test_selector_scopes_the_snapshot_to_one_subtree(page, toolbench) -> None:
+    await _open(page, toolbench)
+    scoped = await _offered(page, selector="#dialogs")
+
+    assert scoped, "#dialogs contains four buttons"
+    assert scoped < await _offered(page)
+
+
+async def test_a_selector_that_matches_nothing_says_so(page, toolbench) -> None:
+    """Rather than scoping to the empty set, which would look like an empty
+    page and send the caller hunting for the wrong bug."""
+
+    from crawlpilot.spi.errors import SelectorNotFound
+
+    await _open(page, toolbench)
+    with pytest.raises(SelectorNotFound):
+        await _offered(page, selector="#no-such-element")

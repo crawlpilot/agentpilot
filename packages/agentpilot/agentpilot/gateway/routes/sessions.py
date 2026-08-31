@@ -14,6 +14,7 @@ route).
 from __future__ import annotations
 
 import base64
+import itertools
 import time
 import uuid
 
@@ -49,17 +50,24 @@ from crawlpilot.session.interactive import (
 )
 from crawlpilot.session.reaper import _read_pid_rss_mb
 from crawlpilot.spi import actions as spi_actions
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
 from crawlpilot.spi.errors import NodeLost
 
 router = APIRouter(tags=["sessions"])
 
 
-def _fused_tree_out(tree: EnhancedDOMTreeNode) -> FusedTreeOut:
+def _fused_tree_out(tree: EnhancedDOMTreeNode, view: SnapshotView | None = None) -> FusedTreeOut:
     """Serialize a fused tree to the model-facing indexed-element text plus a
-    per-ref role/name/bbox map (interactive `e<backendNodeId>` refs only)."""
+    per-ref role/name/bbox map (interactive `e<backendNodeId>` refs only).
 
-    serialized = serialize(tree)
+    `view` carries the snapshot request's own filters (`selector`, `roles`,
+    `viewport_only`, `max_nodes`, `depth`), which the driver resolved against the
+    live page. Passing it is what makes those request fields do anything: they
+    have been on this boundary since P1 and, until the driver started reporting
+    a `SnapshotView` alongside each tree, nothing read them.
+    """
+
+    serialized = serialize(tree, view=view)
     refs: dict[str, RefInfoOut] = {}
     for backend_node_id, node in serialized.selector_map.items():
         pos = node.absolute_position
@@ -76,7 +84,14 @@ def _fused_tree_out(tree: EnhancedDOMTreeNode) -> FusedTreeOut:
 
 def _to_action_result_out(result: spi_actions.ActionResult) -> ActionResultOut:
     return ActionResultOut(
-        fused_trees=[_fused_tree_out(t) for t in result.fused_trees],
+        fused_trees=[
+            # `snapshot_views` is index-correlated with `fused_trees`, but a
+            # result built by an older driver (or a test double) may carry none;
+            # `zip_longest` leaves those unfiltered rather than dropping trees.
+            _fused_tree_out(tree, view)
+            for tree, view in itertools.zip_longest(result.fused_trees, result.snapshot_views)
+            if tree is not None
+        ],
         screenshots=[base64.b64encode(b).decode("ascii") for b in result.screenshots],
         extracts=result.extracts,
         js_returns=result.js_returns,

@@ -156,6 +156,7 @@ def render_tree(
     *,
     include_attributes: tuple[str, ...] = DEFAULT_INCLUDE_ATTRIBUTES,
     max_length: int | None = None,
+    depth: int | None = None,
 ) -> RenderedTree:
     """Render the simplified tree to indented text. Indexed (interactive) nodes
     render as `[ref]<...>`; kept non-interactive nodes contribute their text.
@@ -172,21 +173,28 @@ def render_tree(
     lines: list[str] = []
     line_indices: list[int | None] = []
 
-    def walk(node: SimplifiedNode, depth: int) -> None:
-        indent = "\t" * depth
-        child_depth = depth
+    def walk(node: SimplifiedNode, level: int) -> None:
+        # `depth` caps how deep a *rendered* line may sit; the walk still
+        # descends, because indentation counts only lines that were emitted, so
+        # a control can sit at level 1 with ten structural wrappers above it.
+        # Cutting the traversal instead would drop it for being nested, not deep.
+        too_deep = depth is not None and level > depth
+        indent = "\t" * level
+        child_level = level
         if node.selector_index is not None:
-            lines.append(f"{indent}{_element_line(node, include_attributes)}")
-            line_indices.append(node.selector_index)
-            child_depth = depth + 1
+            if not too_deep:
+                lines.append(f"{indent}{_element_line(node, include_attributes)}")
+                line_indices.append(node.selector_index)
+            child_level = level + 1
         else:
             text = node.text_content()
             if text:
-                lines.append(f"{indent}{text}")
-                line_indices.append(None)
-                child_depth = depth + 1
+                if not too_deep:
+                    lines.append(f"{indent}{text}")
+                    line_indices.append(None)
+                child_level = level + 1
         for child in node.children:
-            walk(child, child_depth)
+            walk(child, child_level)
 
     walk(root, 0)
     body = "\n".join(lines)

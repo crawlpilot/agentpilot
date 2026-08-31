@@ -49,10 +49,25 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="snapshot",
         description="Capture the fused DOM/accessibility tree of the current page.",
         action_cls=sa.SnapshotAction,
-        wire_fields=("viewport_only", "max_nodes", "roles"),
+        wire_fields=("viewport_only", "max_nodes", "roles", "selector", "depth"),
         # Not offered to agents: the loop takes its own snapshot each step, so
         # letting a model request one adds a turn without adding information.
         agent_fields=None,
+    ),
+    ToolSpec(
+        name="diff_snapshot",
+        description=(
+            "Report what changed on the page since the last snapshot -- elements "
+            "added, removed, moved or changed state. Much cheaper than re-reading "
+            "the whole page to work out what a click did."
+        ),
+        action_cls=sa.DiffSnapshotAction,
+        wire_fields=("settle",),
+        # Agent-exposed where `snapshot` is not, and for the opposite reason:
+        # the loop already hands the model a fresh observation each step, but it
+        # cannot know when the model wants to check the effect of an action
+        # *within* a step without paying for a second full read.
+        agent_fields=(),
     ),
     ToolSpec(
         name="extract",

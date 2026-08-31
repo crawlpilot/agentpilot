@@ -1,5 +1,11 @@
 """Cross-step DOM change identification -- the headline of the fusion port.
 
+Lives in `crawlpilot.dom` rather than the platform because it never needed
+anything else: it imports `dom.clickable_elements` and `spi.dom_tree` and
+nothing more, so the standalone library was shipping the fused tree while
+keeping the one thing that makes a *sequence* of them readable in a package its
+users do not install. `diff_snapshot` is the verb built on it.
+
 Instead of re-sending the whole page and making the model re-derive what changed
 (a `*`-only, `role:name`-path marking of new elements), `diff_snapshots`
 compares the interactive elements of two fused trees and produces a typed change
@@ -109,7 +115,7 @@ def _value_of(node: EnhancedDOMTreeNode) -> str:
     return node.attributes.get("value", "")
 
 
-def _state_signature(node: EnhancedDOMTreeNode) -> tuple:
+def _state_signature(node: EnhancedDOMTreeNode) -> tuple[object, ...]:
     """The observable state that, when changed on an otherwise-matched element,
     counts as MODIFIED: accessible name, value, and the AX state flags."""
 

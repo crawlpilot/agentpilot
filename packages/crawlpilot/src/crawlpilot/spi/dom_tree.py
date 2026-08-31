@@ -51,6 +51,61 @@ class LayoutInfo:
     scroll_rects: BoundingBox | None = None
 
 
+@dataclass(frozen=True)
+class SnapshotView:
+    """Which of the addressable elements the model is actually *offered*.
+
+    The codebase already draws this line -- "addressable is what the driver can
+    act on; offered is the narrower set the serializer decides to show a model"
+    (`tests/browser/test_toolchain.py`) -- and every field here is on the offered
+    side. Nothing below prunes the fused tree, so a ref the model was not shown
+    still resolves if a caller names it; the filters change the *view*, not what
+    exists.
+
+    That is also why they are applied after paint-order and containment rather
+    than before: occlusion is computed from the whole tree, and a modal scrim
+    dropped by a role filter would stop hiding the buttons behind it.
+
+    `SnapshotAction` has carried `viewport_only`, `max_nodes` and `roles` on the
+    HTTP boundary since P1 and **nothing ever read them** -- the driver returns a
+    tree and the caller serializes it, so the options had no route from the one
+    to the other. This type is that route.
+    """
+
+    scope: frozenset[int] | None = None
+    """Backend node ids of the subtree a CSS `selector` matched, resolved by the
+    driver (it needs `DOM.querySelector`; this module stays pure). `None` means
+    the whole document."""
+    roles: tuple[str, ...] | None = None
+    """Keep only these accessibility roles."""
+    viewport: BoundingBox | None = None
+    """Keep only elements intersecting this rectangle -- `viewport_only`,
+    resolved by the driver from the live viewport size."""
+    max_nodes: int | None = None
+    """Cap on how many interactive elements are offered, in document order."""
+    depth: int | None = None
+    """Maximum indentation depth to render.
+
+    agent-browser's other rendering flag, `compact` ("remove empty structural
+    elements"), has no counterpart here because it describes what this renderer
+    already does unconditionally: a node that emits no line contributes no
+    indentation either (`render.render_tree`), so an empty wrapper is already
+    invisible. A flag for it would toggle nothing.
+    """
+
+    @property
+    def filters_offered_set(self) -> bool:
+        """Whether anything here narrows *which elements* are offered, as opposed
+        to only how they are rendered."""
+
+        return (
+            self.scope is not None
+            or self.roles is not None
+            or self.viewport is not None
+            or self.max_nodes is not None
+        )
+
+
 class NodeType(IntEnum):
     """DOM node types (subset of the DOM spec that the pipeline distinguishes)."""
 

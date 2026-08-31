@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+    from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
 
 ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
 
@@ -71,6 +71,18 @@ class SnapshotAction:
     """Wait (best-effort, bounded) for the page to reach network-idle before
     capturing the snapshot -- opt-in so only the agent's step loop pays for it
     (stable perception across steps); ordinary snapshot callers don't."""
+    selector: str | None = None
+    """Scope the capture to the subtree matching this CSS selector.
+
+    The driver resolves it over CDP (`DOM.querySelector` +
+    `DOM.describeNode(depth=-1)`) into the set of backend node ids beneath the
+    match, which becomes `SnapshotView.scope`. Ported from agent-browser's
+    `SnapshotOptions.selector` (`snapshot.rs:216-352`), including its refusal to
+    pass a non-node result on to `describeNode` -- an invalid selector, or a
+    snapshot ref passed where a selector belongs, must say so rather than produce
+    "Object id doesn't reference a Node"."""
+    depth: int | None = None
+    """Maximum indentation depth in the rendered observation."""
     no_runtime: bool = False
     """UI-driven stealth flag (from `tier`). When set, the fusion engine skips
     every CDP `Runtime` call (`getEventListeners`), keeping Patchright's
@@ -223,6 +235,26 @@ class UploadFileAction:
     terminates_sequence: bool = False
 
 
+@dataclass
+class DiffSnapshotAction:
+    """Capture, and report what changed since the previous capture on this tab.
+
+    The alternative is making the model diff two full observations itself, which
+    costs it a page-sized read and gets the answer wrong on any page with
+    repeated structure. agent-browser exposes the same verb
+    (`actions.rs::handle_diff_snapshot`); the report here is the richer one the
+    fusion port already produces -- NEW / REMOVED / MOVED / MODIFIED rather than
+    added/removed (`crawlpilot.dom.diff`).
+
+    The first call on a tab has nothing to compare against and says so.
+    """
+
+    settle: bool = False
+    """As `SnapshotAction.settle` -- wait, bounded, for network idle first."""
+    no_runtime: bool = False
+    terminates_sequence: bool = False
+
+
 # --- JavaScript dialogs (see `driver.dialogs`) ---
 #
 # Meaningful only under a `"manual"` `DialogPolicy`: under the default the page's
@@ -335,6 +367,7 @@ Action = (
     NavigateAction
     | GoBackAction
     | SnapshotAction
+    | DiffSnapshotAction
     | ExtractAction
     | ScreenshotAction
     | WaitAction
@@ -413,6 +446,17 @@ class ActionResult:
     fused_trees: list[EnhancedDOMTreeNode] = field(default_factory=list)
     """One fused `EnhancedDOMTreeNode` per `SnapshotAction` in the batch,
     index-correlated with the other per-type output lists."""
+    snapshot_views: list[SnapshotView] = field(default_factory=list)
+    """The offered-set filters for each `fused_trees` entry, index-correlated
+    with it.
+
+    The tree and the filters have to travel together because they are produced
+    and consumed in different places: the driver captures the tree and is the
+    only component that sees the `SnapshotAction`, while serialization happens in
+    the caller. Before this, `viewport_only`, `max_nodes` and `roles` were
+    declared on the HTTP boundary and read by nobody -- there was no route from
+    the action to `dom.serializer`. Pass the matching entry as `serialize(...,
+    view=...)`."""
     screenshots: list[bytes] = field(default_factory=list)
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)

@@ -6,7 +6,7 @@ fusion pipeline and change-diff key on, ported from browser-use's
 Deliberately *pure*: every function takes primitives (a parent-branch tag-name
 path, a static-attribute dict, an accessible name) rather than a live node, so
 it is unit-testable against synthetic inputs with no CDP session and reusable by
-both the enriched-node model (`spi.dom_tree`) and the diff (`agent.dom_diff`).
+both the enriched-node model (`spi.dom_tree`) and the diff (`dom.diff`).
 
 Two hashes, mirroring the references' EXACT vs STABLE distinction:
 

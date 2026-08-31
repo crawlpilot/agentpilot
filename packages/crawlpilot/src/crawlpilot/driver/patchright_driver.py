@@ -48,6 +48,7 @@ from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from crawlpilot import metrics
 from crawlpilot.config import LaunchConfig
+from crawlpilot.dom.diff import diff_snapshots, render_change_block
 from crawlpilot.driver import browser_discovery, cdp_element, dialogs, humanize, mouse, warmup
 from crawlpilot.driver.dialogs import DialogInterrupt, DialogWatcher, GuardedSession
 from crawlpilot.driver.dom_fusion_engine import capture_fused_tree
@@ -72,6 +73,7 @@ from crawlpilot.spi.actions import (
     DialogInfo,
     DialogPolicy,
     DialogStatusAction,
+    DiffSnapshotAction,
     DropdownOptionsAction,
     ExecuteJsAction,
     ExtractAction,
@@ -95,16 +97,18 @@ from crawlpilot.spi.actions import (
     UploadFileAction,
     WaitAction,
 )
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.errors import (
     CapacityExhausted,
     ChallengeDetected,
     ContextCrashed,
     NavigationTimeout,
+    SelectorNotFound,
     StaleRefError,
     TabNotFound,
 )
+from crawlpilot.spi.geometry import BoundingBox
 from crawlpilot.spi.health import ContextHealth, HealthStatus
 from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.lease import ContextRef, ContextState
@@ -125,6 +129,26 @@ _REF_CONSUMING = (
 """Actions carrying a mandatory `ref`, so the batch loop knows to abort them once
 an earlier action has invalidated the refs it would use. `WaitAction`/
 `ScrollAction` are checked separately -- their `ref` is optional."""
+
+def _collect_backend_ids(node: dict[str, Any], into: set[int]) -> None:
+    """Every `backendNodeId` in a `DOM.describeNode(depth=-1)` payload.
+
+    Walks `children`, `shadowRoots` and `contentDocument` alike -- a selector
+    that matches a component wrapper should scope to what the user sees inside
+    it, which for a web component is behind its shadow root. Mirrors
+    agent-browser's `collect_backend_node_ids` (`snapshot.rs:1338`).
+    """
+
+    backend_id = node.get("backendNodeId")
+    if isinstance(backend_id, int):
+        into.add(backend_id)
+    for key in ("children", "shadowRoots", "pseudoElements"):
+        for child in node.get(key) or ():
+            _collect_backend_ids(child, into)
+    content = node.get("contentDocument")
+    if content:
+        _collect_backend_ids(content, into)
+
 
 _DIALOG_ACTIONS = (DialogStatusAction, DialogAcceptAction, DialogDismissAction)
 """The only actions that may run while a dialog holds the renderer. Everything
@@ -366,6 +390,10 @@ class _Page:
     `frame_queue` -- see `start_screencast`/`stop_screencast`."""
     nodes: NodeIndex = field(default_factory=NodeIndex)
     """`ref -> captured node` from the most recent snapshot."""
+    last_tree: EnhancedDOMTreeNode | None = None
+    """The most recent capture, kept so `DiffSnapshotAction` has something to
+    compare against. Per tab, like `nodes`: a diff across two different pages
+    would report every element as new and be worse than useless."""
     dialogs: DialogWatcher = field(default_factory=DialogWatcher)
     """This tab's JavaScript-dialog state.
 
@@ -1059,7 +1087,31 @@ class PatchrightDriver:
             # node by dictionary lookup and acted on over CDP.
             tree = await self._capture_fused(live, no_runtime=action.no_runtime)
             live.nodes.record(tree)
+            live.last_tree = tree
             result.fused_trees.append(tree)
+            # Index-correlated with `fused_trees`: the driver is the only place
+            # that sees both the action's options and the tree, and serialization
+            # happens in the caller.
+            result.snapshot_views.append(await self._snapshot_view(live, action))
+        elif isinstance(action, DiffSnapshotAction):
+            if action.settle:
+                await self._settle(live)
+            previous = live.last_tree
+            live.epoch += 1
+            tree = await self._capture_fused(live, no_runtime=action.no_runtime)
+            live.nodes.record(tree)
+            live.last_tree = tree
+            result.fused_trees.append(tree)
+            result.snapshot_views.append(SnapshotView())
+            if previous is None:
+                result.readouts.append(
+                    "no previous snapshot on this tab to compare against"
+                )
+            else:
+                diff = diff_snapshots(previous, tree)
+                result.readouts.append(
+                    render_change_block(diff) or "nothing changed since the last snapshot"
+                )
         elif isinstance(action, ExtractAction):
             # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
             # full page.content() fetch -- doesn't add a round trip to
@@ -1189,6 +1241,66 @@ class PatchrightDriver:
             result.tabs.append(await self._list_tabs(cctx))
         else:
             assert_never(action)
+
+    async def _snapshot_view(self, live: _Page, action: SnapshotAction) -> SnapshotView:
+        """Turn a `SnapshotAction`'s options into the filters the serializer
+        applies, resolving the two that need a live page.
+
+        Everything else on `SnapshotView` is already a plain value; only
+        `selector` (a CSS query) and `viewport_only` (the live viewport
+        rectangle) have to be asked of the browser, which is why this lives here
+        and `dom.serializer` stays pure.
+        """
+
+        viewport: BoundingBox | None = None
+        if action.viewport_only:
+            cdp = await self._page_session(live)
+            width, height = await cdp_element.viewport_size(cdp)
+            # Page coordinates, not client coordinates: `absolute_position` on a
+            # fused node is document-relative, so the viewport has to be offset
+            # by the current scroll or everything below the fold looks in-view
+            # after the first scroll.
+            offset = await live.dialogs.guard(
+                live.page.evaluate("() => [window.scrollX, window.scrollY]")
+            )
+            viewport = BoundingBox(float(offset[0]), float(offset[1]), width, height)
+
+        scope: frozenset[int] | None = None
+        if action.selector is not None:
+            scope = await self._selector_scope(live, action.selector)
+
+        return SnapshotView(
+            scope=scope,
+            roles=action.roles,
+            viewport=viewport,
+            max_nodes=action.max_nodes,
+            depth=action.depth,
+        )
+
+    async def _selector_scope(self, live: _Page, selector: str) -> frozenset[int]:
+        """Backend node ids of the element matching `selector` and everything
+        under it.
+
+        `DOM.querySelector` needs a document node id, so the document is fetched
+        first. A selector that matches nothing raises rather than silently
+        scoping the observation to the empty set -- a snapshot that came back
+        blank because of a typo should say so, not look like an empty page.
+        """
+
+        cdp = await self._page_session(live)
+        document = await cdp.send("DOM.getDocument", {"depth": 0})
+        root_id = document["root"]["nodeId"]
+        match = await cdp.send(
+            "DOM.querySelector", {"nodeId": root_id, "selector": selector}
+        )
+        node_id = match.get("nodeId")
+        if not node_id:
+            raise SelectorNotFound(selector)
+
+        described = await cdp.send("DOM.describeNode", {"nodeId": node_id, "depth": -1})
+        ids: set[int] = set()
+        _collect_backend_ids(described.get("node") or {}, ids)
+        return frozenset(ids)
 
     async def _after_dialog(
         self, live: _Page, result: ActionResult, answered: DialogInfo, verb: str

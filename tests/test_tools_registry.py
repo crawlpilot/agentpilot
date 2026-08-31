@@ -61,13 +61,16 @@ def test_the_agent_schema_matches_its_golden() -> None:
     assert build_action_schema(DEFAULT_ALLOWED_ACTIONS) == golden
 
 
-# The two verbs the browser-use port deliberately widened, and what it added to
-# each. Listed rather than waved through so that "additive" stays a claim about
-# every *other* verb, and so widening a third one has to be a deliberate edit
-# here rather than a silently accepted diff.
+# The verbs a port deliberately widened, and what it added to each. Listed
+# rather than waved through so that "additive" stays a claim about every *other*
+# verb, and so widening another one has to be a deliberate edit here rather than
+# a silently accepted diff.
 _DELIBERATELY_EXTENDED = {
     "FillActionIn": {"clear"},
     "ScrollActionIn": {"pages"},
+    # The agent-browser port. Both are new *filters*: absent, a snapshot behaves
+    # exactly as before, so an integrator's existing request is unaffected.
+    "SnapshotActionIn": {"selector", "depth"},
 }
 
 

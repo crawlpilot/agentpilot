@@ -1,5 +1,5 @@
 """Assemble the per-step observation the agent model reads from a fused DOM tree
--- the integration point between the change-diff (`agent.dom_diff`) and the
+-- the integration point between the change-diff (`crawlpilot.dom.diff`) and the
 serializer (`dom.serializer`). This is the sole perception path: a fused
 `EnhancedDOMTreeNode` rendered to the model's indexed-element text.
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from agentpilot.agent.dom_diff import DomDiff, diff_snapshots, iter_interactive, render_change_block
+from crawlpilot.dom.diff import DomDiff, diff_snapshots, iter_interactive, render_change_block
 from crawlpilot.dom.serializer import serialize
 from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode
 

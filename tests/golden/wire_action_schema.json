@@ -561,6 +561,18 @@
     "SnapshotActionIn": {
       "additionalProperties": false,
       "properties": {
+        "depth": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Depth"
+        },
         "max_nodes": {
           "anyOf": [
             {
@@ -587,6 +599,18 @@
           ],
           "default": null,
           "title": "Roles"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
         },
         "type": {
           "const": "snapshot",

@@ -16,10 +16,13 @@ Pipeline (each stage is a discrete, testable compression step; checklist L):
    and the diff key on.
 
 `serialize` returns the `selector_map` plus the rendered string (`dom.render`).
+A `SnapshotView` (defined in `spi.dom_tree`, because `ActionResult` carries one
+and `spi` cannot import `dom`) narrows what the result *offers*.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from crawlpilot.dom import render
@@ -29,6 +32,7 @@ from crawlpilot.spi.dom_tree import (
     DOMSelectorMap,
     EnhancedDOMTreeNode,
     NodeType,
+    SnapshotView,
     iter_elements,
 )
 from crawlpilot.spi.geometry import BoundingBox
@@ -144,6 +148,10 @@ class SimplifiedNode:
     is_new: bool = False
     ignored_by_paint_order: bool = False
     excluded_by_parent: bool = False
+    excluded_by_view: bool = False
+    """Addressable, but outside what this snapshot's `SnapshotView` offers.
+    Kept in the tree -- it may still be an occluder, a text-bearing ancestor or
+    a shadow host -- but it earns no ref."""
     is_shadow_host: bool = False
     promoted: PromotedControl | None = None
     """Set when this node stands in for a form control Chrome dropped from the
@@ -348,6 +356,70 @@ def _apply_containment(root: SimplifiedNode) -> None:
     walk(root, None)
 
 
+def _apply_view(root: SimplifiedNode, view: SnapshotView) -> None:
+    """Mark interactive nodes the view does not offer.
+
+    Marking rather than removing: an element outside the viewport is still a
+    legitimate occluder, still an ancestor of text worth rendering, and still
+    addressable by a caller who names its ref. Deleting it would quietly change
+    all three.
+    """
+
+    if not view.filters_offered_set:
+        return
+
+    offered = 0
+    for node in _iter_document_order(root):
+        if not node.is_interactive or node.ignored_by_paint_order or node.excluded_by_parent:
+            continue
+        if not _in_view(node, view):
+            node.excluded_by_view = True
+            continue
+        # `max_nodes` is applied last and in document order, so the cap keeps the
+        # elements nearest the top of the page -- the ones a reader reaches
+        # first -- rather than an arbitrary subset.
+        if view.max_nodes is not None and offered >= view.max_nodes:
+            node.excluded_by_view = True
+            continue
+        offered += 1
+
+
+def _in_view(node: SimplifiedNode, view: SnapshotView) -> bool:
+    original = node.original
+    if view.scope is not None and original.backend_node_id not in view.scope:
+        return False
+    if view.roles is not None and original.ax_role not in view.roles:
+        return False
+    if view.viewport is not None:
+        bounds = _bounds(original)
+        # An element with no geometry at all -- a hidden file input, a checkbox
+        # behind a styled label -- is kept: it is not *outside* the viewport, it
+        # simply has no box to compare, and dropping it would make
+        # `viewport_only` silently remove controls that are perfectly usable.
+        if bounds is not None and not _intersects(bounds, view.viewport):
+            return False
+    return True
+
+
+def _intersects(a: BoundingBox, b: BoundingBox) -> bool:
+    return not (
+        a.x + a.width <= b.x
+        or b.x + b.width <= a.x
+        or a.y + a.height <= b.y
+        or b.y + b.height <= a.y
+    )
+
+
+def _iter_document_order(root: SimplifiedNode) -> Iterator[SimplifiedNode]:
+    """Depth-first, children in order -- unlike `_iter_simplified`, whose stack
+    reverses siblings. `max_nodes` and the render both depend on the order a
+    reader would encounter, so it cannot be the arbitrary one."""
+
+    yield root
+    for child in root.children:
+        yield from _iter_document_order(child)
+
+
 def _assign_indices(root: SimplifiedNode, new_backend_ids: set[int]) -> DOMSelectorMap:
     """Copy the capture's `selector_index` onto each surviving interactive node
     and build the `selector_map`.
@@ -365,7 +437,12 @@ def _assign_indices(root: SimplifiedNode, new_backend_ids: set[int]) -> DOMSelec
 
     selector_map: DOMSelectorMap = {}
     for node in _iter_simplified(root):
-        if node.is_interactive and not node.ignored_by_paint_order and not node.excluded_by_parent:
+        if (
+            node.is_interactive
+            and not node.ignored_by_paint_order
+            and not node.excluded_by_parent
+            and not node.excluded_by_view
+        ):
             original = node.original
             index = (
                 original.selector_index
@@ -384,19 +461,28 @@ def serialize(
     new_backend_ids: set[int] | None = None,
     include_attributes: tuple[str, ...] = render.DEFAULT_INCLUDE_ATTRIBUTES,
     max_length: int | None = None,
+    view: SnapshotView | None = None,
 ) -> SerializedDOM:
     """Run the full pipeline and return the `selector_map` + rendered text.
-    `new_backend_ids` (from the diff) drive the inline `*` new-element markers."""
+    `new_backend_ids` (from the diff) drive the inline `*` new-element markers.
+    `view` narrows what is offered -- see `SnapshotView`."""
 
     simplified = _build_simplified(root)
     if simplified is None:
         return SerializedDOM(selector_map={}, llm_text="(empty page)")
 
+    view = view or SnapshotView()
     _apply_paint_order(simplified, root)
     _apply_containment(simplified)
+    # After both, deliberately: occlusion and containment reason about the whole
+    # page, and a node the view hides is still allowed to hide others.
+    _apply_view(simplified, view)
     selector_map = _assign_indices(simplified, new_backend_ids or set())
     rendered = render.render_tree(
-        simplified, include_attributes=include_attributes, max_length=max_length
+        simplified,
+        include_attributes=include_attributes,
+        max_length=max_length,
+        depth=view.depth,
     )
     return SerializedDOM(
         selector_map=selector_map,

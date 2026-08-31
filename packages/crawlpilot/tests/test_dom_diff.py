@@ -4,7 +4,7 @@ cases the old `role:name`-path approach misclassified."""
 
 from __future__ import annotations
 
-from agentpilot.agent.dom_diff import ChangeKind, diff_snapshots, render_change_block
+from crawlpilot.dom.diff import ChangeKind, diff_snapshots, render_change_block
 from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
 
 
