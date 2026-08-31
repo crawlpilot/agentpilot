@@ -28,7 +28,7 @@ from crawlpilot.spi.actions import (
     SnapshotAction,
 )
 from crawlpilot.spi.egress import EgressPolicy
-from crawlpilot.spi.errors import StaleRefError
+from crawlpilot.spi.errors import SelectorNotFound, StaleRefError
 from crawlpilot.spi.lease import ContextRef
 
 ARTICLE_HTML = """<html><body>
@@ -204,6 +204,81 @@ async def test_fill_dispatches_via_ref_cache(
         [ExecuteJsAction(script="document.getElementById('search-box').value")],
     )
     assert result.js_returns[0] == "hello"
+
+
+async def test_click_dispatches_via_css_selector(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    """The 0.2 convenience path: click without snapshotting first.
+
+    No `SnapshotAction` here at all -- the driver resolves the selector in the
+    page and captures on demand, which is what makes `click(selector=...)` work
+    as the very first action against a page.
+    """
+
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
+
+    await driver.execute(open_ctx, [ClickAction(selector="#probe")])
+
+    result = await driver.execute(open_ctx, [ExtractAction(format="html")])
+    assert "clicked" in result.extracts[0]
+
+
+async def test_fill_dispatches_via_css_selector(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
+
+    await driver.execute(open_ctx, [FillAction(selector="#search-box", text="hello")])
+
+    result = await driver.execute(
+        open_ctx,
+        [ExecuteJsAction(script="document.getElementById('search-box').value")],
+    )
+    assert result.js_returns[0] == "hello"
+
+
+async def test_a_selector_matching_nothing_raises_selector_not_found(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
+
+    with pytest.raises(SelectorNotFound):
+        await driver.execute(open_ctx, [ClickAction(selector="#no-such-element")])
+
+
+async def test_a_ref_shaped_string_in_selector_is_treated_as_css(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    """The disambiguation rule, at the driver.
+
+    `e999` looks exactly like a ref and *is* a valid CSS type selector. Arriving
+    as `selector=` it must be read as CSS -- matching no `<e999>` element here,
+    so `SelectorNotFound` -- and never quietly retried as a ref. The parameter
+    decides; the string is never inspected.
+    """
+
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
+
+    with pytest.raises(SelectorNotFound):
+        await driver.execute(open_ctx, [ClickAction(selector="e999")])
+
+
+async def test_passing_both_a_ref_and_a_selector_raises(
+    driver: PatchrightDriver, open_ctx: ContextRef, httpserver: HTTPServer
+) -> None:
+    """Both is an error rather than a silent preference: they can disagree, and
+    the caller would never learn which one won."""
+
+    httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
+    await driver.execute(open_ctx, [NavigateAction(url=httpserver.url_for("/"))])
+
+    with pytest.raises(ValueError, match="not both"):
+        await driver.execute(open_ctx, [ClickAction(ref="e1", selector="#probe")])
 
 
 async def test_click_with_unknown_ref_raises_stale_ref_error(
