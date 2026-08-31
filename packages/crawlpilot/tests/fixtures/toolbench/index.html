@@ -171,6 +171,20 @@
       <button id="zero-width-name" onclick="log('zw')">Check&#8203;out</button>
     </section>
 
+    <!-- Group B interaction shapes. Each is something a plain click cannot do. -->
+    <section id="interaction">
+      <button id="dbl" ondblclick="log('double')" onclick="log('single')">Double me</button>
+      <input type="checkbox" id="box" onchange="log('box:' + this.checked)" />
+      <input type="text" id="prefilled" value="erase me" />
+      <div id="drop" style="width:120px;height:60px;border:1px solid #999">Drop here</div>
+      <div id="draggable" draggable="true"
+           style="width:60px;height:60px;background:#4a90d9">Drag</div>
+      <button id="touch-only" style="width:160px;height:60px">Touch me</button>
+      <div id="held">idle</div>
+      <a id="dl" href="data:text/plain;charset=utf-8,downloaded-content"
+         download="sample.txt">Download sample</a>
+    </section>
+
     <div class="spacer"></div>
     <p id="deep">a needle buried far below the fold</p>
 
@@ -185,6 +199,19 @@
         '<button id="shadow-button">Shadow button</button>' +
         '<input type="text" id="shadow-field">';
       root.getElementById('shadow-button').addEventListener('click', () => log('shadow-clicked'));
+
+      // Touch-only: binds touchstart and nothing else, so a dispatched mouse
+      // event does nothing here. This is the shape `tap` exists for.
+      document.getElementById('touch-only')
+        .addEventListener('touchstart', () => log('tapped'));
+
+      // Held-key state, so key_down/key_up are observable separately.
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Shift') document.getElementById('held').textContent = 'shift-down';
+      });
+      document.addEventListener('keyup', (e) => {
+        if (e.key === 'Shift') document.getElementById('held').textContent = 'shift-up';
+      });
 
       // Keyboard shortcut, reachable only via send_keys.
       document.addEventListener('keydown', (e) => {

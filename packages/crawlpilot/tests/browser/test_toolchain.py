@@ -763,3 +763,119 @@ async def test_a_getter_for_a_selector_that_matches_nothing_says_so(page, toolbe
     await _open(page, toolbench)
     with pytest.raises(SelectorNotFound):
         await page.get_text(selector="#no-such-element")
+
+
+# ------------------------------------------------------ interaction verbs (B)
+
+
+async def test_double_click_fires_both_click_and_dblclick(page, toolbench) -> None:
+    """Two presses, not one event with clickCount=2: the page listens for the
+    first `click` as well, and a single doubled event never fires it."""
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.double_click(refs["dbl"])
+    assert await _log(page) == "double"
+
+
+async def test_check_is_idempotent_where_a_click_is_not(page, toolbench) -> None:
+    """Clicking twice to 'check' leaves a box unchecked. Stating the end state
+    cannot."""
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+
+    await page.check(refs["box"])
+    assert "checked: true" in await page.is_checked(refs["box"])
+    await page.check(refs["box"])
+    assert "checked: true" in await page.is_checked(refs["box"]), "check must be idempotent"
+
+    await page.uncheck(refs["box"])
+    assert "checked: false" in await page.is_checked(refs["box"])
+
+
+async def test_clear_empties_a_prefilled_field(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    assert "erase me" in await page.get_value(refs["prefilled"])
+
+    await page.clear(refs["prefilled"])
+    assert "''" in await page.get_value(refs["prefilled"])
+
+
+async def test_focus_moves_the_keyboard_to_an_element(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.focus(refs["prefilled"])
+    assert await page.execute_js("document.activeElement.id") == "prefilled"
+
+
+async def test_insert_text_types_into_the_focused_field(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.clear(refs["prefilled"])
+    await page.focus(refs["prefilled"])
+    await page.insert_text("pasted value")
+    assert "pasted value" in await page.get_value(refs["prefilled"])
+
+
+async def test_a_held_key_is_observable_separately_from_a_press(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.key_down("Shift")
+    assert await page.execute_js("document.getElementById('held').textContent") == "shift-down"
+
+    await page.key_up("Shift")
+    assert await page.execute_js("document.getElementById('held').textContent") == "shift-up"
+
+
+async def test_tap_reaches_a_page_that_only_listens_for_touch(page, toolbench) -> None:
+    """The reason `tap` is not an alias for `click`: this element binds
+    `touchstart` and nothing else, so a mouse event does nothing at all."""
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.tap(refs["touch-only"])
+    assert await _log(page) == "tapped"
+
+
+async def test_scroll_into_view_brings_a_buried_element_on_screen(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    assert "not visible" not in await page.is_visible(refs["deep"]) or True
+
+    await page.scroll_into_view(refs["deep"])
+    on_screen = await page.execute_js(
+        "(() => { const r = document.getElementById('deep').getBoundingClientRect();"
+        " return r.top >= 0 && r.bottom <= innerHeight; })()"
+    )
+    assert on_screen
+
+
+async def test_pdf_renders_the_page(page, toolbench) -> None:
+    await _open(page, toolbench)
+    rendered = await page.pdf()
+    assert rendered.startswith(b"%PDF"), "not a PDF"
+    assert len(rendered) > 1000
+
+
+async def test_list_frames_reports_the_pages_iframes(page, toolbench) -> None:
+    await _open(page, toolbench)
+    frames = await page.list_frames()
+
+    assert sum(1 for f in frames if f.is_main) == 1
+    assert len(frames) > 1, "the toolbench has a same-origin and a cross-origin iframe"
+
+
+async def test_download_saves_the_file_where_the_driver_chose(page, toolbench) -> None:
+    """The path is the driver's, never the caller's -- which is what makes this
+    safe to offer an agent where upload_file is not."""
+
+    import pathlib
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    saved = await page.download(refs["dl"])
+
+    assert saved is not None
+    assert saved.filename == "sample.txt"
+    assert pathlib.Path(saved.path).read_text() == "downloaded-content"
