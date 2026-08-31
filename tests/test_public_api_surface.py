@@ -51,15 +51,17 @@ def _browser_layer_files(*packages: str) -> list[pathlib.Path]:
 
 
 EXPECTED_PUBLIC_API = {
-    "BlockHooks", "BlockMount", "Browser", "BrowserConfig", "BrowserSession",
-    "BrowseHooks", "BrowseMount", "ChallengeDetected", "ContentHooks",
-    "ContentMount", "ContextCrashed", "Document", "DriverError", "EgressConfig",
-    "Extension", "ExtensionManifest", "ExtensionRegistry", "FingerprintConfig",
-    "IdentityRef", "InMemoryStateStore", "NavigationTimeout", "NullPrototypes",
-    "ProfileConfig", "ProfileKind", "PrototypeProvider", "ProxyHealthConfig",
-    "ProxyProvider", "Resolution", "ScrapeOptions", "StateStore",
-    "StaticProxies", "Tier", "TierPolicy", "ToolMount", "ToolRegistry",
-    "ToolSpec", "__version__", "browser_tools",
+    "AsyncCrawlpilot", "Browser", "BrowserConfig", "BrowserSession",
+    "ChallengeDetected", "ContextCrashed", "Crawlpilot", "Document",
+    "DriverError", "EgressConfig", "Extension", "ExtensionManifest",
+    "ExtensionRegistry", "FingerprintConfig", "IdentityRef",
+    "InMemoryStateStore", "NavigationTimeout", "NullPrototypes",
+    "ProfileConfig", "ProfileKind", "PrototypeProvider", "ProxyEndpoint",
+    "ProxyHealthConfig", "ProxyPinner", "ProxyProvider", "Resolution",
+    "ScrapeOptions", "SelectorNotFound", "StaleRefError", "StateStore",
+    "StaticProxies", "SyncSession", "Tier", "TierPolicy", "ToolRegistry",
+    "ToolSpec", "WaitTimeout", "__version__", "browser_tools",
+    "proxy_endpoint",
 }
 """What `from crawlpilot import *` gives a consumer.
 
@@ -67,7 +69,17 @@ Adding to this is cheap and expected as the API grows. **Removing or renaming
 one is a breaking change for every installed consumer** and must be a
 deliberate edit here in the same commit, not silent drift -- the same
 maintenance contract the old inventory carried, over the set that is now
-actually authoritative."""
+actually authoritative.
+
+0.2 recalibrated it against what a caller actually imports. Added: the
+`Crawlpilot`/`AsyncCrawlpilot` client and `SyncSession`; `ProxyPinner`,
+`ProxyEndpoint` and `proxy_endpoint`, which you need to route through a proxy
+and which were somehow not exported while `StateStore` was; and
+`WaitTimeout`/`StaleRefError`/`SelectorNotFound`, which you need to catch what
+the library raises. Removed: `BlockHooks`, `BlockMount`, `BrowseHooks`,
+`BrowseMount`, `ContentHooks`, `ContentMount`, `ToolMount` -- the mount
+protocols, which you only touch to *write* an extension and which remain
+importable from `crawlpilot.extensions`."""
 
 
 def test_public_api_is_a_curated_export() -> None:

@@ -177,8 +177,8 @@ async def test_each_method_composes_the_right_action(browser: Browser) -> None:
     driver: RecordingDriver = browser.driver  # type: ignore[assignment]
     async with browser.session() as page:
         await page.navigate("https://example.com")
-        await page.click("e1")
-        await page.fill("e2", "hello")
+        await page.click("#submit")
+        await page.fill("#q", "hello")
         await page.press("Enter")
         await page.scroll("down")
 
@@ -190,8 +190,46 @@ async def test_each_method_composes_the_right_action(browser: Browser) -> None:
         "PressAction",
         "ScrollAction",
     ]
-    assert driver.batches[2][0].ref == "e2"
+    assert driver.batches[2][0].selector == "#q"
+    assert driver.batches[2][0].ref is None
     assert driver.batches[2][0].text == "hello"
+
+
+async def test_positional_is_a_selector_and_ref_is_a_keyword(browser: Browser) -> None:
+    """The 0.2 disambiguation rule, pinned.
+
+    A positional target is *always* a CSS selector and `ref=` is *always* a
+    snapshot ref -- the parameter decides, never the string. It has to work this
+    way: a ref is `e<index>`, and `e42` is itself a valid CSS type selector, so
+    nothing could tell them apart by looking, and a wrong guess would act on the
+    wrong element silently.
+
+    This is the breaking half of the change: `page.click("e42")` used to mean
+    the ref and now means the selector. It fails loudly (`SelectorNotFound` from
+    a real driver) rather than mis-clicking.
+    """
+
+    driver: RecordingDriver = browser.driver  # type: ignore[assignment]
+    async with browser.session() as page:
+        await page.click("#add")
+        await page.click(ref="e42")
+        # Even a ref-shaped string is a selector when it arrives positionally.
+        await page.click("e42")
+
+    by_selector, by_ref, ref_shaped = (b[0] for b in driver.batches)
+    assert (by_selector.selector, by_selector.ref) == ("#add", None)
+    assert (by_ref.selector, by_ref.ref) == (None, "e42")
+    assert (ref_shaped.selector, ref_shaped.ref) == ("e42", None)
+
+
+async def test_passing_both_a_selector_and_a_ref_is_rejected(browser: Browser) -> None:
+    """Both is an error, not a silent preference: the two can disagree, and the
+    caller would never learn which one won."""
+
+    from crawlpilot.driver import queries
+
+    with pytest.raises(ValueError, match="not both"):
+        queries.require_target("e42", "#add")
 
 
 async def test_markdown_returns_the_content_not_an_index(browser: Browser) -> None:

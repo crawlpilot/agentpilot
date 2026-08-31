@@ -13,11 +13,25 @@ def test_existing_display_env_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ProcessLauncher().ensure_display() is True
 
 
-def test_no_display_and_not_linux_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_native_window_server_is_a_display(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """macOS and Windows have a display even with no `DISPLAY` set.
+
+    This asserted `False` until 0.2, on the reasoning that we should not "pop a
+    real window on a dev machine". The effect was that `DISPLAY` -- an X11
+    variable -- was treated as the definition of "has a display" on the two
+    platforms that never set it, so `headful=True` silently ran headless on
+    every Mac. Headless is a strong bot signal, which is how a stealth scrape
+    ended up served a CAPTCHA wall on every attempt while asking for a window.
+
+    Opting out is the caller's job (`headful=False`), not this method's.
+    """
+
     monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.setattr("crawlpilot.driver.process_launcher.sys.platform", "darwin")
-    # macOS/dev: headful not available -> caller degrades to headless, no window.
-    assert ProcessLauncher().ensure_display() is False
+    monkeypatch.setattr("crawlpilot.driver.process_launcher.sys.platform", platform)
+    assert ProcessLauncher().ensure_display() is True
 
 
 def test_linux_starts_xvfb_and_exports_display(monkeypatch: pytest.MonkeyPatch) -> None:
