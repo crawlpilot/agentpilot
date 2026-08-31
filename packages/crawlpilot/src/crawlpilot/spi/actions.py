@@ -279,6 +279,205 @@ class DiffSnapshotAction:
     terminates_sequence: bool = False
 
 
+@dataclass
+class DoubleClickAction:
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class FocusAction:
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class CheckAction:
+    """Ensure a checkbox or radio is checked.
+
+    Idempotent, unlike a click: a model that clicks a box to "check" it
+    un-checks one that was already checked, and cannot tell from the click alone
+    which happened. Stating the desired end state removes the failure mode.
+    """
+
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class UncheckAction:
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class ScrollIntoViewAction:
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class ClearAction:
+    """Empty a field. `fill(text="")` does the same; this says so plainly."""
+
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class DragAction:
+    """Drag one element onto another.
+
+    Both endpoints are refs rather than coordinates: a model has no reliable way
+    to name a pixel, and the coordinates it would invent are the ones that make a
+    drag land on the wrong target and look like it worked.
+    """
+
+    ref: str
+    to_ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class KeyDownAction:
+    """Press and hold a key. Pairs with `key_up`."""
+
+    key: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class KeyUpAction:
+    key: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class InsertTextAction:
+    """Insert text in one event, without per-character key events.
+
+    Distinct from `fill` in mechanism and in when to use it: `fill` types, which
+    is what drives autocomplete and validation widgets and what keystroke
+    telemetry expects. This is the paste-shaped counterpart -- right for a long
+    value a person would also paste, wrong as a default.
+    """
+
+    text: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class TapAction:
+    """A touch tap. Not a click: a page that binds only `touchstart` -- which
+    mobile-first sites routinely do -- sees nothing from a mouse event."""
+
+    ref: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class SwipeAction:
+    """A touch drag across the screen, for carousels and pull-to-refresh."""
+
+    direction: Literal["up", "down", "left", "right"]
+    distance: int = 300
+    ref: str | None = None
+    """Where to swipe. Defaults to the middle of the viewport."""
+    terminates_sequence: bool = False
+
+
+@dataclass
+class PdfAction:
+    """Render the page to PDF.
+
+    Returns bytes on `ActionResult.pdfs`, deliberately -- not a path. A driver
+    that writes files decides where they go on a machine the caller may not
+    share, and the caller almost always wants to store the bytes somewhere of its
+    own choosing anyway. `Page.printToPDF` only works headless, which is Chrome's
+    limitation, not this one.
+    """
+
+    landscape: bool = False
+    print_background: bool = True
+    """On by default, unlike Chrome: a scrape of a page whose content is drawn
+    with background colours is unreadable without it."""
+    scale: float = 1.0
+    terminates_sequence: bool = False
+
+
+@dataclass
+class ListFramesAction:
+    """List this tab's frames.
+
+    The counterpart to `list_tabs`, and the *whole* of the frame surface here.
+    agent-browser also has `frame_switch`/`frame_main` because its refs are
+    frame-local, so acting inside an iframe means first pointing the session at
+    it. crawlpilot's refs are frame-transparent -- a ref resolves to the session
+    that captured it (`driver.cdp_element.session_for_node`) -- so a "current
+    frame" pointer would be state that changes nothing about what a caller can
+    reach. What was missing is only the ability to *see* the frames.
+    """
+
+    terminates_sequence: bool = False
+
+
+@dataclass
+class DownloadAction:
+    """Click something and wait for the file it produces.
+
+    `ref` rather than a URL because the interesting downloads are the ones a
+    bare fetch cannot get: the ones behind a session, a signed link minted on
+    click, or a form POST.
+
+    **The driver chooses the path**, into a session-scoped directory. That is
+    what makes this safe to offer an agent where `upload_file` is not: the model
+    never names a filesystem location, so it can neither read nor overwrite
+    anything of the operator's.
+    """
+
+    ref: str
+    timeout_ms: int = 30_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class WaitForDownloadAction:
+    """Wait for a download already in flight -- one started by a previous action,
+    or by the page itself."""
+
+    timeout_ms: int = 30_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class ClipboardReadAction:
+    """Read the browser's clipboard.
+
+    Wire-only and `safety="sensitive"`, for `upload_file`'s reason: the clipboard
+    is host state that may hold whatever the operator last copied -- a password,
+    a token, an address -- so a model that can read it can exfiltrate it to any
+    page it can also type into.
+    """
+
+    terminates_sequence: bool = False
+
+
+@dataclass
+class ClipboardWriteAction:
+    text: str
+    terminates_sequence: bool = False
+
+
+@dataclass
+class DownloadInfo:
+    """One completed download."""
+
+    path: str
+    filename: str
+    size_bytes: int
+    url: str = ""
+
+
 # --- Waiting for the page to reach a state (see `driver.waits`) ---
 #
 # Each takes a timeout and fails loudly when it expires. A wait that silently
@@ -587,6 +786,24 @@ Action = (
     | IsVisibleAction
     | IsEnabledAction
     | IsCheckedAction
+    | DoubleClickAction
+    | FocusAction
+    | CheckAction
+    | UncheckAction
+    | ScrollIntoViewAction
+    | ClearAction
+    | DragAction
+    | KeyDownAction
+    | KeyUpAction
+    | InsertTextAction
+    | TapAction
+    | SwipeAction
+    | PdfAction
+    | ListFramesAction
+    | DownloadAction
+    | WaitForDownloadAction
+    | ClipboardReadAction
+    | ClipboardWriteAction
     | DialogStatusAction
     | DialogAcceptAction
     | DialogDismissAction
@@ -631,6 +848,16 @@ class DialogInfo:
 
 
 @dataclass
+class FrameInfo:
+    """One `ListFramesAction` entry."""
+
+    frame_id: str
+    url: str
+    name: str = ""
+    is_main: bool = False
+
+
+@dataclass
 class TabInfo:
     """One `ListTabsAction` entry -- mirrors a prior internal system's
     tab-listing shape (`{index, guid, title, url}`), `page_id` standing in
@@ -661,6 +888,13 @@ class ActionResult:
     the action to `dom.serializer`. Pass the matching entry as `serialize(...,
     view=...)`."""
     screenshots: list[bytes] = field(default_factory=list)
+    pdfs: list[bytes] = field(default_factory=list)
+    """One rendered PDF per `PdfAction`, index-correlated. Bytes rather than a
+    path -- see `PdfAction`."""
+    downloads: list[DownloadInfo] = field(default_factory=list)
+    """One entry per completed download, in the order they finished."""
+    frames: list[list[FrameInfo]] = field(default_factory=list)
+    """One entry per `ListFramesAction`, matching `tabs`."""
     extracts: list[str] = field(default_factory=list)
     js_returns: list[object] = field(default_factory=list)
     tabs: list[list[TabInfo]] = field(default_factory=list)

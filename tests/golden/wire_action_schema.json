@@ -1,5 +1,45 @@
 {
   "$defs": {
+    "CheckActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "check",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "CheckActionIn",
+      "type": "object"
+    },
+    "ClearActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "clear",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "ClearActionIn",
+      "type": "object"
+    },
     "ClickActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -23,6 +63,41 @@
         "ref"
       ],
       "title": "ClickActionIn",
+      "type": "object"
+    },
+    "ClipboardReadActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "clipboard_read",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ClipboardReadActionIn",
+      "type": "object"
+    },
+    "ClipboardWriteActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "clipboard_write",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "ClipboardWriteActionIn",
       "type": "object"
     },
     "CloseTabActionIn": {
@@ -120,6 +195,76 @@
         "type"
       ],
       "title": "DiffSnapshotActionIn",
+      "type": "object"
+    },
+    "DoubleClickActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "double_click",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "DoubleClickActionIn",
+      "type": "object"
+    },
+    "DownloadActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 30000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "download",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "DownloadActionIn",
+      "type": "object"
+    },
+    "DragActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "to_ref": {
+          "title": "To Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "drag",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref",
+        "to_ref"
+      ],
+      "title": "DragActionIn",
       "type": "object"
     },
     "DropdownOptionsActionIn": {
@@ -292,6 +437,26 @@
         "text"
       ],
       "title": "FindTextActionIn",
+      "type": "object"
+    },
+    "FocusActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "focus",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "FocusActionIn",
       "type": "object"
     },
     "ForwardActionIn": {
@@ -640,6 +805,26 @@
       "title": "HoverActionIn",
       "type": "object"
     },
+    "InsertTextActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "type": {
+          "const": "insert_text",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "InsertTextActionIn",
+      "type": "object"
+    },
     "IsCheckedActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -757,6 +942,61 @@
       "title": "IsVisibleActionIn",
       "type": "object"
     },
+    "KeyDownActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "type": {
+          "const": "key_down",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "key"
+      ],
+      "title": "KeyDownActionIn",
+      "type": "object"
+    },
+    "KeyUpActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "type": {
+          "const": "key_up",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "key"
+      ],
+      "title": "KeyUpActionIn",
+      "type": "object"
+    },
+    "ListFramesActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "list_frames",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ListFramesActionIn",
+      "type": "object"
+    },
     "ListTabsActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -822,6 +1062,36 @@
         "type"
       ],
       "title": "NewTabActionIn",
+      "type": "object"
+    },
+    "PdfActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "landscape": {
+          "default": false,
+          "title": "Landscape",
+          "type": "boolean"
+        },
+        "print_background": {
+          "default": true,
+          "title": "Print Background",
+          "type": "boolean"
+        },
+        "scale": {
+          "default": 1.0,
+          "title": "Scale",
+          "type": "number"
+        },
+        "type": {
+          "const": "pdf",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "PdfActionIn",
       "type": "object"
     },
     "PressActionIn": {
@@ -920,6 +1190,26 @@
         "direction"
       ],
       "title": "ScrollActionIn",
+      "type": "object"
+    },
+    "ScrollIntoViewActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "scroll_into_view",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "ScrollIntoViewActionIn",
       "type": "object"
     },
     "SearchPageActionIn": {
@@ -1092,6 +1382,49 @@
       "title": "SnapshotActionIn",
       "type": "object"
     },
+    "SwipeActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "distance": {
+          "default": 300,
+          "title": "Distance",
+          "type": "integer"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "type": {
+          "const": "swipe",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "direction"
+      ],
+      "title": "SwipeActionIn",
+      "type": "object"
+    },
     "SwitchTabActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -1110,6 +1443,46 @@
         "page_id"
       ],
       "title": "SwitchTabActionIn",
+      "type": "object"
+    },
+    "TapActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "tap",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "TapActionIn",
+      "type": "object"
+    },
+    "UncheckActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "title": "Ref",
+          "type": "string"
+        },
+        "type": {
+          "const": "uncheck",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "ref"
+      ],
+      "title": "UncheckActionIn",
       "type": "object"
     },
     "UploadFileActionIn": {
@@ -1174,6 +1547,26 @@
         "type"
       ],
       "title": "WaitActionIn",
+      "type": "object"
+    },
+    "WaitForDownloadActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 30000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_download",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "WaitForDownloadActionIn",
       "type": "object"
     },
     "WaitForFunctionActionIn": {
@@ -1325,18 +1718,26 @@
   },
   "discriminator": {
     "mapping": {
+      "check": "#/$defs/CheckActionIn",
+      "clear": "#/$defs/ClearActionIn",
       "click": "#/$defs/ClickActionIn",
+      "clipboard_read": "#/$defs/ClipboardReadActionIn",
+      "clipboard_write": "#/$defs/ClipboardWriteActionIn",
       "close_tab": "#/$defs/CloseTabActionIn",
       "dialog_accept": "#/$defs/DialogAcceptActionIn",
       "dialog_dismiss": "#/$defs/DialogDismissActionIn",
       "dialog_status": "#/$defs/DialogStatusActionIn",
       "diff_snapshot": "#/$defs/DiffSnapshotActionIn",
+      "double_click": "#/$defs/DoubleClickActionIn",
+      "download": "#/$defs/DownloadActionIn",
+      "drag": "#/$defs/DragActionIn",
       "dropdown_options": "#/$defs/DropdownOptionsActionIn",
       "execute_js": "#/$defs/ExecuteJsActionIn",
       "extract": "#/$defs/ExtractActionIn",
       "fill": "#/$defs/FillActionIn",
       "find_elements": "#/$defs/FindElementsActionIn",
       "find_text": "#/$defs/FindTextActionIn",
+      "focus": "#/$defs/FocusActionIn",
       "forward": "#/$defs/ForwardActionIn",
       "get_attribute": "#/$defs/GetAttributeActionIn",
       "get_box": "#/$defs/GetBoxActionIn",
@@ -1349,23 +1750,33 @@
       "get_value": "#/$defs/GetValueActionIn",
       "go_back": "#/$defs/GoBackActionIn",
       "hover": "#/$defs/HoverActionIn",
+      "insert_text": "#/$defs/InsertTextActionIn",
       "is_checked": "#/$defs/IsCheckedActionIn",
       "is_enabled": "#/$defs/IsEnabledActionIn",
       "is_visible": "#/$defs/IsVisibleActionIn",
+      "key_down": "#/$defs/KeyDownActionIn",
+      "key_up": "#/$defs/KeyUpActionIn",
+      "list_frames": "#/$defs/ListFramesActionIn",
       "list_tabs": "#/$defs/ListTabsActionIn",
       "navigate": "#/$defs/NavigateActionIn",
       "new_tab": "#/$defs/NewTabActionIn",
+      "pdf": "#/$defs/PdfActionIn",
       "press": "#/$defs/PressActionIn",
       "reload": "#/$defs/ReloadActionIn",
       "screenshot": "#/$defs/ScreenshotActionIn",
       "scroll": "#/$defs/ScrollActionIn",
+      "scroll_into_view": "#/$defs/ScrollIntoViewActionIn",
       "search_page": "#/$defs/SearchPageActionIn",
       "select_option": "#/$defs/SelectOptionActionIn",
       "send_keys": "#/$defs/SendKeysActionIn",
       "snapshot": "#/$defs/SnapshotActionIn",
+      "swipe": "#/$defs/SwipeActionIn",
       "switch_tab": "#/$defs/SwitchTabActionIn",
+      "tap": "#/$defs/TapActionIn",
+      "uncheck": "#/$defs/UncheckActionIn",
       "upload_file": "#/$defs/UploadFileActionIn",
       "wait": "#/$defs/WaitActionIn",
+      "wait_for_download": "#/$defs/WaitForDownloadActionIn",
       "wait_for_function": "#/$defs/WaitForFunctionActionIn",
       "wait_for_load": "#/$defs/WaitForLoadActionIn",
       "wait_for_selector": "#/$defs/WaitForSelectorActionIn",
@@ -1442,6 +1853,42 @@
       "$ref": "#/$defs/UploadFileActionIn"
     },
     {
+      "$ref": "#/$defs/DoubleClickActionIn"
+    },
+    {
+      "$ref": "#/$defs/FocusActionIn"
+    },
+    {
+      "$ref": "#/$defs/CheckActionIn"
+    },
+    {
+      "$ref": "#/$defs/UncheckActionIn"
+    },
+    {
+      "$ref": "#/$defs/ScrollIntoViewActionIn"
+    },
+    {
+      "$ref": "#/$defs/ClearActionIn"
+    },
+    {
+      "$ref": "#/$defs/DragActionIn"
+    },
+    {
+      "$ref": "#/$defs/KeyDownActionIn"
+    },
+    {
+      "$ref": "#/$defs/KeyUpActionIn"
+    },
+    {
+      "$ref": "#/$defs/InsertTextActionIn"
+    },
+    {
+      "$ref": "#/$defs/TapActionIn"
+    },
+    {
+      "$ref": "#/$defs/SwipeActionIn"
+    },
+    {
       "$ref": "#/$defs/WaitForSelectorActionIn"
     },
     {
@@ -1491,6 +1938,24 @@
     },
     {
       "$ref": "#/$defs/IsCheckedActionIn"
+    },
+    {
+      "$ref": "#/$defs/PdfActionIn"
+    },
+    {
+      "$ref": "#/$defs/ListFramesActionIn"
+    },
+    {
+      "$ref": "#/$defs/DownloadActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForDownloadActionIn"
+    },
+    {
+      "$ref": "#/$defs/ClipboardReadActionIn"
+    },
+    {
+      "$ref": "#/$defs/ClipboardWriteActionIn"
     },
     {
       "$ref": "#/$defs/DialogStatusActionIn"

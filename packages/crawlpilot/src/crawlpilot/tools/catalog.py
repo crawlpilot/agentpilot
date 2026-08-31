@@ -257,6 +257,117 @@ CATALOG: tuple[ToolSpec, ...] = (
         agent_fields=None,
         safety="sensitive",
     ),
+    # Interaction verbs beyond click/fill. Each is a shape a click cannot
+    # express: an idempotent end state, a held key, a touch event, a drag.
+    ToolSpec(
+        name="double_click",
+        description="Double-click the element identified by `ref`.",
+        action_cls=sa.DoubleClickAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="focus",
+        description="Move keyboard focus to the element identified by `ref`.",
+        action_cls=sa.FocusAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="check",
+        description=(
+            "Ensure a checkbox or radio is checked. Prefer this over click: it is "
+            "idempotent, so it cannot un-check a box that was already checked."
+        ),
+        action_cls=sa.CheckAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="uncheck",
+        description="Ensure a checkbox is unchecked.",
+        action_cls=sa.UncheckAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="scroll_into_view",
+        description="Scroll until the element identified by `ref` is on screen.",
+        action_cls=sa.ScrollIntoViewAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="clear",
+        description="Empty the text field identified by `ref`.",
+        action_cls=sa.ClearAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="drag",
+        description="Drag the element identified by `ref` onto the one at `to_ref`.",
+        action_cls=sa.DragAction,
+        wire_fields=("ref", "to_ref"),
+        agent_fields=("ref", "to_ref"),
+        field_descriptions={
+            "ref": REF_DESCRIPTION,
+            "to_ref": "The ref of the element to drop onto, in the same format.",
+        },
+    ),
+    ToolSpec(
+        name="key_down",
+        description="Press and hold a key, e.g. 'Shift'. Release it with key_up.",
+        action_cls=sa.KeyDownAction,
+        wire_fields=("key",),
+        agent_fields=("key",),
+    ),
+    ToolSpec(
+        name="key_up",
+        description="Release a key held with key_down.",
+        action_cls=sa.KeyUpAction,
+        wire_fields=("key",),
+        agent_fields=("key",),
+    ),
+    ToolSpec(
+        name="insert_text",
+        description=(
+            "Insert text at the cursor in one go, as a paste would. Prefer fill for "
+            "ordinary typing -- it fires the per-key events autocomplete and "
+            "validation widgets rely on."
+        ),
+        action_cls=sa.InsertTextAction,
+        wire_fields=("text",),
+        agent_fields=("text",),
+    ),
+    ToolSpec(
+        name="tap",
+        description=(
+            "Tap the element identified by `ref` with a touch event. Use on pages "
+            "that respond to touch but not to clicks."
+        ),
+        action_cls=sa.TapAction,
+        wire_fields=("ref",),
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="swipe",
+        description=(
+            "Swipe with a touch gesture, for carousels and pull-to-refresh. The "
+            "direction is the finger's, as on a phone."
+        ),
+        action_cls=sa.SwipeAction,
+        wire_fields=("direction", "distance", "ref"),
+        agent_fields=("direction", "distance", "ref"),
+        field_descriptions=_REF,
+    ),
     # Waiting for a state (see `driver.waits`). A wait that expires raises, so a
     # model can trust that the action after it ran against the state it asked
     # for -- the whole value of the verb.
@@ -401,6 +512,62 @@ CATALOG: tuple[ToolSpec, ...] = (
         wire_fields=("ref", "selector"),
         agent_fields=("ref", "selector"),
         field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="pdf",
+        description="Render the current page to a PDF.",
+        action_cls=sa.PdfAction,
+        wire_fields=("landscape", "print_background", "scale"),
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="list_frames",
+        description="List the frames (iframes) on this page.",
+        action_cls=sa.ListFramesAction,
+        # Agent-exposed, unlike `list_tabs`: the observation carries the tab
+        # list but not the frame list, so this is information a model has no
+        # other way to get. Refs already reach into frames, so there is no
+        # frame_switch to go with it.
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="download",
+        description=(
+            "Click something that produces a file, and wait for the file. Returns "
+            "where it was saved."
+        ),
+        action_cls=sa.DownloadAction,
+        wire_fields=("ref", "timeout_ms"),
+        # Agent-exposed where `upload_file` is not, and the difference is who
+        # names the path: here the driver does, into a session-scoped directory,
+        # so a model can neither read nor overwrite the operator's files.
+        agent_fields=("ref",),
+        field_descriptions=_REF,
+    ),
+    ToolSpec(
+        name="wait_for_download",
+        description="Wait for a download the page has already started.",
+        action_cls=sa.WaitForDownloadAction,
+        wire_fields=("timeout_ms",),
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="clipboard_read",
+        description="Read the browser clipboard.",
+        action_cls=sa.ClipboardReadAction,
+        # Host state that may hold whatever the operator last copied. A model
+        # able to read it is a model able to paste it into any page it can type
+        # into -- `upload_file`'s argument exactly.
+        agent_fields=None,
+        safety="sensitive",
+    ),
+    ToolSpec(
+        name="clipboard_write",
+        description="Write text to the browser clipboard.",
+        action_cls=sa.ClipboardWriteAction,
+        wire_fields=("text",),
+        agent_fields=None,
+        safety="sensitive",
     ),
     # JavaScript dialogs. Agent-exposed, and they have to be: a `confirm()` is
     # the page asking a question only the caller can answer, and the alternative

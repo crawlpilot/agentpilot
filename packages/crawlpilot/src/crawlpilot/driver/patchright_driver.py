@@ -15,11 +15,13 @@ container shape.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
 import random
 import socket
+import tempfile
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -53,6 +55,7 @@ from crawlpilot.driver import (
     browser_discovery,
     cdp_element,
     dialogs,
+    downloads,
     humanize,
     mouse,
     queries,
@@ -75,7 +78,11 @@ from crawlpilot.extraction.extractor import extract
 from crawlpilot.spi.actions import (
     Action,
     ActionResult,
+    CheckAction,
+    ClearAction,
     ClickAction,
+    ClipboardReadAction,
+    ClipboardWriteAction,
     CloseTabAction,
     DialogAcceptAction,
     DialogDismissAction,
@@ -83,13 +90,18 @@ from crawlpilot.spi.actions import (
     DialogPolicy,
     DialogStatusAction,
     DiffSnapshotAction,
+    DoubleClickAction,
+    DownloadAction,
+    DragAction,
     DropdownOptionsAction,
     ExecuteJsAction,
     ExtractAction,
     FillAction,
     FindElementsAction,
     FindTextAction,
+    FocusAction,
     ForwardAction,
+    FrameInfo,
     GetAttributeAction,
     GetBoxAction,
     GetCountAction,
@@ -101,24 +113,34 @@ from crawlpilot.spi.actions import (
     GetValueAction,
     GoBackAction,
     HoverAction,
+    InsertTextAction,
     IsCheckedAction,
     IsEnabledAction,
     IsVisibleAction,
+    KeyDownAction,
+    KeyUpAction,
+    ListFramesAction,
     ListTabsAction,
     NavigateAction,
     NewTabAction,
+    PdfAction,
     PressAction,
     ReloadAction,
     ScreenshotAction,
     ScrollAction,
+    ScrollIntoViewAction,
     SearchPageAction,
     SelectOptionAction,
     SendKeysAction,
     SnapshotAction,
+    SwipeAction,
     SwitchTabAction,
     TabInfo,
+    TapAction,
+    UncheckAction,
     UploadFileAction,
     WaitAction,
+    WaitForDownloadAction,
     WaitForFunctionAction,
     WaitForLoadAction,
     WaitForSelectorAction,
@@ -1220,6 +1242,58 @@ class PatchrightDriver:
                     live_hydration=live_hydration,
                 )
             )
+        elif isinstance(action, PdfAction):
+            cdp = await self._page_session(live)
+            rendered = await cdp.send(
+                "Page.printToPDF",
+                {
+                    "landscape": action.landscape,
+                    "printBackground": action.print_background,
+                    "scale": action.scale,
+                },
+            )
+            result.pdfs.append(base64.b64decode(rendered["data"]))
+        elif isinstance(action, ListFramesAction):
+            result.frames.append(await self._list_frames(live))
+        elif isinstance(action, DownloadAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            # Arm the expectation *before* clicking: a small download can finish
+            # before the click call even returns, and a listener attached
+            # afterwards would wait for an event that has already fired.
+            async with live.page.expect_download(timeout=action.timeout_ms) as started:
+                await self._human_click(cdp, node, action.ref, cctx.delay_policy)
+            captured = await downloads.capture(
+                await started.value, self._download_dir(cctx), timeout_ms=action.timeout_ms
+            )
+            result.downloads.append(captured)
+            result.verifications.append(
+                f"downloaded {captured.filename} ({captured.size_bytes} bytes) to {captured.path}"
+            )
+        elif isinstance(action, WaitForDownloadAction):
+            try:
+                async with live.page.expect_download(timeout=action.timeout_ms) as started:
+                    pass
+                download = await started.value
+            except PlaywrightTimeoutError as exc:
+                raise WaitTimeout("a download to start", action.timeout_ms) from exc
+            captured = await downloads.capture(
+                download, self._download_dir(cctx), timeout_ms=action.timeout_ms
+            )
+            result.downloads.append(captured)
+            result.verifications.append(f"downloaded {captured.filename} to {captured.path}")
+        elif isinstance(action, ClipboardReadAction):
+            text = await live.dialogs.guard(
+                live.page.evaluate("() => navigator.clipboard.readText()")
+            )
+            result.readouts.append(f"clipboard: {text!r}")
+        elif isinstance(action, ClipboardWriteAction):
+            await live.dialogs.guard(
+                live.page.evaluate(
+                    "(opts) => navigator.clipboard.writeText(opts.text)",
+                    {"text": action.text},
+                )
+            )
+            result.verifications.append(f"wrote {len(action.text)} chars to the clipboard")
         elif isinstance(action, ScreenshotAction):
             result.screenshots.append(
                 await live.dialogs.guard(live.page.screenshot(full_page=action.full_page))
@@ -1260,6 +1334,77 @@ class PatchrightDriver:
                 result.verifications.append(
                     f"filled {action.ref}: field now contains {value[:80]!r}"
                 )
+        elif isinstance(action, DoubleClickAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            box = await cdp_element.element_box(cdp, node, action.ref)
+            target = await self._approach(cdp, box)
+            # Two presses with `clickCount` 1 then 2, not one with 2: the page
+            # listens for the first `click` as well as the `dblclick`, and a
+            # single event with a count of two never fires the former.
+            await cdp_element.click_at(cdp, *target, click_count=1)
+            await cdp_element.click_at(cdp, *target, click_count=2)
+            result.verifications.append(f"double-clicked {action.ref}")
+        elif isinstance(action, FocusAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            if not await cdp_element.focus(cdp, node):
+                box = await cdp_element.element_box(cdp, node, action.ref)
+                await cdp_element.click_at(cdp, *await self._approach(cdp, box))
+            result.verifications.append(f"focused {action.ref}")
+        elif isinstance(action, (CheckAction, UncheckAction)):
+            want = isinstance(action, CheckAction)
+            node, cdp = await self._resolve_ref(live, action.ref)
+            # Click first -- it is what a person does, and it exercises the
+            # page's own handlers. The JS path is the fallback for a control a
+            # coordinate cannot reach (the display:none input behind a label).
+            try:
+                box = await cdp_element.element_box(cdp, node, action.ref)
+                await cdp_element.click_at(cdp, *await self._approach(cdp, box))
+            except Exception:  # noqa: BLE001 -- no geometry; fall through to JS
+                pass
+            settled = await cdp_element.set_checked(cdp, node, want)
+            result.verifications.append(
+                f"{'checked' if want else 'unchecked'} {action.ref}"
+                if settled
+                else f"could not {'check' if want else 'uncheck'} {action.ref}"
+            )
+        elif isinstance(action, ScrollIntoViewAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            await cdp_element.scroll_into_view(cdp, node)
+            result.verifications.append(f"scrolled {action.ref} into view")
+        elif isinstance(action, ClearAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            await self._clear_field(cdp, node, action.ref)
+            value = await cdp_element.read_value(cdp, node)
+            result.verifications.append(f"cleared {action.ref}: now {value!r}")
+        elif isinstance(action, DragAction):
+            source, cdp = await self._resolve_ref(live, action.ref)
+            destination, _ = await self._resolve_ref(live, action.to_ref)
+            start = await cdp_element.element_box(cdp, source, action.ref)
+            end = await cdp_element.element_box(cdp, destination, action.to_ref)
+            await self._human_drag(cdp, start, end)
+            result.verifications.append(f"dragged {action.ref} onto {action.to_ref}")
+        elif isinstance(action, KeyDownAction):
+            await cdp_element.key_down(await self._page_session(live), action.key)
+            result.verifications.append(f"holding {action.key}")
+        elif isinstance(action, KeyUpAction):
+            await cdp_element.key_up(await self._page_session(live), action.key)
+            result.verifications.append(f"released {action.key}")
+        elif isinstance(action, InsertTextAction):
+            await cdp_element.insert_text(await self._page_session(live), action.text)
+            result.verifications.append(f"inserted {action.text[:40]!r}")
+        elif isinstance(action, TapAction):
+            node, cdp = await self._resolve_ref(live, action.ref)
+            box = await cdp_element.element_box(cdp, node, action.ref)
+            width, height = await cdp_element.viewport_size(cdp)
+            point = cdp_element.clamp(mouse.jittered_point_in(box), width, height)
+            await cdp_element.tap_at(cdp, *point)
+            await cctx.delay_policy.pause("click")
+            result.verifications.append(f"tapped {action.ref}")
+        elif isinstance(action, SwipeAction):
+            await self._swipe(live, action)
+            result.verifications.append(
+                f"swiped {action.direction} by {action.distance}px"
+            )
         elif isinstance(action, SelectOptionAction):
             await self._select_option(live, action, result)
         elif isinstance(action, HoverAction):
@@ -1320,6 +1465,37 @@ class PatchrightDriver:
             result.tabs.append(await self._list_tabs(cctx))
         else:
             assert_never(action)
+
+    def _download_dir(self, cctx: _Context) -> Path:
+        """Where this context's downloads land -- driver-chosen, never
+        caller-chosen. See `driver.downloads`."""
+
+        return Path(tempfile.gettempdir()) / f"crawlpilot-downloads-{id(cctx):x}"
+
+    async def _list_frames(self, live: _Page) -> list[FrameInfo]:
+        """Every frame of this tab, main frame first.
+
+        Read from Playwright's frame list rather than `Page.getFrameTree`: the
+        two agree, and this one needs no CDP round trip for a listing that is
+        almost always followed by something that does.
+        """
+
+        main = live.page.main_frame
+        listed: list[FrameInfo] = []
+        for frame in live.page.frames:
+            listed.append(
+                FrameInfo(
+                    # Playwright does not expose the CDP frame id, and the one
+                    # thing a caller can act on is the URL, so that is the
+                    # identity reported. `_refresh_frame_sessions` keeps the CDP
+                    # ids internally for routing input.
+                    frame_id=frame.url,
+                    url=frame.url,
+                    name=frame.name or "",
+                    is_main=frame is main,
+                )
+            )
+        return listed
 
     async def _wait_for(self, live: _Page, action: Action, result: ActionResult) -> None:
         """Block until the page reaches the requested state, or raise."""
@@ -1894,6 +2070,63 @@ class PatchrightDriver:
         for ch in text:
             await cdp_element.type_character(cdp, ch)
             await policy.pause("type")
+
+    async def _human_drag(self, cdp: CDPSession, start: mouse.Box, end: mouse.Box) -> None:
+        """Press on `start`, move to `end` along an interpolated path, release.
+
+        The path matters as much as it does for a click, and more: a drag that
+        teleports from source to destination emits a press and a release with no
+        `mousemove` between them, and HTML5 drag-and-drop, sortable lists and
+        canvas editors all drive their state off those moves. Such a drag lands
+        nothing while reporting success.
+        """
+
+        width, height = await cdp_element.viewport_size(cdp)
+        source = cdp_element.clamp(mouse.jittered_point_in(start), width, height)
+        target = cdp_element.clamp(mouse.jittered_point_in(end), width, height)
+
+        await cdp_element.move_to(cdp, *source)
+        await cdp_element.dispatch_mouse(
+            cdp, "mousePressed", *source, button="left", click_count=1, buttons=1
+        )
+        for x, y in mouse.path(source, target):
+            await cdp_element.dispatch_mouse(cdp, "mouseMoved", x, y, button="left", buttons=1)
+            await asyncio.sleep(random.uniform(0.006, 0.018))
+        await cdp_element.dispatch_mouse(cdp, "mouseMoved", *target, button="left", buttons=1)
+        await cdp_element.dispatch_mouse(cdp, "mouseReleased", *target, button="left")
+
+    async def _swipe(self, live: _Page, action: SwipeAction) -> None:
+        """A touch drag, from the element's centre or the viewport's."""
+
+        cdp = await self._page_session(live)
+        width, height = await cdp_element.viewport_size(cdp)
+        if action.ref is not None:
+            node, cdp = await self._resolve_ref(live, action.ref)
+            box = await cdp_element.element_box(cdp, node, action.ref)
+            start = (box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        else:
+            start = (width / 2, height / 2)
+
+        # A swipe *up* moves the finger up, which scrolls content down -- the
+        # direction names the gesture, as it does on a phone, not the content.
+        dx, dy = {
+            "up": (0.0, -1.0),
+            "down": (0.0, 1.0),
+            "left": (-1.0, 0.0),
+            "right": (1.0, 0.0),
+        }[action.direction]
+        end = cdp_element.clamp(
+            (start[0] + dx * action.distance, start[1] + dy * action.distance),
+            width,
+            height,
+        )
+
+        await cdp_element.dispatch_touch(cdp, "touchStart", [start])
+        for x, y in mouse.path(start, end):
+            await cdp_element.dispatch_touch(cdp, "touchMove", [(x, y)])
+            await asyncio.sleep(random.uniform(0.008, 0.020))
+        await cdp_element.dispatch_touch(cdp, "touchMove", [end])
+        await cdp_element.dispatch_touch(cdp, "touchEnd", [])
 
     async def _scroll(self, live: _Page, action: ScrollAction) -> None:
         """Scroll the page, or an element's own scroll container.

@@ -339,6 +339,80 @@ class BrowserSession:
     async def is_checked(self, ref: str | None = None, *, selector: str | None = None) -> str:
         return await self._readout(spi_actions.IsCheckedAction(ref=ref, selector=selector))
 
+    # ----------------------------------------------------- files and frames
+
+    async def pdf(self, *, landscape: bool = False, scale: float = 1.0) -> bytes:
+        """The page as PDF bytes. Headless only -- Chrome's limitation."""
+
+        result = await self.execute(
+            [spi_actions.PdfAction(landscape=landscape, scale=scale)]
+        )
+        return result.pdfs[0] if result.pdfs else b""
+
+    async def list_frames(self) -> list[spi_actions.FrameInfo]:
+        result = await self.execute([spi_actions.ListFramesAction()])
+        return result.frames[0] if result.frames else []
+
+    async def download(self, ref: str, *, timeout_ms: int = 30_000):  # type: ignore[no-untyped-def]
+        """Click `ref` and wait for the file. The driver chooses where it lands."""
+
+        result = await self.execute(
+            [spi_actions.DownloadAction(ref=ref, timeout_ms=timeout_ms)]
+        )
+        return result.downloads[0] if result.downloads else None
+
+    # --------------------------------------------------------- interaction (2)
+
+    async def double_click(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.DoubleClickAction(ref=ref)])
+
+    async def focus(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.FocusAction(ref=ref)])
+
+    async def check(self, ref: str) -> ActionResult:
+        """Ensure a checkbox or radio is checked. Idempotent, unlike a click."""
+
+        return await self.execute([spi_actions.CheckAction(ref=ref)])
+
+    async def uncheck(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.UncheckAction(ref=ref)])
+
+    async def scroll_into_view(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.ScrollIntoViewAction(ref=ref)])
+
+    async def clear(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.ClearAction(ref=ref)])
+
+    async def drag(self, ref: str, to_ref: str) -> ActionResult:
+        return await self.execute([spi_actions.DragAction(ref=ref, to_ref=to_ref)])
+
+    async def key_down(self, key: str) -> ActionResult:
+        return await self.execute([spi_actions.KeyDownAction(key=key)])
+
+    async def key_up(self, key: str) -> ActionResult:
+        return await self.execute([spi_actions.KeyUpAction(key=key)])
+
+    async def insert_text(self, text: str) -> ActionResult:
+        """Paste-shaped text entry. Prefer `fill` for ordinary typing."""
+
+        return await self.execute([spi_actions.InsertTextAction(text=text)])
+
+    async def tap(self, ref: str) -> ActionResult:
+        return await self.execute([spi_actions.TapAction(ref=ref)])
+
+    async def swipe(
+        self, direction: str, *, distance: int = 300, ref: str | None = None
+    ) -> ActionResult:
+        return await self.execute(
+            [
+                spi_actions.SwipeAction(
+                    direction=direction,  # type: ignore[arg-type]
+                    distance=distance,
+                    ref=ref,
+                )
+            ]
+        )
+
     # ----------------------------------------------------------------- dialogs
 
     async def dialog_status(self) -> spi_actions.DialogInfo | None:
