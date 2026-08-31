@@ -384,6 +384,20 @@ uv run patchright install chrome            # one-time, only needed for tests/lo
 uv run pytest -q
 ```
 
+That same install is all the [`examples/`](examples/) need — they drive the `crawlpilot` library
+directly, with no gateway, no worker and no datastores:
+
+```bash
+uv run python examples/crawl_to_markdown.py https://example.com   # both shapes, unprotected pages
+uv run python examples/walmart_product_markdown.py                # escalation ladder + block detection on a Walmart PDP
+```
+
+Each launches a real browser against the live site. The Walmart one opens a visible window where a
+display exists (and logs a downgrade to headless where none does), and honours `CRAWLPILOT_PROXY_URL`
+for a residential exit. See
+[`packages/crawlpilot/README.md`](packages/crawlpilot/README.md#examples) for what the Walmart one
+demonstrates.
+
 There is no single-process backend: the app runs as a `gateway` (tenant-facing `/v1/...`) in front of
 one or more `worker`s (driver + queue loops). `AGENTPILOT_ROLE` defaults to `gateway`, so a bare
 `uvicorn agentpilot.gateway.app:app` is a gateway and needs a worker to serve driver-backed routes.

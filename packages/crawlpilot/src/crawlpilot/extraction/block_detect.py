@@ -86,20 +86,81 @@ _CHALLENGE_MARKERS = (
 # interstitials were returned to callers as if they were content.
 _DATADOME_MARKERS = (
     "geo.captcha-delivery.com",
-    "captcha-delivery.com",
-    "datadome",
-    "dd_cookie",
     "interstitial.captcha",
 )
 
 # --- PerimeterX / HUMAN.
+#
+# The last two are the hold-the-button challenge's own heading and instruction,
+# captured verbatim from a live walmart.com wall (2026-08-31):
+#
+#     <h2>Robot or human?</h2>
+#     <p>Activate and hold the button to confirm that you're human.</p>
+#     <div id="px-captcha" ...>
+#
+# Ungated, unlike the wordings in `_AMBIGUOUS_HOLD_MARKERS`, because they are
+# challenge-specific rather than ordinary English -- and they have to be: that
+# wall is 468 KB (it still ships Walmart's whole app shell), so a short-page
+# gate would never fire on it. Verified absent from two full 1.9 MB product
+# pages. Apostrophes are avoided deliberately -- "confirm that you're human" is
+# a strong tell, but the quote character varies between straight and typographic.
 _PERIMETERX_MARKERS = (
     "px-captcha",
-    "_pxhd",
-    "perimeterx",
     "please verify you are a human",
     "captcha.px-cdn.net",
+    "robot or human",
+    "activate and hold the button",
 )
+
+# --- Vendor *presence*, which is not the same thing as a block.
+#
+# These used to sit in the two tuples above and fire on any page containing
+# them. That is wrong, and provably so: a served Walmart product page (1.9 MB,
+# HTTP 200, real content) carries `*.perimeterx.net` in its CSP allowlist and
+# `"perimeterX":{"enable":true,...}` in its own bootstrap JSON. So every
+# successful Walmart PDP classified as `ROBOT_CHECK` -- a PRIVACY-scope verdict
+# that raises `ChallengeDetected`, burns the identity and rotates the proxy.
+# `run_ephemeral_scrape` runs with `detect_blocks=True`, so `scrape()` climbed
+# the entire escalation ladder and then failed on pages it had *already
+# fetched*.
+#
+# The module already reasons this way about headers -- "`x-datadome` is set on
+# served *and* blocked responses ... only the value is a block" -- and about
+# `set-cookie: datadome=`, called out there as "not a block by itself, just
+# proof the site is DataDome-protected". A vendor's name in the body is the
+# same class of evidence; it was the body path that never got the treatment.
+#
+# So they stay, but only count on a page too short to be real content -- the
+# gate `AmazonChecker` already applies to its CAPTCHA prompt.
+_VENDOR_PRESENCE_MARKERS = (
+    "perimeterx",
+    "_pxhd",
+    "datadome",
+    "dd_cookie",
+    "captcha-delivery.com",
+)
+
+# --- The wording the same challenge uses on other PerimeterX deployments, and
+# the name it is popularly known by.
+#
+# Size-gated, unlike the two prompts in `_PERIMETERX_MARKERS`, because this one
+# is ordinary English: a real product page can easily carry "press and hold" in
+# its own copy -- a power tool, an electric toothbrush, a blender. Ungated, the
+# phrase would wall the exact catalogue it is meant to fetch.
+_AMBIGUOUS_HOLD_MARKERS = (
+    "press & hold",
+    "press &amp; hold",  # the same prompt as it appears in HTML source
+    "press and hold",
+)
+
+_VENDOR_PRESENCE_MAX_LEN = 150_000
+"""Ceiling under which a vendor name or a challenge prompt counts as a block.
+
+Same value and same reasoning as `AmazonChecker`'s `_AMAZON_ROBOT_MAX_LEN`: a
+challenge page is a few KB, a real retail page hundreds of KB to megabytes (the
+Walmart PDP above is 1.9 MB, and `WalmartChecker` already calls a `/ip/` page
+under 300 KB undersized). Deliberately far above any real wall and far below any
+real product page, so neither side is close to the line."""
 
 # Response headers that identify a WAF outright, checked independently of the
 # body: a challenge page can be visually indistinguishable from a thin real
@@ -145,15 +206,26 @@ def has_known_wall_marker(html: str | None) -> bool:
     """
 
     body = (html or "").lower()
-    return any(
+    if any(
         m in body
-        for group in (
-            _AKAMAI_MARKERS,
-            _CHALLENGE_MARKERS,
-            _DATADOME_MARKERS,
-            _PERIMETERX_MARKERS,
-        )
+        for group in (_AKAMAI_MARKERS, _CHALLENGE_MARKERS, _DATADOME_MARKERS, _PERIMETERX_MARKERS)
         for m in group
+    ):
+        return True
+    return _short_page_wall_marker(body)
+
+
+def _short_page_wall_marker(body: str) -> bool:
+    """A vendor name or a challenge prompt, on a page too short to be content.
+
+    See `_VENDOR_PRESENCE_MARKERS`: on a full-size page these prove only that
+    the site is protected, so they must not be read as a wall there.
+    """
+
+    if len(body) >= _VENDOR_PRESENCE_MAX_LEN:
+        return False
+    return any(
+        m in body for group in (_VENDOR_PRESENCE_MARKERS, _AMBIGUOUS_HOLD_MARKERS) for m in group
     )
 
 
@@ -276,6 +348,11 @@ def classify_page(
     if any(m in body for m in _DATADOME_MARKERS):
         return Verdict.ROBOT_CHECK
     if any(m in body for m in _PERIMETERX_MARKERS):
+        return Verdict.ROBOT_CHECK
+    # Vendor names and the Press & Hold prompt, but only on a page too short to
+    # be real content -- see `_VENDOR_PRESENCE_MARKERS` for the served Walmart
+    # PDP that made this gate necessary.
+    if _short_page_wall_marker(body):
         return Verdict.ROBOT_CHECK
 
     # Generic redirect-to-block / forbidden-body tells (a site checker upgrades

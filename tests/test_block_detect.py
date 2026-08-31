@@ -170,6 +170,87 @@ def test_perimeterx_block_is_a_robot_check() -> None:
     assert verdict in block_detect._ROBOT_CHECKS
 
 
+def test_hold_challenge_is_a_robot_check() -> None:
+    """Verbatim from a live walmart.com wall captured 2026-08-31.
+
+    Two things this pins. The prompt is *"Activate and hold"*, not the
+    "Press & Hold" the challenge is popularly named after -- markers guessed
+    from the popular name matched nothing on the real page. And the URL is a
+    `/ip/` product path, so `WalmartChecker`'s 300 KB floor sees an undersized
+    page first; without its `has_known_wall_marker` deferral this comes back
+    TOO_SMALL (CRAWL scope) and the identity retries straight into the wall.
+    """
+
+    body = _big(
+        '<h2 id="react-aria7292147545-:r0:">Robot or human?</h2>'
+        "<p>Activate and hold the button to confirm that you're human. Thank You!</p>"
+        '<div id="px-captcha" class="flex justify-center"></div>'
+    )
+
+    verdict = _classify(html=body, url="https://www.walmart.com/ip/x/123", status=200)
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_hold_challenge_prompt_survives_a_full_size_wall_page() -> None:
+    """The prompt must stand without `px-captcha`, at the wall's real size.
+
+    The captured wall is 468 KB -- it still ships Walmart's whole app shell --
+    so a short-page gate would never fire on it. That is why the two challenge
+    prompts are ungated while the ordinary-English wordings are not.
+    """
+
+    body = (
+        "<h2>Robot or human?</h2><p>Activate and hold the button.</p>"
+        + ("<p>app shell</p>" * 40_000)
+    )
+    assert len(body) > 400_000
+
+    verdict = _classify(html=body, url="https://www.walmart.com/", status=200)
+
+    assert verdict in block_detect._ROBOT_CHECKS
+
+
+def test_a_served_page_naming_its_bot_vendor_is_not_a_block() -> None:
+    """The regression this gate exists for.
+
+    A real Walmart product page (observed: 1.9 MB, HTTP 200, full content)
+    carries `*.perimeterx.net` in its CSP allowlist and `"perimeterX":
+    {"enable":true}` in its bootstrap JSON. The bare `perimeterx` marker made
+    that a PRIVACY-scope `ROBOT_CHECK`, so `scrape()` -- which runs with
+    `detect_blocks=True` -- burned the identity and climbed the whole
+    escalation ladder on pages it had already fetched successfully.
+    """
+
+    body = (
+        "<html><head><meta http-equiv='Content-Security-Policy' "
+        "content=\"script-src *.perimeterx.net *.px-cdn.net\"></head>"
+        '<body><h1>Dove Body Wash</h1><script>window.__C={"perimeterX":'
+        '{"enable":true,"pxAppId":"PXu6b0qd2S"}}</script>'
+        + ("<p>real product copy</p>" * 16_000)
+        + "</body></html>"
+    )
+    assert len(body) > 300_000  # past both the vendor ceiling and Walmart's /ip/ floor
+
+    assert _classify(html=body, url="https://www.walmart.com/ip/x/123", status=200) is Verdict.OK
+
+
+def test_press_and_hold_wording_in_product_copy_is_not_a_block() -> None:
+    """"Press and hold" is ordinary English. On a full-size page it is a
+    product instruction, not a challenge -- an electric toothbrush, a blender,
+    a power tool. Ungated, the phrase would wall the catalogue it is fetching."""
+
+    body = (
+        "<html><body><h1>Cordless Drill</h1>"
+        "<p>To reverse, press and hold the trigger for two seconds.</p>"
+        + ("<p>more product copy</p>" * 16_000)
+        + "</body></html>"
+    )
+    assert len(body) > 300_000
+
+    assert _classify(html=body, url="https://www.walmart.com/ip/x/123", status=200) is Verdict.OK
+
+
 def test_turnstile_is_a_robot_check() -> None:
     body = _big("<div class='cf-turnstile' data-sitekey='x'></div>")
 

@@ -42,6 +42,13 @@ class ProcessLauncher:
 
         if self._xvfb_proc is not None:
             return
+        if not sys.platform.startswith("linux"):
+            # Xvfb is an X11 server; macOS and Windows have their own and need
+            # nothing started. Returning quietly rather than warning, because
+            # the warning below says headful "will fail to launch here" -- true
+            # on a bare Linux container, and alarming nonsense on a laptop that
+            # is about to open a window perfectly well.
+            return
         if shutil.which("Xvfb") is None:
             log.warning(
                 "process_launcher.xvfb_unavailable",
@@ -65,10 +72,20 @@ class ProcessLauncher:
         - On Linux we lazily start our own Xvfb (`:99`) and export `DISPLAY` to
           it -- this is the production worker path (headful under Xvfb is what
           `cdp_patches` OS-level input, a P1 spike, will eventually need).
-        - Otherwise (macOS/dev, or a Linux container without Xvfb) headful is
-          not available, so this returns `False` and the caller degrades to
-          headless rather than failing the launch. We deliberately do NOT pop a
-          real window on a dev machine or in tests.
+        - macOS and Windows have a native window server and no `DISPLAY` at all,
+          so headful is always available there.
+        - Only a Linux host with neither `DISPLAY` nor Xvfb has no way to show a
+          window; there this returns `False` and the caller degrades to headless
+          rather than failing the launch.
+
+        This used to return `False` on everything but Linux, so `headful=True`
+        on a Mac silently launched headless -- "we deliberately do NOT pop a
+        real window on a dev machine", which reads as caution but is really
+        `DISPLAY` being treated as the definition of "has a display" on the two
+        platforms that never set it. It made the flag untestable exactly where
+        a developer would reach for it: to watch a run. Tests are unaffected
+        because they pass `headful=False`, which short-circuits before this is
+        ever called -- opting out is the caller's job, not this method's.
         """
 
         # `DISPLAY` is deliberately left as a real environment interaction
@@ -85,7 +102,12 @@ class ProcessLauncher:
             if self._xvfb_proc is not None:
                 os.environ["DISPLAY"] = ":99"
                 return True
-        return False
+            return False
+        # Quartz on macOS, the Windows window server: always present, nothing to
+        # export. A headless-only box (a Mac reached over SSH with no console
+        # session) is rare enough, and loud enough when the launch fails, to be
+        # the better trade than silently ignoring an explicit `headful=True`.
+        return sys.platform in ("darwin", "win32")
 
     async def close(self) -> None:
         async with self._lock:

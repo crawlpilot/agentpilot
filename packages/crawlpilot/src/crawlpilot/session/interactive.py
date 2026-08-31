@@ -101,6 +101,7 @@ async def open_interactive_session(
     lease_ttl_seconds: float,
     locale: str | None = None,
     timezone_id: str | None = None,
+    detect_blocks: bool = False,
     browser_config: BrowserConfig = DEFAULTS,
     prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
     egress: EgressPolicy | None = None,
@@ -154,10 +155,18 @@ async def open_interactive_session(
             locale=locale,
             timezone_id=timezone_id,
             # Avoidance yes, reaction no -- see `stealth_profile.resolve`.
-            # A session has no escalation ladder to answer a raised
-            # `ChallengeDetected` with, and an agent legitimately passes
-            # through empty/thin intermediate pages all run long.
-            detect_blocks=False,
+            # Defaults off because a session has no escalation ladder to answer
+            # a raised `ChallengeDetected` with, and an agent legitimately
+            # passes through empty/thin intermediate pages all run long.
+            #
+            # It is the caller's call, not a constant, because the flag also
+            # gates the `_abck` wait in warm-up (`wait_abck=cctx.detect_blocks`
+            # in `PatchrightDriver._post_navigate`). A crawler-shaped session
+            # reading one protected page wants both: the wait is what makes the
+            # warm-up mean anything on an Akamai target, and without the
+            # classification the wall comes back as content and is reported as
+            # success. Off, that caller had no way to ask for either.
+            detect_blocks=detect_blocks,
             config=browser_config,
         )
         ctx = await driver.open(

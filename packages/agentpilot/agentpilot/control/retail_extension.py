@@ -61,6 +61,14 @@ class WalmartChecker:
         if "403 forbidden" in body.lower():
             return Verdict.FORBIDDEN
         if html is not None:
+            # Defer on anything the generic path can name precisely, exactly as
+            # `FashionRetailChecker` does and for the reason `has_known_wall_marker`
+            # documents: the size floor below is a heuristic, and a wall *is*
+            # undersized, so without this a Press & Hold interstitial classifies
+            # TOO_SMALL (CRAWL scope, same-identity retry) instead of a robot
+            # check -- and the identity retries into the wall it was just shown.
+            if has_known_wall_marker(html):
+                return None
             floor = _WALMART_ITEM_MIN if "/ip/" in lurl else _WALMART_PORTAL_MIN
             if len(body) < floor:
                 return Verdict.TOO_SMALL
@@ -99,6 +107,10 @@ class AmazonChecker:
         if expect and "glow-ingress-block" in lower and expect not in lower:
             return Verdict.WRONG_GEO
         lurl = url.lower()
+        # Same deferral as `WalmartChecker` -- a size floor must not downgrade a
+        # wall the generic markers can classify precisely.
+        if has_known_wall_marker(html):
+            return None
         is_item = "/dp/" in lurl or "/gp/product/" in lurl
         floor = _AMAZON_ITEM_MIN if is_item else _AMAZON_GENERIC_MIN
         if len(body) < floor:

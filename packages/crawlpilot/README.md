@@ -62,6 +62,52 @@ batch and tears the context down — right for a list of independent URLs.
 `browser.session()` keeps a context alive across many calls — right when you
 need to interact rather than only read.
 
+## Examples
+
+Runnable scripts live in [`examples/`](../../examples) — in the repo checkout,
+not in the wheel. From the repo root:
+
+```bash
+uv sync --group dev --extra driver     # pulls crawlpilot[all]
+uv run patchright install chrome       # one-time (arm64: install chromium instead)
+
+uv run python examples/crawl_to_markdown.py https://example.com
+uv run python examples/walmart_product_markdown.py
+```
+
+| Script | What it shows |
+|---|---|
+| `crawl_to_markdown.py` | both shapes side by side, on unprotected pages |
+| `walmart_product_markdown.py` | the escalation ladder and block detection, against a PerimeterX-protected retail page |
+
+Two env vars the Walmart one honours: `CRAWLPILOT_PROXY_URL` to route through a
+residential exit, and `CRAWLPILOT_BROWSER_CHANNEL=chromium` to override the
+real-Chrome default (required on arm64).
+
+Both launch a real Chrome and hit the live sites named in them.
+
+The Walmart one is where the platform earns its keep. It shows both shapes
+against a target that fights back: `scrape(tier="auto")`, which climbs the
+escalation ladder with a fresh identity, proxy and fingerprint per rung, and a
+`session(detect_blocks=True)` for when you need to drive the page instead.
+
+Three things it demonstrates that a naive script gets wrong:
+
+- **`headful=True`** — a real window, and the OS-level input path the driver
+  only has with a display. Not cosmetic: running headless is what got this
+  script served a *"Robot or human?"* wall on every attempt. It is a preference
+  rather than an assertion, so on a display-less box the driver logs a downgrade
+  and runs headless instead of failing to launch.
+- **`detect_blocks=True`** on the session. Off — the default, and the right one
+  for agent runs — the warm-up skips its `_abck` wait and no page is ever
+  classified, so a CAPTCHA interstitial is extracted and returned as if it were
+  the product page.
+- **`RetailExtension`** installed, contributing Walmart's own block signals
+  (a landed `/blocked` URL, a `/ip/` page under 300 KB) through the ordinary
+  `BlockMount` seam — the same path a third-party package would use.
+
+Pass another Walmart URL as an argument to point it elsewhere.
+
 ## Extending it
 
 crawlpilot ships no site-specific knowledge. A consumer contributes it as an

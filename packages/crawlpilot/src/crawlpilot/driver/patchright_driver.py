@@ -423,6 +423,39 @@ def _launch_target(launch: browser_discovery.Launch) -> dict[str, str]:
     return {"executable_path": launch.executable_path}
 
 
+def _log_launched_browser(context: BrowserContext) -> None:
+    """Log the binary that actually launched, not the one we asked for.
+
+    `driver.browser_resolved` can only report what `resolve_browser` decided,
+    and a `channel=` names an entry in Playwright's registry rather than a
+    path -- so for every channel launch it logs `executable=None` and the one
+    question the log line exists to answer ("why is it using *that* browser")
+    has no answer in it.
+
+    That gap is not academic. The bundled Chromium unpacks on macOS as
+    `chromium-<rev>/chrome-mac-arm64/Google Chrome for Testing.app` -- Chrome
+    branding, Chrome icon, Chrome window title -- so `channel="chromium"`
+    working perfectly is indistinguishable, from the dock, from the library
+    ignoring the channel and launching the user's own Chrome. Playwright knows
+    the real path; this asks it rather than guessing at the cache layout.
+
+    Best-effort: `context.browser` is documented to be `None` for a persistent
+    context, and a diagnostic must never be the thing that fails a launch.
+    """
+
+    try:
+        browser = context.browser
+        if browser is None:
+            return
+        log.info(
+            "driver.browser_launched",
+            executable=browser.browser_type.executable_path,
+            version=browser.version,
+        )
+    except Exception:  # noqa: BLE001 -- diagnostics never break a launch
+        log.debug("driver.browser_launched_unavailable", exc_info=True)
+
+
 async def _resolve_cdp_url(url: str) -> str:
     """Turn a CDP endpoint into something `connect_over_cdp` accepts.
 
@@ -856,6 +889,7 @@ class PatchrightDriver:
                 **_launch_target(launch),
                 **context_kwargs,
             )
+            _log_launched_browser(context)
         if init_script is not None:
             # Context-level: applies to every page (current + future) before any
             # page script runs -- the pinned per-identity fingerprint's

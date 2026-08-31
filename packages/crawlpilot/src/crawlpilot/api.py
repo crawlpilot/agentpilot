@@ -656,6 +656,7 @@ class Browser:
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        detect_blocks: bool = False,
         dialogs: spi_actions.DialogPolicy = "auto_dismiss",
     ) -> AsyncIterator[BrowserSession]:
         """Open a session, yield it, always release it.
@@ -675,6 +676,21 @@ class Browser:
         which is what an agent driving the page wants: a `confirm()` is a
         question, and dismissing it unasked turns "delete this" into a no-op
         that still reports success.
+
+        `detect_blocks` decides whether this session can *see* a bot wall. Off,
+        the tier's block avoidance still runs (fingerprint, proxy, warm-up) but
+        two things silently do not: the warm-up skips its `_abck` wait, and no
+        navigation is ever classified -- so a CAPTCHA interstitial is extracted
+        and returned as though it were the page you asked for. On, the warm-up
+        waits for a validated `_abck` before you read, a soft verdict lands on
+        `ActionResult.soft_verdict`, and a hard wall raises `ChallengeDetected`.
+
+        Off by default because an agent run passes through blank pages, SPA
+        shells and post-click transitions where `EMPTY`/`TOO_SMALL` are the
+        expected state, and because a session has no escalation ladder to answer
+        a raised challenge with -- `scrape()` does, which is why it opts in.
+        Turn it on for a crawler-shaped session reading a protected page, and
+        handle `ChallengeDetected` yourself.
         """
 
         name = identity or f"session-{uuid.uuid4().hex}"
@@ -695,6 +711,7 @@ class Browser:
             lease_ttl_seconds=self.lease_ttl_seconds,
             locale=locale,
             timezone_id=timezone_id,
+            detect_blocks=detect_blocks,
             dialog_policy=dialogs,
             browser_config=self.config,
             prototype_provider=self.prototype_provider,
