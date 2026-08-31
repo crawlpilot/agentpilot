@@ -44,7 +44,6 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from agentpilot.control.retail_extension import RetailExtension
 from crawlpilot import AsyncCrawlpilot, BrowserSession, ChallengeDetected, WaitTimeout
