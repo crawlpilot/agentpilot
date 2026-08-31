@@ -5,21 +5,22 @@ and profile management, block detection, and HTML → Markdown extraction —
 usable directly as a library, not only behind an HTTP service.
 
 ```python
-from crawlpilot import Browser
+from crawlpilot import Crawlpilot
 
-async with Browser() as browser:
-    async with browser.session() as page:
-        await page.navigate("https://example.com")
-        print(await page.markdown())
+with Crawlpilot() as cp:
+    print(cp.scrape("https://example.com").markdown)
 ```
 
-Everything is optional and defaults to something inert-but-working: a real
-Chrome driver, an in-process session registry, no proxies, no extensions.
+No API key, no hosted service: it drives a browser on your own machine.
+
+`AsyncCrawlpilot` is the same object with `await` on each call, for when you
+already have an event loop.
 
 ## Install
 
 ```bash
 pip install "crawlpilot[engine]"   # + a real browser
+patchright install chrome          # arm64: install chromium instead
 ```
 
 | Extra | For |
@@ -32,89 +33,70 @@ The base install carries no web framework, no database driver and no Redis.
 
 ### A browser
 
-`crawlpilot[engine]` installs the automation library, not a browser. It finds one
-in this order:
+`crawlpilot[engine]` installs the automation library, not a browser. It finds
+one in this order:
 
-1. `Browser(executable_path=...)`, if you pass one
-2. `Browser(channel="chrome" | "chromium" | "msedge" | ...)`
+1. `Crawlpilot(executable_path=...)`, if you pass one
+2. `Crawlpilot(channel="chrome" | "chromium" | "msedge" | ...)`
 3. Google Chrome, wherever your OS installs it
 4. a Chromium previously fetched by `patchright install chromium`
 
-If none of those turn anything up you get an error naming the install command.
-To pin the browser explicitly:
+If none turn anything up you get an error naming the install command. To drive a
+browser running somewhere else, pass its CDP endpoint and nothing is launched
+locally: `Crawlpilot(cdp_url="http://chrome:9222")`.
 
-```bash
-patchright install chrome      # real Google Chrome (x86_64 only)
-patchright install chromium    # bundled Chromium (also works on arm64)
-```
+## Documentation
 
-To drive a browser running somewhere else — another container, another host —
-pass its CDP endpoint instead and nothing is launched locally:
+| | |
+|---|---|
+| [Quickstart](../../docs/quickstart.md) | install, first scrape, sync vs async |
+| [Interacting](../../docs/interacting.md) | selectors vs refs, snapshots, batching, waits |
+| [API reference](../../docs/api-reference.md) | every method and its real return type |
+| [Anti-detection](../../docs/anti-detection.md) | tiers, proxies, headful, block detection |
+| [Migrating to 0.2](../../docs/migration-0.2.md) | the breaking changes, with a before/after table |
 
-```python
-Browser(cdp_url="http://chrome:9222")
-```
+## Two layers
 
-## Two shapes
+**`Crawlpilot`** is the 90% case: `scrape`, `batch_scrape`, `session`, with
+defaults chosen so the naive call is the correct one — an escalating stealth
+tier, block detection on, headful where a display exists.
 
-`browser.scrape(url)` is one-shot: it mints a throwaway identity, runs one
-batch and tears the context down — right for a list of independent URLs.
-`browser.session()` keeps a context alive across many calls — right when you
-need to interact rather than only read.
+**`Browser`** underneath it takes an injectable driver, registry, proxy pinner,
+prototype provider and egress policy. That is what the platform passes; a
+crawler should not have to. `cp.session()` hands you the lower layer already
+assembled, and `cp.browser` is the `Browser` itself.
+
+`scrape()` is one-shot — it mints a throwaway identity, runs one batch and tears
+the context down, which is right for a list of independent URLs. `session()`
+keeps a context alive across many calls, for when you need to interact rather
+than only read.
 
 ## Examples
 
-Runnable scripts live in [`examples/`](../../examples) — in the repo checkout,
-not in the wheel. From the repo root:
+Runnable scripts in [`examples/`](../../examples) — in the repo checkout, not
+the wheel. From the repo root:
 
 ```bash
-uv sync --group dev --extra driver     # pulls crawlpilot[all]
-uv run patchright install chrome       # one-time (arm64: install chromium instead)
+uv sync --group dev --extra driver
+uv run patchright install chrome
 
-uv run python examples/crawl_to_markdown.py https://example.com
-uv run python examples/walmart_product_markdown.py
+uv run python examples/quickstart.py             # the three-liner
+uv run python examples/snapshot_and_click.py     # snapshot, refs, clicking, typed getters
+uv run python examples/crawl_to_markdown.py      # the async shape
+uv run python examples/walmart_product_markdown.py   # a target that fights back
 ```
 
-| Script | What it shows |
-|---|---|
-| `crawl_to_markdown.py` | both shapes side by side, on unprotected pages |
-| `walmart_product_markdown.py` | the escalation ladder and block detection, against a PerimeterX-protected retail page |
-
-Two env vars the Walmart one honours: `CRAWLPILOT_PROXY_URL` to route through a
-residential exit, and `CRAWLPILOT_BROWSER_CHANNEL=chromium` to override the
-real-Chrome default (required on arm64).
-
-Both launch a real Chrome and hit the live sites named in them.
-
-The Walmart one is where the platform earns its keep. It shows both shapes
-against a target that fights back: `scrape(tier="auto")`, which climbs the
-escalation ladder with a fresh identity, proxy and fingerprint per rung, and a
-`session(detect_blocks=True)` for when you need to drive the page instead.
-
-Three things it demonstrates that a naive script gets wrong:
-
-- **`headful=True`** — a real window, and the OS-level input path the driver
-  only has with a display. Not cosmetic: running headless is what got this
-  script served a *"Robot or human?"* wall on every attempt. It is a preference
-  rather than an assertion, so on a display-less box the driver logs a downgrade
-  and runs headless instead of failing to launch.
-- **`detect_blocks=True`** on the session. Off — the default, and the right one
-  for agent runs — the warm-up skips its `_abck` wait and no page is ever
-  classified, so a CAPTCHA interstitial is extracted and returned as if it were
-  the product page.
-- **`RetailExtension`** installed, contributing Walmart's own block signals
-  (a landed `/blocked` URL, a `/ip/` page under 300 KB) through the ordinary
-  `BlockMount` seam — the same path a third-party package would use.
-
-Pass another Walmart URL as an argument to point it elsewhere.
+`snapshot_and_click.py` runs offline against a fixture it writes itself. The
+Walmart one hits the live site and honours `CRAWLPILOT_PROXY_URL` and
+`CRAWLPILOT_BROWSER_CHANNEL`.
 
 ## Extending it
 
 crawlpilot ships no site-specific knowledge. A consumer contributes it as an
 extension: hooks for URL rewriting, site warm-up, block classification, block
-*resolution*, markup repair and document enrichment. See
-`crawlpilot.extensions`.
+*resolution*, markup repair and document enrichment. See `crawlpilot.extensions`,
+and `agentpilot.control.retail_extension` as the reference implementation.
 
-`cp.tools` exposes every browser verb as a vendor-neutral `ToolSpec` (name,
-description, JSON Schema) with optional adapters for Anthropic / OpenAI / MCP —
-no LLM SDK is imported.
+`crawlpilot.tools` exposes every browser verb as a vendor-neutral `ToolSpec`
+(name, description, JSON Schema) with optional adapters for Anthropic / OpenAI /
+MCP — no LLM SDK is imported.

@@ -388,15 +388,15 @@ That same install is all the [`examples/`](examples/) need — they drive the `c
 directly, with no gateway, no worker and no datastores:
 
 ```bash
-uv run python examples/crawl_to_markdown.py https://example.com   # both shapes, unprotected pages
-uv run python examples/walmart_product_markdown.py                # escalation ladder + block detection on a Walmart PDP
+uv run python examples/quickstart.py                 # the three-liner
+uv run python examples/snapshot_and_click.py         # snapshot, refs, clicking (offline fixture)
+uv run python examples/crawl_to_markdown.py          # the async shape
+uv run python examples/walmart_product_markdown.py   # escalation ladder + block detection
 ```
 
-Each launches a real browser against the live site. The Walmart one opens a visible window where a
-display exists (and logs a downgrade to headless where none does), and honours `CRAWLPILOT_PROXY_URL`
-for a residential exit. See
-[`packages/crawlpilot/README.md`](packages/crawlpilot/README.md#examples) for what the Walmart one
-demonstrates.
+The library's own docs live in [`docs/`](docs/): [quickstart](docs/quickstart.md),
+[interacting](docs/interacting.md), [API reference](docs/api-reference.md),
+[anti-detection](docs/anti-detection.md), and [migrating to 0.2](docs/migration-0.2.md).
 
 There is no single-process backend: the app runs as a `gateway` (tenant-facing `/v1/...`) in front of
 one or more `worker`s (driver + queue loops). `AGENTPILOT_ROLE` defaults to `gateway`, so a bare
