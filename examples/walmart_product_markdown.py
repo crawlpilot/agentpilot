@@ -10,7 +10,7 @@ with an HTTP 200, so nothing about the response says "blocked" except the body.
 
 Two shapes, in the order you should reach for them:
 
-  * `scrape_with_ladder()` -- `browser.scrape(tier="auto")`. Everything that
+  * `scrape_with_ladder()` -- `cp.scrape(tier="auto")`. Everything that
     answers a wall lives here: the site-root warm-up, the `_abck` wait, block
     classification, and an escalation ladder that retries on a higher tier with
     a fresh identity, proxy and fingerprint (`session/ephemeral.py`).
@@ -24,15 +24,15 @@ Four things matter on a target like this:
     detection. `basic` fetches over plain HTTP first and gets walled.
   * **Headful.** A real window, and the OS-level input path the driver only has
     with a display. This is not cosmetic: running headless was what served the
-    "Robot or human?" wall on every attempt. Set on the `Browser` rather than
-    per-session, because `scrape()` decides `headful` from the rung it is on
-    and its first rung is headless -- see `_browser()`.
-  * **`detect_blocks=True` on the session.** Off (the default, right for agent
-    runs) the warm-up skips its `_abck` wait and nothing is ever classified --
-    so the wall is extracted and returned as though it were the product page.
-  * **A residential exit.** Protected tiers ask for one; without a
-    `proxy_pinner` every run leaves from your own IP. Set `CRAWLPILOT_PROXY_URL`
-    to wire one -- see `_proxy_pinner()`.
+    "Robot or human?" wall on every attempt. Set on the client rather than
+    per-session, because `scrape()` decides `headful` from the rung it is on and
+    its first rung is headless -- see `_client()`.
+  * **`detect_blocks`.** On by default on the client (off on a bare
+    `Browser.session()`, which is right for agent runs). Off, the warm-up skips
+    its `_abck` wait and nothing is ever classified -- so the wall is extracted
+    and returned as though it were the product page.
+  * **A residential exit.** Protected tiers ask for one; without one every run
+    leaves from your own IP. Set `CRAWLPILOT_PROXY_URL` and the client wires it.
 
 `RetailExtension` contributes Walmart's own block signals (a landed `/blocked`
 URL, a `/ip/` page under 300 KB) through the ordinary `BlockMount` seam.
@@ -47,11 +47,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from agentpilot.control.retail_extension import RetailExtension
-from crawlpilot.api import Browser, BrowserSession
-from crawlpilot.identity.proxy_pinning import ProxyPinner
-from crawlpilot.policy.stores import InMemoryStateStore
-from crawlpilot.spi.errors import ChallengeDetected, WaitTimeout
-from crawlpilot.spi.proxy import ProxyEndpoint
+from crawlpilot import AsyncCrawlpilot, BrowserSession, ChallengeDetected, WaitTimeout
 
 PRODUCT_URL = (
     "https://www.walmart.com/ip/Dove-Body-Wash-Strawberry-Cookie-20oz/7843261295"
@@ -65,64 +61,38 @@ it `Browser` mints a temp dir and deletes it on close -- a fresh cold visitor
 every run, which on a scored site is the expensive path."""
 
 
-def _proxy_pinner() -> ProxyPinner | None:
-    """A residential exit from `CRAWLPILOT_PROXY_URL`, or `None` to go direct.
+def _client() -> AsyncCrawlpilot:
+    """The client, with this target's specifics filled in.
 
-    `InMemoryStateStore` keeps the identity->endpoint pinning in this process,
-    so a single-process crawler needs no Redis. The platform swaps in its
-    Redis-backed store and its tenant-aware provider; nothing else changes.
+    `proxy=` takes a URL -- the client builds the `ProxyPinner`, its
+    `StateStore` and the `ProxyEndpoint` behind it. `detect_blocks` is already
+    on by default here, which is what turns a returned CAPTCHA into a raised
+    `ChallengeDetected` instead of markdown that looks like a product page.
     """
 
-    url = os.environ.get("CRAWLPILOT_PROXY_URL", "").strip()
-    if not url:
-        return None
-    parts = urlsplit(url)
-    if not parts.hostname or not parts.port:
-        raise SystemExit(f"CRAWLPILOT_PROXY_URL is not a full proxy URL: {url!r}")
-    endpoint = ProxyEndpoint(
-        scheme=parts.scheme or "http",
-        host=parts.hostname,
-        port=parts.port,
-        username=parts.username,
-        password=parts.password,
-        # Protected tiers ask the pool for `residential`; tagging it here is
-        # what makes that request match rather than fall through to the
-        # whole pool (`policy.providers.StaticProxies.endpoints_for`).
-        tier="residential",
-        country="US",
-    )
-    return ProxyPinner(InMemoryStateStore(), [endpoint])
-
-
-def _browser() -> Browser:
-    pinner = _proxy_pinner()
-    if pinner is None:
+    proxy = os.environ.get("CRAWLPILOT_PROXY_URL", "").strip() or None
+    if proxy is None:
         print(
             "note: no CRAWLPILOT_PROXY_URL -- going out on this machine's own IP.\n"
             "      If you get walled, that is the first thing to change."
         )
-    return Browser(
-        # Real Chrome by default: `driver/browser_discovery.py` explains why it
-        # beats bundled Chromium on a site that fingerprints the browser. Set
-        # CRAWLPILOT_BROWSER_CHANNEL=chromium to override (and on arm64 you
-        # must -- `patchright install chrome` publishes no arm64 build).
+    return AsyncCrawlpilot(
+        proxy=proxy,
+        proxy_country="US",
+        # Headful for the whole client, `scrape()` included: an `auto` scrape
+        # runs its first rung on `stealth`, and `ephemeral.py` only asks for a
+        # window on the `enhanced` rung -- so without this the run that
+        # succeeds is the one you never see. Headless is also a bot signal in
+        # its own right, which is what got this script walled to begin with.
+        headful=True,
+        # Real Chrome by default; `driver/browser_discovery.py` explains why it
+        # beats bundled Chromium on a site that fingerprints the browser. On
+        # arm64 you must override -- `patchright install chrome` has no build.
         channel=os.environ.get("CRAWLPILOT_BROWSER_CHANNEL") or None,
-        # Headful for the whole browser, not per-session -- this is the only
-        # way to get a window on the `scrape()` path. `run_ephemeral_scrape`
-        # sets `headful = attempt_tier == "enhanced"`, so an `auto` scrape runs
-        # its first (`stealth`) rung headless, and that rung is the one that
-        # usually succeeds -- no window, ever, unless it had to escalate.
-        # `headless=` on the browser is the documented hard override: it wins
-        # over the per-open flag, because the caller configured the browser and
-        # the session layer only expressed a preference.
-        #
-        # Still a preference in the end -- `ensure_display()` degrades to
-        # headless on a box with no display rather than failing the launch --
-        # so this stays runnable over SSH and in CI.
-        headless=False,
         profiles_root=PROFILES_ROOT,
+        # Walmart's own block signals -- a landed `/blocked` URL, a `/ip/` page
+        # under 300 KB -- through the ordinary extension seam.
         extensions=[RetailExtension()],
-        proxy_pinner=pinner,
     )
 
 
@@ -135,8 +105,8 @@ async def scrape_with_ladder(url: str) -> str:
     """
 
     PROFILES_ROOT.mkdir(parents=True, exist_ok=True)
-    async with _browser() as browser:
-        document = await browser.scrape(url, tier="auto", formats=("markdown",))
+    async with _client() as cp:
+        document = await cp.scrape(url, tier="auto")
         print(f"tier used: {document.metadata.tier_used}  status: {document.metadata.status_code}")
         print(f"title:     {document.metadata.title}")
         return document.markdown or ""
@@ -146,8 +116,8 @@ async def read_in_session(url: str) -> str:
     """A live context. No ladder -- a wall raises and the caller decides."""
 
     PROFILES_ROOT.mkdir(parents=True, exist_ok=True)
-    async with _browser() as browser:
-        async with browser.session(
+    async with _client() as cp:
+        async with cp.session(
             identity="walmart-shopper",  # opaque scope handle, not a domain
             domain="www.walmart.com",
             tier="stealth",
