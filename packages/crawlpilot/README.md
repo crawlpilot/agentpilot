@@ -84,6 +84,7 @@ uv run python examples/quickstart.py             # the three-liner
 uv run python examples/snapshot_and_click.py     # snapshot, refs, clicking, typed getters
 uv run python examples/crawl_to_markdown.py      # the async shape
 uv run python examples/walmart_product_markdown.py   # a target that fights back
+uv run python examples/remote_cdp_attach.py      # drive a fleet browser locally (needs a gateway)
 ```
 
 `snapshot_and_click.py` runs offline against a fixture it writes itself. The

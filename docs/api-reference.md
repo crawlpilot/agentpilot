@@ -23,6 +23,7 @@ Every public method, its real return type, and what it is for.
 | `channel` | `None` | Playwright channel: `chrome`, `chromium`, `msedge`… |
 | `executable_path` | `None` | A specific browser binary; wins over `channel` |
 | `cdp_url` | `None` | Attach to a browser running elsewhere; nothing is launched |
+| `cdp_headers` | `None` | Headers for the `cdp_url` discovery request, when it is behind auth |
 | `profiles_root` | temp dir | Where identity profiles live. Must persist for warm identities |
 | `extensions` | `()` | `BlockMount`/`BrowseMount`/… contributors |
 | `detect_blocks` | `True` | Classify pages and wait for `_abck`. See [anti-detection](anti-detection.md) |
@@ -161,13 +162,34 @@ policy. `Crawlpilot` is a facade over exactly this.
 
 `Browser(config=None, *, driver, registry, proxy_pinner, prototype_provider,
 extensions, profiles_root, lease_ttl_seconds, egress, executable_path, channel,
-headful, cdp_url)`
+headful, cdp_url, cdp_headers)`
 
 | Method | Returns |
 |---|---|
 | `scrape(url, *, formats, tier, identity, options)` | `Document` |
 | `session(*, identity, domain, tier, headful, detect_blocks, locale, timezone_id, dialogs)` | context manager → `BrowserSession` |
 | `Browser.from_system_chrome(**kwargs)` | `Browser` pinned to installed Chrome |
+
+### Attaching to a managed remote browser
+
+`cdp_url` + `cdp_headers` are enough to drive a browser on an agentpilot fleet
+with this same local object — the gateway serves Chrome's own `/json/version`
+shape, and answers with a websocket URL that already carries a credential:
+
+```python
+with Crawlpilot(
+    cdp_url=f"{gateway}/v1/sessions/{session_id}/cdp/json/version",
+    cdp_headers={"Authorization": f"Bearer {api_key}"},
+) as cp:
+    with cp.session() as page:
+        page.navigate("https://example.com")   # runs on the fleet
+```
+
+The session must have been opened with `enable_cdp=True`. Every verb then works
+unchanged, and you can drop to raw CDP — but each call is its own round trip,
+you need a browser driver installed locally, and the server-side tier ladder and
+egress guard do not apply. For scheduled or high-volume work use the batched
+HTTP path instead. See [`examples/remote_cdp_attach.py`](../examples/remote_cdp_attach.py).
 
 ---
 

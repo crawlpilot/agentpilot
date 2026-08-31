@@ -392,6 +392,7 @@ uv run python examples/quickstart.py                 # the three-liner
 uv run python examples/snapshot_and_click.py         # snapshot, refs, clicking (offline fixture)
 uv run python examples/crawl_to_markdown.py          # the async shape
 uv run python examples/walmart_product_markdown.py   # escalation ladder + block detection
+uv run python examples/remote_cdp_attach.py      # drive a fleet browser locally (needs a gateway)
 ```
 
 The library's own docs live in [`docs/`](docs/): [quickstart](docs/quickstart.md),

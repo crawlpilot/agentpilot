@@ -30,7 +30,7 @@ runs it on a private event loop in a worker thread. Not `asyncio.run` per call
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
@@ -94,6 +94,7 @@ class AsyncCrawlpilot:
         channel: str | None = None,
         executable_path: str | Path | None = None,
         cdp_url: str | None = None,
+        cdp_headers: Mapping[str, str] | None = None,
         profiles_root: Path | None = None,
         extensions: Sequence[Extension] = (),
         detect_blocks: bool = True,
@@ -131,6 +132,7 @@ class AsyncCrawlpilot:
             channel=channel,
             executable_path=executable_path,
             cdp_url=cdp_url,
+            cdp_headers=cdp_headers,
             profiles_root=profiles_root,
             extensions=extensions,
             **browser_kwargs,

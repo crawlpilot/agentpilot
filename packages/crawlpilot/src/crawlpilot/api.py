@@ -32,7 +32,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -170,6 +170,16 @@ class Browser:
         matching fields on `config.launch`, so a platform that builds its config
         from the environment still works unchanged.
 
+        `cdp_headers` goes with `cdp_url` and is what makes a *managed* remote
+        browser reachable: agentpilot serves Chrome's own `/json/version` shape
+        behind a bearer token, so attaching to a fleet browser is
+
+            Browser(cdp_url=f"{gateway}/v1/sessions/{sid}/cdp/json/version",
+                    cdp_headers={"Authorization": f"Bearer {key}"})
+
+        and every verb then runs against it unchanged. See
+        `config.LaunchConfig.cdp_headers`.
+
         `headful` decides visible-window-or-not for **everything this browser
         opens**, `scrape()` included, and it is the same word as
         `session(headful=...)` -- which it overrides. Until 0.2 this argument was
@@ -186,24 +196,27 @@ class Browser:
         """
 
         base = config or DEFAULTS
+        # Each override applied by name rather than by splatting a dict of mixed
+        # value types: `replace()` is typed per field, and a `**dict[str, str |
+        # bool | Mapping[...]]` splat loses that -- mypy reported one error per
+        # field, and the count grew every time a field of a new type was added.
+        # `x if x is not None else base.x` keeps the "None means leave it alone"
+        # rule the dict comprehension expressed.
+        launch = base.launch
         self.config = replace(
             base,
             launch=replace(
-                base.launch,
-                **{
-                    k: v
-                    for k, v in (
-                        ("executable_path", str(executable_path) if executable_path else None),
-                        ("channel", channel),
-                        # `LaunchConfig` speaks Playwright's `headless`; the
-                        # public argument is the positive one. Both keep `None`
-                        # meaning "work it out".
-                        ("headless", None if headful is None else not headful),
-                        ("cdp_url", cdp_url),
-                        ("cdp_headers", cdp_headers),
-                    )
-                    if v is not None
-                },
+                launch,
+                executable_path=(
+                    str(executable_path) if executable_path else launch.executable_path
+                ),
+                channel=channel if channel is not None else launch.channel,
+                # `LaunchConfig` speaks Playwright's `headless`; the public
+                # argument is the positive one. Both keep `None` meaning
+                # "work it out".
+                headless=(not headful) if headful is not None else launch.headless,
+                cdp_url=cdp_url if cdp_url is not None else launch.cdp_url,
+                cdp_headers=cdp_headers if cdp_headers is not None else launch.cdp_headers,
             ),
         )
         self.lease_ttl_seconds = lease_ttl_seconds
