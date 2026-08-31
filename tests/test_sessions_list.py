@@ -124,7 +124,7 @@ async def test_list_sessions_filters_by_tenant_query_param() -> None:
 async def test_list_sessions_reports_rss_when_pid_known(monkeypatch: pytest.MonkeyPatch) -> None:
     import agentpilot.gateway.routes.sessions as sessions_module
 
-    monkeypatch.setattr(sessions_module, "_read_pid_rss_mb", lambda _pid: 123.5)
+    monkeypatch.setattr(sessions_module, "read_pid_rss_mb", lambda _pid: 123.5)
     identity = _identity("acme", "dana")
     ctx = _ctx(identity, pid=4242)
     session = _session("sess-3", identity, ctx, "lease-3")

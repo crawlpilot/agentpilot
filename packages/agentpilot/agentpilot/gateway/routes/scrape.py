@@ -104,7 +104,7 @@ async def scrape(
         exclude_tags=tuple(req.exclude_tags) or None,
         timeout_ms=req.timeout_ms,
         wait_for_ms=req.wait_for_ms,
-        actions=tuple(to_spi_action(a) for a in req.actions),
+        actions=tuple(to_spi_action(a, wiring.extensions.tools) for a in req.actions),
         screenshot=req.screenshot,
         full_page_screenshot=req.full_page_screenshot,
         extract=ExtractConfig(json_schema=req.extract.json_schema, prompt=req.extract.prompt)

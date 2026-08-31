@@ -7,7 +7,7 @@ validation on top of it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,10 +69,40 @@ class SessionOpenResponse(BaseModel):
 _WIRE_MODELS = {spec.name: spec.wire_model() for spec in CATALOG}
 globals().update({model.__name__: model for model in _WIRE_MODELS.values()})
 
+
+class ExtensionActionIn(BaseModel):
+    """A verb this *build* does not know, deferred to the server's registry.
+
+    The union above is built from `CATALOG` at import -- before any
+    `ExtensionRegistry` exists -- so a verb contributed by a `ToolMount`
+    extension could never be dispatched over HTTP at all. The namespacing that
+    exists precisely so a third party can ship `walmart.solve_wall` had nothing
+    that could accept one.
+
+    Making the *published* union per-deployment is not the fix: routers are
+    built at import, and an OpenAPI document that changes with the installed
+    extensions is worse to consume, not better. So the schema keeps documenting
+    what this build ships, and anything else falls through to here and is
+    validated against the live registry in `action_conversion.to_spi_action` --
+    where the verb's own `ToolSpec` supplies the schema, `domains` is honoured,
+    and an unknown name produces a message naming what *is* available.
+
+    Two doors, matching the two kinds of caller: typed built-ins for anyone
+    coding against the published schema, this for extension verbs and for a
+    client running a release behind its server.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    type: str
+
+
 if TYPE_CHECKING:  # names the generator produces, spelled out for type checkers
     ActionIn = Any
 else:
-    ActionIn = union_of(list(_WIRE_MODELS.values()))
+    # An outer, *non*-discriminated union: pydantic tries the discriminated
+    # built-ins first and falls back to the passthrough. A discriminated union
+    # cannot carry a catch-all -- that is what the extra nesting buys.
+    ActionIn = Union[union_of(list(_WIRE_MODELS.values())), ExtensionActionIn]  # noqa: UP007
 
 
 class ExecuteRequest(BaseModel):

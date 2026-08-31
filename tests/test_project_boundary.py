@@ -14,6 +14,7 @@ codebase in two directories again.
 from __future__ import annotations
 
 import ast
+import importlib
 import pathlib
 
 import crawlpilot
@@ -48,13 +49,10 @@ PUBLIC_SUBMODULES = {
 `crawlpilot.driver` is deliberately absent: only the composition root
 constructs a driver, and it reaches it through the facade.
 
-The rule is **prefix-level today**, so `crawlpilot.spi.scrape` passes because
-`crawlpilot.spi` is published. That is the honest state at 0.1: these packages
-are the supported surface, and what it catches is an import of an *unlisted*
-one -- which is the actual failure mode, since that is how the split turns back
-into one codebase in two directories. Tightening this to `crawlpilot.__all__`
-only means giving each package a curated `__init__`, and is worth doing before
-the first external consumer."""
+This is the first of three rules, and the coarsest -- it catches an import of an
+*unlisted* package, which is how a split turns back into one codebase in two
+directories. `test_no_private_names_cross_the_boundary` and
+`test_imported_names_are_in_their_modules_all` narrow it from there."""
 
 COMPOSITION_ROOTS = {"gateway/wiring.py"}
 """The only files allowed to name the concrete driver."""
@@ -73,12 +71,33 @@ def _crawlpilot_imports() -> list[tuple[pathlib.Path, int, str]]:
     return found
 
 
+def _imported_names() -> list[tuple[pathlib.Path, int, str, str]]:
+    """`(file, line, module, name)` for every `from crawlpilot.x import name`.
+
+    The name is what the two narrower rules below need and what the module-level
+    walk above discards.
+    """
+
+    found: list[tuple[pathlib.Path, int, str, str]] = []
+    for path in AGENTPILOT.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("crawlpilot"):
+                for alias in node.names:
+                    found.append((path, node.lineno, node.module or "", alias.name))
+    return found
+
+
 def test_the_boundary_is_actually_exercised() -> None:
     """A guard that finds nothing proves nothing -- and after the Phase 7 move
-    several path-based guards silently started passing on empty directories."""
+    several path-based guards silently started passing on empty directories.
+
+    The floor is near the real count rather than a token `> 0`, so a refactor
+    that empties the walk fails here instead of quietly passing every rule.
+    """
 
     assert AGENTPILOT.is_dir(), AGENTPILOT
-    assert len(_crawlpilot_imports()) > 20
+    assert len(_crawlpilot_imports()) > 60
+    assert len(_imported_names()) > 90
 
 
 def test_agentpilot_imports_only_published_crawlpilot_modules() -> None:
@@ -97,6 +116,66 @@ def test_agentpilot_imports_only_published_crawlpilot_modules() -> None:
     ]
     assert not offenders, (
         "agentpilot reached past crawlpilot's published API:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_no_private_names_cross_the_boundary() -> None:
+    """The second rule, and the one that caught a real defect.
+
+    A module can be published while a name inside it is not. `routes/sessions.py`
+    imported `crawlpilot.session.reaper._read_pid_rss_mb` -- through the
+    underscore -- and the prefix rule had nothing to say about it, because
+    `crawlpilot.session` is published. A leading underscore is the author saying
+    "this may move without notice"; reaching through one across a distribution
+    boundary is how a patch release breaks a consumer.
+
+    The fix is never to rename the caller's import. It is to decide: either the
+    name is part of what the module offers, and loses its underscore (which is
+    what happened -- its sibling `read_meminfo_used_pct` was already public), or
+    the caller needs a different answer.
+    """
+
+    offenders = [
+        f"{path.relative_to(AGENTPILOT)}:{lineno}: {module}.{name}"
+        for path, lineno, module, name in _imported_names()
+        if name.startswith("_")
+    ]
+    assert not offenders, (
+        "agentpilot imported a private name from crawlpilot:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_imported_names_are_in_their_modules_all() -> None:
+    """The third rule: where a module curates an `__all__`, honour it.
+
+    Applied only to modules that actually declare one, which makes it a ratchet
+    rather than a cliff -- adding `__all__` to a crawlpilot module tightens the
+    boundary around it, and no module is forced to declare one before its
+    surface has settled. `spi`, `session`, `dom`, `identity`, `egress`,
+    `extraction`, `policy`, `tiers`, `extensions`, `tools` and `wire` declare
+    theirs today.
+
+    A module that fails to import is skipped rather than failing: this suite runs
+    against installs with and without the driver extras, and an absent optional
+    dependency is not a boundary violation.
+    """
+
+    offenders: list[str] = []
+    for path, lineno, module, name in _imported_names():
+        try:
+            imported = importlib.import_module(module)
+        except Exception:
+            continue
+        published = getattr(imported, "__all__", None)
+        if published is None or name in published:
+            continue
+        offenders.append(f"{path.relative_to(AGENTPILOT)}:{lineno}: {module}.{name}")
+
+    assert not offenders, (
+        "agentpilot imported a name its module does not publish in __all__:\n  "
+        + "\n  ".join(offenders)
+        + "\n\nEither add it to that module's __all__ (if it is meant to be part "
+        "of the surface) or stop depending on it."
     )
 
 

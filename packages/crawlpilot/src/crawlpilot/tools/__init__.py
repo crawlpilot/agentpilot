@@ -17,6 +17,7 @@ from crawlpilot.tools.registry import (
     DuplicateToolError,
     ToolRegistry,
     UnknownProfileError,
+    UnknownToolError,
     browser_tools,
     profile,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "ToolRegistry",
     "ToolSpec",
     "UnknownProfileError",
+    "UnknownToolError",
     "browser_tools",
     "profile",
     "to_anthropic",

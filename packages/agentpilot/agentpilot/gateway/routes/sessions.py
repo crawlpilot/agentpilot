@@ -42,7 +42,7 @@ from crawlpilot.session.interactive import (
     open_interactive_session,
     release_interactive_session,
 )
-from crawlpilot.session.reaper import _read_pid_rss_mb
+from crawlpilot.session.reaper import read_pid_rss_mb
 from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.errors import NodeLost
 from crawlpilot.wire import to_wire
@@ -151,7 +151,7 @@ async def list_sessions(
         if effective_tenant is not None and tenant_of(session.identity) != effective_tenant:
             continue
         lease = lease_by_id.get(session.lease_id)
-        rss_mb = _read_pid_rss_mb(session.ctx.pid) if session.ctx.pid is not None else None
+        rss_mb = read_pid_rss_mb(session.ctx.pid) if session.ctx.pid is not None else None
         parts = parts_of(session.identity)
         out.append(
             SessionOut(
@@ -181,7 +181,7 @@ async def execute_session(
     session = _get_session(wiring, session_id)
     requests_total.labels(tenant=tenant_of(session.identity), route="execute_session").inc()
 
-    actions = [to_spi_action(a) for a in req.actions]
+    actions = [to_spi_action(a, wiring.extensions.tools) for a in req.actions]
     try:
         with execute_duration_seconds.time():
             result = await execute_on_session(

@@ -16,15 +16,26 @@ means an extension can shadow a built-in verb and nothing says so.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
+from typing import Any
 
 from crawlpilot.tools.catalog import CATALOG
-from crawlpilot.tools.spec import Safety, ToolSpec
+from crawlpilot.tools.spec import Safety, ToolSpec, union_of
 
 BROWSER_NAMESPACE = "browser"
 
 
 class DuplicateToolError(ValueError):
     pass
+
+
+class UnknownToolError(ValueError):
+    """A wire payload named a verb this registry does not have.
+
+    Distinct from a `ValidationError` (the verb exists, the arguments do not
+    fit) because the two mean different things to a caller and deserve different
+    HTTP statuses -- and because the message can name what *is* available, which
+    a schema rejection cannot.
+    """
 
 
 class ToolRegistry:
@@ -111,6 +122,68 @@ class ToolRegistry:
                 continue
             out._specs[key] = spec  # noqa: SLF001 -- same class, bypasses the dup check
         return out
+
+    # ---------------------------------------------------------------- unions
+    #
+    # The registry can project itself, so the schema a boundary validates
+    # against follows from *this* registry rather than from the built-in
+    # catalog. That distinction is the whole point.
+    #
+    # `gateway/schemas.py` built its union as
+    # `union_of([spec.wire_model() for spec in CATALOG])` at module import --
+    # before any `ExtensionRegistry` exists. Three consequences, none intended:
+    # a `ToolMount` extension's verbs could never be dispatched over HTTP at
+    # all; `ToolSpec.domains` had no effect at the boundary, so a site-specific
+    # verb was offered everywhere; and `safety="sensitive"` could not be
+    # withheld per deployment. Adapted from browser-use's
+    # `Registry.create_action_model`, which builds its union from the live
+    # registry for exactly these reasons.
+
+    def wire_union(self, **narrow: Any) -> Any:
+        """A discriminated union of this registry's verbs, HTTP projection.
+
+        Keyword arguments are passed to `subset()`, so a caller narrows and
+        projects in one step -- `wire_union(page_url=url)` is the schema that
+        page's verbs actually justify.
+        """
+
+        return union_of([spec.wire_model() for spec in self.subset(**narrow)])
+
+    def agent_union(self, **narrow: Any) -> Any:
+        """The same, in the agent projection -- descriptions included, narrower
+        fields. Implies `agent_exposed=True`: a verb with no agent projection
+        cannot be in a union built for a model."""
+
+        narrow.setdefault("agent_exposed", True)
+        return union_of([spec.agent_model() for spec in self.subset(**narrow)])
+
+    def parse_wire_action(self, payload: dict[str, Any]) -> Any:
+        """One `{"type": ..., ...}` from the wire -> its `spi.actions` dataclass.
+
+        Validated against *this* registry, so a verb an extension contributed is
+        accepted here and a verb this deployment withheld is not -- which is the
+        thing a union frozen at import could not express either way.
+
+        `type` may be bare (`"click"`) or namespaced (`"walmart.solve_wall"`).
+        Bare names resolve in the `browser` namespace, preserving what every
+        existing client sends.
+
+        Raises `UnknownToolError` for a verb this registry does not have, and
+        `pydantic.ValidationError` for one whose arguments do not fit -- the
+        caller decides which HTTP status each deserves.
+        """
+
+        if not isinstance(payload, dict) or "type" not in payload:
+            raise UnknownToolError("each action needs a 'type'")
+        name = payload["type"]
+        spec = self.get(name) if isinstance(name, str) else None
+        if spec is None:
+            raise UnknownToolError(
+                f"no such tool {name!r}; this deployment offers: "
+                f"{', '.join(sorted(self.names))}"
+            )
+        parsed = spec.wire_model().model_validate({**payload, "type": spec.name})
+        return spec.from_model(parsed)
 
 
 def browser_tools() -> ToolRegistry:

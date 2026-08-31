@@ -37,7 +37,12 @@ from crawlpilot.tiers import TierPolicy
 
 if TYPE_CHECKING:
     from agentpilot.placement.placer import SessionPlacer
-    from crawlpilot.session.interactive import Session
+
+    # `InteractiveSession`, not `Session` -- the latter name does not exist in
+    # that module and never has. It survived only because this import is
+    # `TYPE_CHECKING`-guarded, so nothing ever tried to resolve it at runtime;
+    # mypy has been reporting it as a missing attribute the whole time.
+    from crawlpilot.session.interactive import InteractiveSession as Session
 
 log = structlog.get_logger(__name__)
 

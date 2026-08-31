@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agentpilot.observability.metrics import error_responses_total
 from crawlpilot.spi import errors as spi_errors
+from crawlpilot.tools import UnknownToolError
 
 log = structlog.get_logger(__name__)
 
@@ -88,6 +89,18 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(NotImplementedError)
     async def _not_implemented_handler(request: Request, exc: NotImplementedError) -> JSONResponse:
+        return _error_response(400, ErrorCode.BAD_REQUEST, str(exc))
+
+    @app.exception_handler(UnknownToolError)
+    async def _unknown_tool_handler(request: Request, exc: UnknownToolError) -> JSONResponse:
+        """A verb this deployment does not offer.
+
+        A client error, not a server one: the request named something real-
+        looking that this registry has no spec for -- an extension not installed
+        here, or a verb newer than this build. The message names what *is*
+        available, which is the part a bare schema rejection cannot do.
+        """
+
         return _error_response(400, ErrorCode.BAD_REQUEST, str(exc))
 
     @app.exception_handler(RequestValidationError)

@@ -69,7 +69,16 @@ def read_meminfo_used_pct() -> float | None:
         return None
 
 
-def _read_pid_rss_mb(pid: int) -> float | None:
+def read_pid_rss_mb(pid: int) -> float | None:
+    """Resident set size of one process, in MB, or `None` off Linux.
+
+    Public, like its sibling `read_meminfo_used_pct` -- the leading underscore
+    it carried was an oversight rather than a decision, and agentpilot's session
+    listing was already importing it through that underscore. Either the name is
+    part of what this module offers or the caller needs a different answer; it
+    is the former, so it is spelled that way.
+    """
+
     try:
         with open(f"/proc/{pid}/status") as f:
             for line in f:
@@ -139,7 +148,7 @@ class Reaper:
         for identity, ctx, _lease, _released_at in await self._registry.snapshot():
             if ctx.pid is None:
                 continue
-            rss = _read_pid_rss_mb(ctx.pid)
+            rss = read_pid_rss_mb(ctx.pid)
             if rss is not None and rss > self.per_process_ceiling_mb:
                 log.warning(
                     "reaper.per_process_ceiling_exceeded",

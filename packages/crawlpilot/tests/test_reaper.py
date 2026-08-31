@@ -100,7 +100,7 @@ async def test_per_process_ceiling_destroys_regardless_of_ttl(
         )
 
     ctx, _lease = await registry.acquire(_identity("a"), "owner", 300.0, opener)
-    monkeypatch.setattr(reaper_module, "_read_pid_rss_mb", lambda pid: 8192.0)
+    monkeypatch.setattr(reaper_module, "read_pid_rss_mb", lambda pid: 8192.0)
     reaper = Reaper(registry, driver, per_process_ceiling_mb=4096.0, idle_ttl_seconds=300.0)
 
     await reaper.scan_once()
