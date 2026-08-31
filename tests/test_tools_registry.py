@@ -36,6 +36,7 @@ from crawlpilot.tools import (
     to_anthropic,
     to_mcp,
     to_openai,
+    union_of,
 )
 from crawlpilot.wire import ActionResultWire
 
@@ -47,11 +48,37 @@ GOLDEN = pathlib.Path(__file__).parent / "golden"
 
 def test_the_wire_schema_matches_its_golden() -> None:
     """The published OpenAPI is pinned: a verb's shape must never drift by
-    accident, only by an edit to `tools/catalog.py` that also updates this."""
+    accident, only by an edit to `tools/catalog.py` that also updates this.
+
+    Updated once deliberately, when `ExtensionActionIn` was added: the union
+    went from a bare discriminated `oneOf` to an `anyOf` of that same
+    discriminated union plus a passthrough branch, so that a verb contributed by
+    a `ToolMount` extension can be dispatched over HTTP at all (it could not
+    before -- the union was built from `CATALOG` at import, before any
+    `ExtensionRegistry` exists). **No existing verb's schema changed**, which is
+    the property that mattered and the one this file is here to prove.
+    """
 
     golden = json.loads((GOLDEN / "wire_action_schema.json").read_text())
     generated = TypeAdapter(ActionIn).json_schema()
     assert generated == golden
+
+
+def test_the_passthrough_branch_changed_the_union_and_no_verb() -> None:
+    """The narrower guarantee, stated on its own so it cannot be lost in a
+    whole-document diff.
+
+    Compared against the union built from `CATALOG` *alone* -- what the schema
+    was before `ExtensionActionIn` -- rather than against a golden, so it stays
+    true as verbs are added and can never be satisfied by regenerating a file.
+    """
+
+    builtins_only = TypeAdapter(union_of([spec.wire_model() for spec in CATALOG])).json_schema()
+    now = TypeAdapter(ActionIn).json_schema()
+
+    assert set(now["$defs"]) - set(builtins_only["$defs"]) == {"ExtensionActionIn"}
+    for verb, schema in builtins_only["$defs"].items():
+        assert now["$defs"][verb] == schema, f"{verb} drifted"
 
 
 def test_the_agent_schema_matches_its_golden() -> None:

@@ -469,13 +469,21 @@ def _log_launched_browser(context: BrowserContext) -> None:
         log.debug("driver.browser_launched_unavailable", exc_info=True)
 
 
-async def _resolve_cdp_url(url: str) -> str:
+async def _resolve_cdp_url(url: str, headers: Mapping[str, str] | None = None) -> str:
     """Turn a CDP endpoint into something `connect_over_cdp` accepts.
 
     A `ws://` URL is already the websocket. An `http://` one is the discovery
     endpoint, and Playwright can take it directly -- but resolving
     `/json/version` ourselves gives a clear, early error naming the URL when
     nothing is listening, instead of a timeout deep inside the connect.
+
+    `headers` is for a discovery endpoint behind auth. A bare
+    `remote-debugging-port` needs none; a managed one does -- agentpilot serves
+    this exact shape at `/v1/sessions/{id}/cdp/json/version` behind a bearer
+    token, and answers with a `webSocketDebuggerUrl` that already carries a
+    credential in its query string. So the header is needed for this hop and
+    the websocket that follows needs nothing, which is why only this call takes
+    them. See `config.LaunchConfig.cdp_headers`.
     """
 
     if url.startswith("ws://") or url.startswith("wss://"):
@@ -489,7 +497,7 @@ async def _resolve_cdp_url(url: str) -> str:
         # send a request for 127.0.0.1 through a proxy that cannot route it.
         local = host in ("localhost", "127.0.0.1", "::1")
         async with httpx.AsyncClient(timeout=5.0, trust_env=not local) as client:
-            payload = (await client.get(version)).json()
+            payload = (await client.get(version, headers=dict(headers or {}))).json()
     except Exception as exc:
         raise ContextCrashed(
             f"no browser answering at {url!r}: {exc}. Check the browser is "
@@ -2583,7 +2591,7 @@ class PatchrightDriver:
         rather than left to be discovered from behaviour.
         """
 
-        url = await _resolve_cdp_url(self._launch.cdp_url or "")
+        url = await _resolve_cdp_url(self._launch.cdp_url or "", self._launch.cdp_headers)
         browser = await playwright.chromium.connect_over_cdp(url)
 
         # An already-running browser normally has a context; reuse it so we

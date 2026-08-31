@@ -24,6 +24,7 @@ the host process happens to export.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -146,6 +147,25 @@ class LaunchConfig:
     host) instead of launching one. When set, nothing local is launched and the
     profile/fingerprint/proxy settings do not apply -- whoever started that
     browser chose them."""
+
+    cdp_headers: Mapping[str, str] | None = None
+    """Headers for the `cdp_url` *discovery* request, when that endpoint is
+    behind auth.
+
+    A bare `remote-debugging-port` needs none, which is why this is `None` by
+    default. A managed browser does: agentpilot serves Chrome's own
+    `/json/version` shape at `/v1/sessions/{id}/cdp/json/version` behind
+    `Authorization: Bearer`, and answers with a `webSocketDebuggerUrl` that
+    already carries a credential in its query string. So this covers the one
+    hop that needs a header, and the websocket that follows needs nothing --
+
+        Crawlpilot(cdp_url=f"{gateway}/v1/sessions/{sid}/cdp/json/version",
+                   cdp_headers={"Authorization": f"Bearer {key}"})
+
+    which is the whole of what it takes to drive a remote fleet browser with the
+    local object. (Browsers cannot set headers on a WS handshake, which is why
+    the credential moves into the query string for that leg -- see
+    `agentpilot.gateway.auth_deps.resolve_query_api_key`.)"""
 
     @classmethod
     def from_env(cls) -> LaunchConfig:

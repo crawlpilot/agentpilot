@@ -13,6 +13,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agentpilot.observability.metrics import error_responses_total
@@ -107,6 +108,21 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        return _error_response(400, ErrorCode.BAD_REQUEST, "invalid request", details=exc.errors())
+
+    @app.exception_handler(ValidationError)
+    async def _model_validation_handler(request: Request, exc: ValidationError) -> JSONResponse:
+        """A Pydantic error raised *inside* a handler, not by FastAPI's own body
+        parsing -- so `RequestValidationError` above never sees it.
+
+        This became reachable when the action union gained its passthrough
+        branch: a malformed *built-in* (`{"type": "click"}` with no `ref`) no
+        longer matches the discriminated union, falls through to
+        `ExtensionActionIn`, and is re-validated against its real `ToolSpec` in
+        `action_conversion`. That is still a bad request and must not surface as
+        a 500 through the catch-all below.
+        """
+
         return _error_response(400, ErrorCode.BAD_REQUEST, "invalid request", details=exc.errors())
 
     @app.exception_handler(StarletteHTTPException)

@@ -159,6 +159,7 @@ class Browser:
         channel: str | None = None,
         headful: bool | None = None,
         cdp_url: str | None = None,
+        cdp_headers: Mapping[str, str] | None = None,
     ) -> None:
         """The launch arguments are flat rather than requiring a `BrowserConfig`.
 
@@ -199,6 +200,7 @@ class Browser:
                         # meaning "work it out".
                         ("headless", None if headful is None else not headful),
                         ("cdp_url", cdp_url),
+                        ("cdp_headers", cdp_headers),
                     )
                     if v is not None
                 },

@@ -40,7 +40,8 @@ def to_spi_action(action_in: Any, registry: ToolRegistry | None = None) -> spi_a
     # passthrough model declares only `type`.
     if type(action_in).__name__ == "ExtensionActionIn":
         payload = {"type": action_in.type, **(action_in.model_extra or {})}
-        return (registry or browser_tools()).parse_wire_action(payload)
+        resolved: spi_actions.Action = (registry or browser_tools()).parse_wire_action(payload)
+        return resolved
 
     spec = BY_NAME.get(action_in.type)
     if spec is None:

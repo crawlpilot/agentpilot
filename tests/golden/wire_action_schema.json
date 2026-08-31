@@ -307,6 +307,21 @@
       "title": "ExecuteJsActionIn",
       "type": "object"
     },
+    "ExtensionActionIn": {
+      "additionalProperties": true,
+      "description": "A verb this *build* does not know, deferred to the server's registry.\n\nThe union above is built from `CATALOG` at import -- before any\n`ExtensionRegistry` exists -- so a verb contributed by a `ToolMount`\nextension could never be dispatched over HTTP at all. The namespacing that\nexists precisely so a third party can ship `walmart.solve_wall` had nothing\nthat could accept one.\n\nMaking the *published* union per-deployment is not the fix: routers are\nbuilt at import, and an OpenAPI document that changes with the installed\nextensions is worse to consume, not better. So the schema keeps documenting\nwhat this build ships, and anything else falls through to here and is\nvalidated against the live registry in `action_conversion.to_spi_action` --\nwhere the verb's own `ToolSpec` supplies the schema, `domains` is honoured,\nand an unknown name produces a message naming what *is* available.\n\nTwo doors, matching the two kinds of caller: typed built-ins for anyone\ncoding against the published schema, this for extension verbs and for a\nclient running a release behind its server.",
+      "properties": {
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ExtensionActionIn",
+      "type": "object"
+    },
     "ExtractActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -1716,267 +1731,274 @@
       "type": "object"
     }
   },
-  "discriminator": {
-    "mapping": {
-      "check": "#/$defs/CheckActionIn",
-      "clear": "#/$defs/ClearActionIn",
-      "click": "#/$defs/ClickActionIn",
-      "clipboard_read": "#/$defs/ClipboardReadActionIn",
-      "clipboard_write": "#/$defs/ClipboardWriteActionIn",
-      "close_tab": "#/$defs/CloseTabActionIn",
-      "dialog_accept": "#/$defs/DialogAcceptActionIn",
-      "dialog_dismiss": "#/$defs/DialogDismissActionIn",
-      "dialog_status": "#/$defs/DialogStatusActionIn",
-      "diff_snapshot": "#/$defs/DiffSnapshotActionIn",
-      "double_click": "#/$defs/DoubleClickActionIn",
-      "download": "#/$defs/DownloadActionIn",
-      "drag": "#/$defs/DragActionIn",
-      "dropdown_options": "#/$defs/DropdownOptionsActionIn",
-      "execute_js": "#/$defs/ExecuteJsActionIn",
-      "extract": "#/$defs/ExtractActionIn",
-      "fill": "#/$defs/FillActionIn",
-      "find_elements": "#/$defs/FindElementsActionIn",
-      "find_text": "#/$defs/FindTextActionIn",
-      "focus": "#/$defs/FocusActionIn",
-      "forward": "#/$defs/ForwardActionIn",
-      "get_attribute": "#/$defs/GetAttributeActionIn",
-      "get_box": "#/$defs/GetBoxActionIn",
-      "get_count": "#/$defs/GetCountActionIn",
-      "get_html": "#/$defs/GetHtmlActionIn",
-      "get_styles": "#/$defs/GetStylesActionIn",
-      "get_text": "#/$defs/GetTextActionIn",
-      "get_title": "#/$defs/GetTitleActionIn",
-      "get_url": "#/$defs/GetUrlActionIn",
-      "get_value": "#/$defs/GetValueActionIn",
-      "go_back": "#/$defs/GoBackActionIn",
-      "hover": "#/$defs/HoverActionIn",
-      "insert_text": "#/$defs/InsertTextActionIn",
-      "is_checked": "#/$defs/IsCheckedActionIn",
-      "is_enabled": "#/$defs/IsEnabledActionIn",
-      "is_visible": "#/$defs/IsVisibleActionIn",
-      "key_down": "#/$defs/KeyDownActionIn",
-      "key_up": "#/$defs/KeyUpActionIn",
-      "list_frames": "#/$defs/ListFramesActionIn",
-      "list_tabs": "#/$defs/ListTabsActionIn",
-      "navigate": "#/$defs/NavigateActionIn",
-      "new_tab": "#/$defs/NewTabActionIn",
-      "pdf": "#/$defs/PdfActionIn",
-      "press": "#/$defs/PressActionIn",
-      "reload": "#/$defs/ReloadActionIn",
-      "screenshot": "#/$defs/ScreenshotActionIn",
-      "scroll": "#/$defs/ScrollActionIn",
-      "scroll_into_view": "#/$defs/ScrollIntoViewActionIn",
-      "search_page": "#/$defs/SearchPageActionIn",
-      "select_option": "#/$defs/SelectOptionActionIn",
-      "send_keys": "#/$defs/SendKeysActionIn",
-      "snapshot": "#/$defs/SnapshotActionIn",
-      "swipe": "#/$defs/SwipeActionIn",
-      "switch_tab": "#/$defs/SwitchTabActionIn",
-      "tap": "#/$defs/TapActionIn",
-      "uncheck": "#/$defs/UncheckActionIn",
-      "upload_file": "#/$defs/UploadFileActionIn",
-      "wait": "#/$defs/WaitActionIn",
-      "wait_for_download": "#/$defs/WaitForDownloadActionIn",
-      "wait_for_function": "#/$defs/WaitForFunctionActionIn",
-      "wait_for_load": "#/$defs/WaitForLoadActionIn",
-      "wait_for_selector": "#/$defs/WaitForSelectorActionIn",
-      "wait_for_text": "#/$defs/WaitForTextActionIn",
-      "wait_for_url": "#/$defs/WaitForUrlActionIn"
-    },
-    "propertyName": "type"
-  },
-  "oneOf": [
-    {
-      "$ref": "#/$defs/NavigateActionIn"
-    },
-    {
-      "$ref": "#/$defs/GoBackActionIn"
-    },
-    {
-      "$ref": "#/$defs/ForwardActionIn"
-    },
-    {
-      "$ref": "#/$defs/ReloadActionIn"
-    },
-    {
-      "$ref": "#/$defs/SnapshotActionIn"
-    },
-    {
-      "$ref": "#/$defs/DiffSnapshotActionIn"
-    },
-    {
-      "$ref": "#/$defs/ExtractActionIn"
-    },
-    {
-      "$ref": "#/$defs/ScreenshotActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitActionIn"
-    },
-    {
-      "$ref": "#/$defs/ExecuteJsActionIn"
-    },
-    {
-      "$ref": "#/$defs/ClickActionIn"
-    },
-    {
-      "$ref": "#/$defs/FillActionIn"
-    },
-    {
-      "$ref": "#/$defs/SelectOptionActionIn"
-    },
-    {
-      "$ref": "#/$defs/HoverActionIn"
-    },
-    {
-      "$ref": "#/$defs/PressActionIn"
-    },
-    {
-      "$ref": "#/$defs/ScrollActionIn"
-    },
-    {
-      "$ref": "#/$defs/SendKeysActionIn"
-    },
-    {
-      "$ref": "#/$defs/FindTextActionIn"
-    },
-    {
-      "$ref": "#/$defs/DropdownOptionsActionIn"
-    },
-    {
-      "$ref": "#/$defs/SearchPageActionIn"
-    },
-    {
-      "$ref": "#/$defs/FindElementsActionIn"
-    },
-    {
-      "$ref": "#/$defs/UploadFileActionIn"
-    },
-    {
-      "$ref": "#/$defs/DoubleClickActionIn"
-    },
-    {
-      "$ref": "#/$defs/FocusActionIn"
-    },
-    {
-      "$ref": "#/$defs/CheckActionIn"
-    },
-    {
-      "$ref": "#/$defs/UncheckActionIn"
-    },
-    {
-      "$ref": "#/$defs/ScrollIntoViewActionIn"
-    },
-    {
-      "$ref": "#/$defs/ClearActionIn"
-    },
-    {
-      "$ref": "#/$defs/DragActionIn"
-    },
-    {
-      "$ref": "#/$defs/KeyDownActionIn"
-    },
-    {
-      "$ref": "#/$defs/KeyUpActionIn"
-    },
-    {
-      "$ref": "#/$defs/InsertTextActionIn"
-    },
-    {
-      "$ref": "#/$defs/TapActionIn"
-    },
-    {
-      "$ref": "#/$defs/SwipeActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForSelectorActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForTextActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForUrlActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForLoadActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForFunctionActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetTextActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetHtmlActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetValueActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetAttributeActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetCountActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetBoxActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetStylesActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetUrlActionIn"
-    },
-    {
-      "$ref": "#/$defs/GetTitleActionIn"
-    },
-    {
-      "$ref": "#/$defs/IsVisibleActionIn"
-    },
-    {
-      "$ref": "#/$defs/IsEnabledActionIn"
-    },
-    {
-      "$ref": "#/$defs/IsCheckedActionIn"
-    },
-    {
-      "$ref": "#/$defs/PdfActionIn"
-    },
-    {
-      "$ref": "#/$defs/ListFramesActionIn"
-    },
-    {
-      "$ref": "#/$defs/DownloadActionIn"
-    },
-    {
-      "$ref": "#/$defs/WaitForDownloadActionIn"
-    },
-    {
-      "$ref": "#/$defs/ClipboardReadActionIn"
-    },
-    {
-      "$ref": "#/$defs/ClipboardWriteActionIn"
-    },
-    {
-      "$ref": "#/$defs/DialogStatusActionIn"
-    },
-    {
-      "$ref": "#/$defs/DialogAcceptActionIn"
-    },
-    {
-      "$ref": "#/$defs/DialogDismissActionIn"
-    },
-    {
-      "$ref": "#/$defs/NewTabActionIn"
-    },
-    {
-      "$ref": "#/$defs/CloseTabActionIn"
-    },
-    {
-      "$ref": "#/$defs/SwitchTabActionIn"
-    },
-    {
-      "$ref": "#/$defs/ListTabsActionIn"
+  "anyOf": [
+    {
+      "discriminator": {
+        "mapping": {
+          "check": "#/$defs/CheckActionIn",
+          "clear": "#/$defs/ClearActionIn",
+          "click": "#/$defs/ClickActionIn",
+          "clipboard_read": "#/$defs/ClipboardReadActionIn",
+          "clipboard_write": "#/$defs/ClipboardWriteActionIn",
+          "close_tab": "#/$defs/CloseTabActionIn",
+          "dialog_accept": "#/$defs/DialogAcceptActionIn",
+          "dialog_dismiss": "#/$defs/DialogDismissActionIn",
+          "dialog_status": "#/$defs/DialogStatusActionIn",
+          "diff_snapshot": "#/$defs/DiffSnapshotActionIn",
+          "double_click": "#/$defs/DoubleClickActionIn",
+          "download": "#/$defs/DownloadActionIn",
+          "drag": "#/$defs/DragActionIn",
+          "dropdown_options": "#/$defs/DropdownOptionsActionIn",
+          "execute_js": "#/$defs/ExecuteJsActionIn",
+          "extract": "#/$defs/ExtractActionIn",
+          "fill": "#/$defs/FillActionIn",
+          "find_elements": "#/$defs/FindElementsActionIn",
+          "find_text": "#/$defs/FindTextActionIn",
+          "focus": "#/$defs/FocusActionIn",
+          "forward": "#/$defs/ForwardActionIn",
+          "get_attribute": "#/$defs/GetAttributeActionIn",
+          "get_box": "#/$defs/GetBoxActionIn",
+          "get_count": "#/$defs/GetCountActionIn",
+          "get_html": "#/$defs/GetHtmlActionIn",
+          "get_styles": "#/$defs/GetStylesActionIn",
+          "get_text": "#/$defs/GetTextActionIn",
+          "get_title": "#/$defs/GetTitleActionIn",
+          "get_url": "#/$defs/GetUrlActionIn",
+          "get_value": "#/$defs/GetValueActionIn",
+          "go_back": "#/$defs/GoBackActionIn",
+          "hover": "#/$defs/HoverActionIn",
+          "insert_text": "#/$defs/InsertTextActionIn",
+          "is_checked": "#/$defs/IsCheckedActionIn",
+          "is_enabled": "#/$defs/IsEnabledActionIn",
+          "is_visible": "#/$defs/IsVisibleActionIn",
+          "key_down": "#/$defs/KeyDownActionIn",
+          "key_up": "#/$defs/KeyUpActionIn",
+          "list_frames": "#/$defs/ListFramesActionIn",
+          "list_tabs": "#/$defs/ListTabsActionIn",
+          "navigate": "#/$defs/NavigateActionIn",
+          "new_tab": "#/$defs/NewTabActionIn",
+          "pdf": "#/$defs/PdfActionIn",
+          "press": "#/$defs/PressActionIn",
+          "reload": "#/$defs/ReloadActionIn",
+          "screenshot": "#/$defs/ScreenshotActionIn",
+          "scroll": "#/$defs/ScrollActionIn",
+          "scroll_into_view": "#/$defs/ScrollIntoViewActionIn",
+          "search_page": "#/$defs/SearchPageActionIn",
+          "select_option": "#/$defs/SelectOptionActionIn",
+          "send_keys": "#/$defs/SendKeysActionIn",
+          "snapshot": "#/$defs/SnapshotActionIn",
+          "swipe": "#/$defs/SwipeActionIn",
+          "switch_tab": "#/$defs/SwitchTabActionIn",
+          "tap": "#/$defs/TapActionIn",
+          "uncheck": "#/$defs/UncheckActionIn",
+          "upload_file": "#/$defs/UploadFileActionIn",
+          "wait": "#/$defs/WaitActionIn",
+          "wait_for_download": "#/$defs/WaitForDownloadActionIn",
+          "wait_for_function": "#/$defs/WaitForFunctionActionIn",
+          "wait_for_load": "#/$defs/WaitForLoadActionIn",
+          "wait_for_selector": "#/$defs/WaitForSelectorActionIn",
+          "wait_for_text": "#/$defs/WaitForTextActionIn",
+          "wait_for_url": "#/$defs/WaitForUrlActionIn"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NavigateActionIn"
+        },
+        {
+          "$ref": "#/$defs/GoBackActionIn"
+        },
+        {
+          "$ref": "#/$defs/ForwardActionIn"
+        },
+        {
+          "$ref": "#/$defs/ReloadActionIn"
+        },
+        {
+          "$ref": "#/$defs/SnapshotActionIn"
+        },
+        {
+          "$ref": "#/$defs/DiffSnapshotActionIn"
+        },
+        {
+          "$ref": "#/$defs/ExtractActionIn"
+        },
+        {
+          "$ref": "#/$defs/ScreenshotActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitActionIn"
+        },
+        {
+          "$ref": "#/$defs/ExecuteJsActionIn"
+        },
+        {
+          "$ref": "#/$defs/ClickActionIn"
+        },
+        {
+          "$ref": "#/$defs/FillActionIn"
+        },
+        {
+          "$ref": "#/$defs/SelectOptionActionIn"
+        },
+        {
+          "$ref": "#/$defs/HoverActionIn"
+        },
+        {
+          "$ref": "#/$defs/PressActionIn"
+        },
+        {
+          "$ref": "#/$defs/ScrollActionIn"
+        },
+        {
+          "$ref": "#/$defs/SendKeysActionIn"
+        },
+        {
+          "$ref": "#/$defs/FindTextActionIn"
+        },
+        {
+          "$ref": "#/$defs/DropdownOptionsActionIn"
+        },
+        {
+          "$ref": "#/$defs/SearchPageActionIn"
+        },
+        {
+          "$ref": "#/$defs/FindElementsActionIn"
+        },
+        {
+          "$ref": "#/$defs/UploadFileActionIn"
+        },
+        {
+          "$ref": "#/$defs/DoubleClickActionIn"
+        },
+        {
+          "$ref": "#/$defs/FocusActionIn"
+        },
+        {
+          "$ref": "#/$defs/CheckActionIn"
+        },
+        {
+          "$ref": "#/$defs/UncheckActionIn"
+        },
+        {
+          "$ref": "#/$defs/ScrollIntoViewActionIn"
+        },
+        {
+          "$ref": "#/$defs/ClearActionIn"
+        },
+        {
+          "$ref": "#/$defs/DragActionIn"
+        },
+        {
+          "$ref": "#/$defs/KeyDownActionIn"
+        },
+        {
+          "$ref": "#/$defs/KeyUpActionIn"
+        },
+        {
+          "$ref": "#/$defs/InsertTextActionIn"
+        },
+        {
+          "$ref": "#/$defs/TapActionIn"
+        },
+        {
+          "$ref": "#/$defs/SwipeActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForSelectorActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForTextActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForUrlActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForLoadActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForFunctionActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetTextActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetHtmlActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetValueActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetAttributeActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetCountActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetBoxActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetStylesActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetUrlActionIn"
+        },
+        {
+          "$ref": "#/$defs/GetTitleActionIn"
+        },
+        {
+          "$ref": "#/$defs/IsVisibleActionIn"
+        },
+        {
+          "$ref": "#/$defs/IsEnabledActionIn"
+        },
+        {
+          "$ref": "#/$defs/IsCheckedActionIn"
+        },
+        {
+          "$ref": "#/$defs/PdfActionIn"
+        },
+        {
+          "$ref": "#/$defs/ListFramesActionIn"
+        },
+        {
+          "$ref": "#/$defs/DownloadActionIn"
+        },
+        {
+          "$ref": "#/$defs/WaitForDownloadActionIn"
+        },
+        {
+          "$ref": "#/$defs/ClipboardReadActionIn"
+        },
+        {
+          "$ref": "#/$defs/ClipboardWriteActionIn"
+        },
+        {
+          "$ref": "#/$defs/DialogStatusActionIn"
+        },
+        {
+          "$ref": "#/$defs/DialogAcceptActionIn"
+        },
+        {
+          "$ref": "#/$defs/DialogDismissActionIn"
+        },
+        {
+          "$ref": "#/$defs/NewTabActionIn"
+        },
+        {
+          "$ref": "#/$defs/CloseTabActionIn"
+        },
+        {
+          "$ref": "#/$defs/SwitchTabActionIn"
+        },
+        {
+          "$ref": "#/$defs/ListTabsActionIn"
+        }
+      ]
+    },
+    {
+      "$ref": "#/$defs/ExtensionActionIn"
     }
   ]
 }
