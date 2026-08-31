@@ -23,6 +23,8 @@ DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     # a model should reach for by default.
     "navigate",
     "go_back",
+    "forward",
+    "reload",
     "click",
     "fill",
     "select_option",
@@ -43,6 +45,24 @@ DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     "search_page",
     "find_elements",
     "diff_snapshot",
+    # Waiting for a state, rather than guessing at a fixed pause.
+    "wait_for_selector",
+    "wait_for_text",
+    "wait_for_url",
+    "wait_for_load",
+    # Checking one element, rather than assuming the last action worked.
+    "get_text",
+    "get_html",
+    "get_value",
+    "get_attribute",
+    "get_count",
+    "get_box",
+    "get_styles",
+    "get_url",
+    "get_title",
+    "is_visible",
+    "is_enabled",
+    "is_checked",
     "extract",
     "screenshot",
     # Tabs last -- needed, but rarely the right first move.

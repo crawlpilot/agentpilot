@@ -49,7 +49,16 @@ from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 from crawlpilot import metrics
 from crawlpilot.config import LaunchConfig
 from crawlpilot.dom.diff import diff_snapshots, render_change_block
-from crawlpilot.driver import browser_discovery, cdp_element, dialogs, humanize, mouse, warmup
+from crawlpilot.driver import (
+    browser_discovery,
+    cdp_element,
+    dialogs,
+    humanize,
+    mouse,
+    queries,
+    waits,
+    warmup,
+)
 from crawlpilot.driver.dialogs import DialogInterrupt, DialogWatcher, GuardedSession
 from crawlpilot.driver.dom_fusion_engine import capture_fused_tree
 from crawlpilot.driver.live_view import (
@@ -80,12 +89,26 @@ from crawlpilot.spi.actions import (
     FillAction,
     FindElementsAction,
     FindTextAction,
+    ForwardAction,
+    GetAttributeAction,
+    GetBoxAction,
+    GetCountAction,
+    GetHtmlAction,
+    GetStylesAction,
+    GetTextAction,
+    GetTitleAction,
+    GetUrlAction,
+    GetValueAction,
     GoBackAction,
     HoverAction,
+    IsCheckedAction,
+    IsEnabledAction,
+    IsVisibleAction,
     ListTabsAction,
     NavigateAction,
     NewTabAction,
     PressAction,
+    ReloadAction,
     ScreenshotAction,
     ScrollAction,
     SearchPageAction,
@@ -96,6 +119,11 @@ from crawlpilot.spi.actions import (
     TabInfo,
     UploadFileAction,
     WaitAction,
+    WaitForFunctionAction,
+    WaitForLoadAction,
+    WaitForSelectorAction,
+    WaitForTextAction,
+    WaitForUrlAction,
 )
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
 from crawlpilot.spi.egress import EgressPolicy
@@ -107,6 +135,7 @@ from crawlpilot.spi.errors import (
     SelectorNotFound,
     StaleRefError,
     TabNotFound,
+    WaitTimeout,
 )
 from crawlpilot.spi.geometry import BoundingBox
 from crawlpilot.spi.health import ContextHealth, HealthStatus
@@ -149,6 +178,32 @@ def _collect_backend_ids(node: dict[str, Any], into: set[int]) -> None:
     if content:
         _collect_backend_ids(content, into)
 
+
+_WAIT_FOR_ACTIONS = (
+    WaitForSelectorAction,
+    WaitForTextAction,
+    WaitForUrlAction,
+    WaitForLoadAction,
+    WaitForFunctionAction,
+)
+
+_QUERY_ACTIONS = (
+    GetTextAction,
+    GetHtmlAction,
+    GetValueAction,
+    GetAttributeAction,
+    GetCountAction,
+    GetBoxAction,
+    GetStylesAction,
+    GetUrlAction,
+    GetTitleAction,
+    IsVisibleAction,
+    IsEnabledAction,
+    IsCheckedAction,
+)
+"""Grouped so `_dispatch` stays a chain of verbs rather than a chain of twelve
+near-identical branches. `assert_never` still sees every member, because the
+union is exhausted by the group tuples plus the individual branches."""
 
 _DIALOG_ACTIONS = (DialogStatusAction, DialogAcceptAction, DialogDismissAction)
 """The only actions that may run while a dialog holds the renderer. Everything
@@ -1077,6 +1132,30 @@ class PatchrightDriver:
             live.epoch += 1
             live.nodes.reset()
             result.verifications.append(f"went back to {live.page.url}")
+        elif isinstance(action, ForwardAction):
+            try:
+                await live.page.go_forward(
+                    wait_until=action.wait_until, timeout=action.timeout_ms
+                )
+            except PlaywrightTimeoutError as exc:
+                raise NavigationTimeout(str(exc)) from exc
+            live.epoch += 1
+            live.nodes.reset()
+            result.verifications.append(f"went forward to {live.page.url}")
+        elif isinstance(action, ReloadAction):
+            try:
+                await live.page.reload(
+                    wait_until=action.wait_until, timeout=action.timeout_ms
+                )
+            except PlaywrightTimeoutError as exc:
+                raise NavigationTimeout(str(exc)) from exc
+            live.epoch += 1
+            live.nodes.reset()
+            result.verifications.append(f"reloaded {live.page.url}")
+        elif isinstance(action, _WAIT_FOR_ACTIONS):
+            await self._wait_for(live, action, result)
+        elif isinstance(action, _QUERY_ACTIONS):
+            result.readouts.append(await self._query(live, action))
         elif isinstance(action, SnapshotAction):
             if action.settle:
                 await self._settle(live)
@@ -1241,6 +1320,145 @@ class PatchrightDriver:
             result.tabs.append(await self._list_tabs(cctx))
         else:
             assert_never(action)
+
+    async def _wait_for(self, live: _Page, action: Action, result: ActionResult) -> None:
+        """Block until the page reaches the requested state, or raise."""
+
+        page = live.page
+        if isinstance(action, WaitForSelectorAction):
+            options = {"selector": action.selector, "state": action.state}
+            described = f"selector {action.selector!r} to be {action.state}"
+
+            async def condition() -> bool:
+                return bool(await page.evaluate(waits.SELECTOR_STATE_JS, options))
+
+        elif isinstance(action, WaitForTextAction):
+            described = f"text {action.text!r} to appear"
+
+            async def condition() -> bool:
+                return bool(await page.evaluate(waits.TEXT_PRESENT_JS, {"text": action.text}))
+
+        elif isinstance(action, WaitForUrlAction):
+            described = f"the URL to match {action.url!r}"
+
+            async def condition() -> bool:
+                return waits.url_matches(action.url, page.url)
+
+        elif isinstance(action, WaitForLoadAction):
+            # Playwright owns the lifecycle events, so this one delegates rather
+            # than polling for something it cannot observe from script.
+            try:
+                await page.wait_for_load_state(action.state, timeout=action.timeout_ms)
+            except PlaywrightTimeoutError as exc:
+                raise WaitTimeout(f"load state {action.state!r}", action.timeout_ms) from exc
+            result.verifications.append(f"page reached load state {action.state!r}")
+            return
+
+        elif isinstance(action, WaitForFunctionAction):
+            described = f"{action.expression!r} to be truthy"
+
+            async def condition() -> bool:
+                return bool(await page.evaluate(f"() => ({action.expression})"))
+
+        else:  # pragma: no cover -- `_WAIT_FOR_ACTIONS` and this must agree
+            raise AssertionError(f"unhandled wait action {type(action).__name__}")
+
+        await waits.poll_until(
+            condition,
+            timeout_ms=action.timeout_ms,
+            description=described,
+            poll_ms=getattr(action, "poll_ms", None),
+        )
+        result.verifications.append(f"waited for {described}")
+
+    async def _query(self, live: _Page, action: Action) -> str:
+        """Read one property of one element, as a readout line."""
+
+        if isinstance(action, GetUrlAction):
+            return f"url: {live.page.url}"
+        if isinstance(action, GetTitleAction):
+            return f"title: {await live.dialogs.guard(live.page.title())!r}"
+        if isinstance(action, GetCountAction):
+            count = await live.page.evaluate(
+                "(opts) => document.querySelectorAll(opts.selector).length",
+                {"selector": action.selector},
+            )
+            return f"count: {count} element(s) match {action.selector!r}"
+
+        ref = getattr(action, "ref", None)
+        selector = getattr(action, "selector", None)
+        queries.require_target(ref, selector)
+        target = queries.target_description(ref, selector)
+        options = queries.options_for(
+            attribute=getattr(action, "name", None) or None,
+            properties=getattr(action, "properties", None) or queries.DEFAULT_STYLE_PROPERTIES,
+            selector=selector,
+        )
+        read = await self._read_element(live, ref, selector, options)
+
+        if isinstance(action, GetTextAction):
+            return f"text of {target}: {read['text']!r}"
+        if isinstance(action, GetHtmlAction):
+            return f"html of {target}: {read['html']}"
+        if isinstance(action, GetValueAction):
+            return f"value of {target}: {read['value']!r}"
+        if isinstance(action, GetAttributeAction):
+            return f"{action.name} of {target}: {read['attr']!r}"
+        if isinstance(action, GetBoxAction):
+            return f"box of {target}: {queries.describe_box(read['box'])}"
+        if isinstance(action, GetStylesAction):
+            rendered = ", ".join(f"{k}={v!r}" for k, v in (read["styles"] or {}).items())
+            return f"styles of {target}: {rendered}"
+        if isinstance(action, IsVisibleAction):
+            return f"{target} is {'visible' if read['visible'] else 'not visible'}"
+        if isinstance(action, IsEnabledAction):
+            return f"{target} is {'enabled' if read['enabled'] else 'disabled'}"
+        if isinstance(action, IsCheckedAction):
+            state = "mixed" if read["indeterminate"] else str(read["checked"]).lower()
+            return f"{target} checked: {state}"
+        raise AssertionError(f"unhandled query action {type(action).__name__}")
+
+    async def _read_element(
+        self,
+        live: _Page,
+        ref: str | None,
+        selector: str | None,
+        options: dict[str, Any],
+    ) -> dict[str, Any]:
+        """One element's readable state, by ref or by selector.
+
+        The ref path goes through `Runtime.callFunctionOn` on the node the index
+        already holds -- no query, and it reaches inside iframes and shadow roots
+        that `document.querySelector` cannot. The selector path is the fallback
+        for a caller that has not snapshotted.
+        """
+
+        if ref is not None:
+            node, cdp = await self._resolve_ref(live, ref)
+            resolved = await cdp.send(
+                "DOM.resolveNode", {"backendNodeId": node.backend_node_id}
+            )
+            object_id = (resolved.get("object") or {}).get("objectId")
+            if not object_id:
+                raise StaleRefError(ref, epoch_superseded=False)
+            outcome = await cdp.send(
+                "Runtime.callFunctionOn",
+                {
+                    "objectId": object_id,
+                    "functionDeclaration": queries.NODE_READ_JS,
+                    "arguments": [{"value": options}],
+                    "returnByValue": True,
+                },
+            )
+            return cast(dict[str, Any], (outcome.get("result") or {}).get("value") or {})
+
+        assert selector is not None
+        read = await live.dialogs.guard(
+            live.page.evaluate(queries.SELECTOR_READ_JS, options)
+        )
+        if read is None:
+            raise SelectorNotFound(selector)
+        return cast(dict[str, Any], read)
 
     async def _snapshot_view(self, live: _Page, action: SnapshotAction) -> SnapshotView:
         """Turn a `SnapshotAction`'s options into the filters the serializer

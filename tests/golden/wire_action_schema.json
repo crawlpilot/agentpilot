@@ -294,6 +294,317 @@
       "title": "FindTextActionIn",
       "type": "object"
     },
+    "ForwardActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "forward",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ForwardActionIn",
+      "type": "object"
+    },
+    "GetAttributeActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_attribute",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetAttributeActionIn",
+      "type": "object"
+    },
+    "GetBoxActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_box",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetBoxActionIn",
+      "type": "object"
+    },
+    "GetCountActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "selector": {
+          "default": "",
+          "title": "Selector",
+          "type": "string"
+        },
+        "type": {
+          "const": "get_count",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetCountActionIn",
+      "type": "object"
+    },
+    "GetHtmlActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_html",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetHtmlActionIn",
+      "type": "object"
+    },
+    "GetStylesActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "properties": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Properties",
+          "type": "array"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_styles",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetStylesActionIn",
+      "type": "object"
+    },
+    "GetTextActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_text",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetTextActionIn",
+      "type": "object"
+    },
+    "GetTitleActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "get_title",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetTitleActionIn",
+      "type": "object"
+    },
+    "GetUrlActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "get_url",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetUrlActionIn",
+      "type": "object"
+    },
+    "GetValueActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "get_value",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GetValueActionIn",
+      "type": "object"
+    },
     "GoBackActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -327,6 +638,123 @@
         "ref"
       ],
       "title": "HoverActionIn",
+      "type": "object"
+    },
+    "IsCheckedActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "is_checked",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "IsCheckedActionIn",
+      "type": "object"
+    },
+    "IsEnabledActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "is_enabled",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "IsEnabledActionIn",
+      "type": "object"
+    },
+    "IsVisibleActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selector"
+        },
+        "type": {
+          "const": "is_visible",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "IsVisibleActionIn",
       "type": "object"
     },
     "ListTabsActionIn": {
@@ -414,6 +842,21 @@
         "key"
       ],
       "title": "PressActionIn",
+      "type": "object"
+    },
+    "ReloadActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "reload",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ReloadActionIn",
       "type": "object"
     },
     "ScreenshotActionIn": {
@@ -732,6 +1175,152 @@
       ],
       "title": "WaitActionIn",
       "type": "object"
+    },
+    "WaitForFunctionActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "title": "Expression",
+          "type": "string"
+        },
+        "poll_ms": {
+          "default": 100,
+          "title": "Poll Ms",
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_function",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "expression"
+      ],
+      "title": "WaitForFunctionActionIn",
+      "type": "object"
+    },
+    "WaitForLoadActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "default": "load",
+          "enum": [
+            "load",
+            "domcontentloaded",
+            "networkidle"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_load",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "WaitForLoadActionIn",
+      "type": "object"
+    },
+    "WaitForSelectorActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "selector": {
+          "title": "Selector",
+          "type": "string"
+        },
+        "state": {
+          "default": "visible",
+          "enum": [
+            "visible",
+            "hidden",
+            "attached",
+            "detached"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_selector",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "selector"
+      ],
+      "title": "WaitForSelectorActionIn",
+      "type": "object"
+    },
+    "WaitForTextActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "default": 10000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_text",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "title": "WaitForTextActionIn",
+      "type": "object"
+    },
+    "WaitForUrlActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "default": 10000,
+          "title": "Timeout Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "wait_for_url",
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "title": "WaitForUrlActionIn",
+      "type": "object"
     }
   },
   "discriminator": {
@@ -748,12 +1337,26 @@
       "fill": "#/$defs/FillActionIn",
       "find_elements": "#/$defs/FindElementsActionIn",
       "find_text": "#/$defs/FindTextActionIn",
+      "forward": "#/$defs/ForwardActionIn",
+      "get_attribute": "#/$defs/GetAttributeActionIn",
+      "get_box": "#/$defs/GetBoxActionIn",
+      "get_count": "#/$defs/GetCountActionIn",
+      "get_html": "#/$defs/GetHtmlActionIn",
+      "get_styles": "#/$defs/GetStylesActionIn",
+      "get_text": "#/$defs/GetTextActionIn",
+      "get_title": "#/$defs/GetTitleActionIn",
+      "get_url": "#/$defs/GetUrlActionIn",
+      "get_value": "#/$defs/GetValueActionIn",
       "go_back": "#/$defs/GoBackActionIn",
       "hover": "#/$defs/HoverActionIn",
+      "is_checked": "#/$defs/IsCheckedActionIn",
+      "is_enabled": "#/$defs/IsEnabledActionIn",
+      "is_visible": "#/$defs/IsVisibleActionIn",
       "list_tabs": "#/$defs/ListTabsActionIn",
       "navigate": "#/$defs/NavigateActionIn",
       "new_tab": "#/$defs/NewTabActionIn",
       "press": "#/$defs/PressActionIn",
+      "reload": "#/$defs/ReloadActionIn",
       "screenshot": "#/$defs/ScreenshotActionIn",
       "scroll": "#/$defs/ScrollActionIn",
       "search_page": "#/$defs/SearchPageActionIn",
@@ -762,7 +1365,12 @@
       "snapshot": "#/$defs/SnapshotActionIn",
       "switch_tab": "#/$defs/SwitchTabActionIn",
       "upload_file": "#/$defs/UploadFileActionIn",
-      "wait": "#/$defs/WaitActionIn"
+      "wait": "#/$defs/WaitActionIn",
+      "wait_for_function": "#/$defs/WaitForFunctionActionIn",
+      "wait_for_load": "#/$defs/WaitForLoadActionIn",
+      "wait_for_selector": "#/$defs/WaitForSelectorActionIn",
+      "wait_for_text": "#/$defs/WaitForTextActionIn",
+      "wait_for_url": "#/$defs/WaitForUrlActionIn"
     },
     "propertyName": "type"
   },
@@ -772,6 +1380,12 @@
     },
     {
       "$ref": "#/$defs/GoBackActionIn"
+    },
+    {
+      "$ref": "#/$defs/ForwardActionIn"
+    },
+    {
+      "$ref": "#/$defs/ReloadActionIn"
     },
     {
       "$ref": "#/$defs/SnapshotActionIn"
@@ -826,6 +1440,57 @@
     },
     {
       "$ref": "#/$defs/UploadFileActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForSelectorActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForTextActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForUrlActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForLoadActionIn"
+    },
+    {
+      "$ref": "#/$defs/WaitForFunctionActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetTextActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetHtmlActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetValueActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetAttributeActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetCountActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetBoxActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetStylesActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetUrlActionIn"
+    },
+    {
+      "$ref": "#/$defs/GetTitleActionIn"
+    },
+    {
+      "$ref": "#/$defs/IsVisibleActionIn"
+    },
+    {
+      "$ref": "#/$defs/IsEnabledActionIn"
+    },
+    {
+      "$ref": "#/$defs/IsCheckedActionIn"
     },
     {
       "$ref": "#/$defs/DialogStatusActionIn"

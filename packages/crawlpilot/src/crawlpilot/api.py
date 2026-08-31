@@ -119,6 +119,12 @@ class BrowserSession:
     async def go_back(self) -> ActionResult:
         return await self.execute([spi_actions.GoBackAction()])
 
+    async def forward(self) -> ActionResult:
+        return await self.execute([spi_actions.ForwardAction()])
+
+    async def reload(self) -> ActionResult:
+        return await self.execute([spi_actions.ReloadAction()])
+
     # ----------------------------------------------------------- interaction
 
     async def click(self, ref: str, *, all: bool = False) -> ActionResult:
@@ -231,6 +237,107 @@ class BrowserSession:
 
         result = await self.execute([spi_actions.DiffSnapshotAction(settle=settle)])
         return result.readouts[0] if result.readouts else ""
+
+    # ------------------------------------------------------------------ waits
+    #
+    # Each raises `WaitTimeout` when the condition does not come true, so the
+    # call after it can rely on the state it asked for.
+
+    async def wait_for_selector(
+        self, selector: str, *, state: str = "visible", timeout_ms: int = 10_000
+    ) -> ActionResult:
+        return await self.execute(
+            [
+                spi_actions.WaitForSelectorAction(
+                    selector=selector,
+                    state=state,  # type: ignore[arg-type]
+                    timeout_ms=timeout_ms,
+                )
+            ]
+        )
+
+    async def wait_for_text(self, text: str, *, timeout_ms: int = 10_000) -> ActionResult:
+        return await self.execute(
+            [spi_actions.WaitForTextAction(text=text, timeout_ms=timeout_ms)]
+        )
+
+    async def wait_for_url(self, url: str, *, timeout_ms: int = 10_000) -> ActionResult:
+        """Wait until the URL contains `url`, or matches it as a glob."""
+
+        return await self.execute(
+            [spi_actions.WaitForUrlAction(url=url, timeout_ms=timeout_ms)]
+        )
+
+    async def wait_for_load(
+        self, state: str = "load", *, timeout_ms: int = 10_000
+    ) -> ActionResult:
+        return await self.execute(
+            [
+                spi_actions.WaitForLoadAction(
+                    state=state,  # type: ignore[arg-type]
+                    timeout_ms=timeout_ms,
+                )
+            ]
+        )
+
+    # ---------------------------------------------------------------- getters
+    #
+    # Each returns its answer directly rather than an `ActionResult` whose
+    # `readouts[0]` the caller indexes into -- as `dropdown_options` does.
+
+    async def _readout(self, action: spi_actions.Action) -> str:
+        result = await self.execute([action])
+        return result.readouts[0] if result.readouts else ""
+
+    async def get_text(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.GetTextAction(ref=ref, selector=selector))
+
+    async def get_html(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.GetHtmlAction(ref=ref, selector=selector))
+
+    async def get_value(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.GetValueAction(ref=ref, selector=selector))
+
+    async def get_attribute(
+        self, name: str, ref: str | None = None, *, selector: str | None = None
+    ) -> str:
+        return await self._readout(
+            spi_actions.GetAttributeAction(name=name, ref=ref, selector=selector)
+        )
+
+    async def get_count(self, selector: str) -> str:
+        return await self._readout(spi_actions.GetCountAction(selector=selector))
+
+    async def get_box(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.GetBoxAction(ref=ref, selector=selector))
+
+    async def get_styles(
+        self,
+        ref: str | None = None,
+        *,
+        selector: str | None = None,
+        properties: list[str] | None = None,
+    ) -> str:
+        return await self._readout(
+            spi_actions.GetStylesAction(
+                ref=ref, selector=selector, properties=properties or []
+            )
+        )
+
+    async def get_url(self) -> str:
+        return await self._readout(spi_actions.GetUrlAction())
+
+    async def get_title(self) -> str:
+        return await self._readout(spi_actions.GetTitleAction())
+
+    async def is_visible(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.IsVisibleAction(ref=ref, selector=selector))
+
+    async def is_enabled(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.IsEnabledAction(ref=ref, selector=selector))
+
+    async def is_checked(self, ref: str | None = None, *, selector: str | None = None) -> str:
+        return await self._readout(spi_actions.IsCheckedAction(ref=ref, selector=selector))
 
     # ----------------------------------------------------------------- dialogs
 

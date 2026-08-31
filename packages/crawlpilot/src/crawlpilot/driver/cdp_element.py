@@ -538,3 +538,112 @@ def dropdown_options(node: EnhancedDOMTreeNode) -> list[dict[str, str]]:
         text = " ".join(element.all_text().split())
         options.append({"text": text, "value": element.attributes.get("value", text)})
     return options
+
+
+# ---------------------------------------------------------------- touch input
+
+
+async def dispatch_touch(
+    cdp: CDPSession, kind: str, points: list[tuple[float, float]]
+) -> None:
+    """One `Input.dispatchTouchEvent`.
+
+    Touch is a separate CDP domain call from mouse, not a flag on it, and a page
+    that listens for `touchstart` sees nothing at all from a dispatched mouse
+    event. Mobile-first sites routinely bind only touch handlers, so without this
+    a `tap` on them does nothing while reporting success.
+
+    `touchEnd` and `touchCancel` must carry an **empty** point list -- Chrome
+    rejects the call otherwise, which is the easiest thing to get wrong here.
+    """
+
+    await cdp.send(
+        "Input.dispatchTouchEvent",
+        {
+            "type": kind,
+            "touchPoints": (
+                []
+                if kind in ("touchEnd", "touchCancel")
+                else [{"x": x, "y": y} for x, y in points]
+            ),
+        },
+    )
+
+
+async def tap_at(cdp: CDPSession, x: float, y: float) -> None:
+    await dispatch_touch(cdp, "touchStart", [(x, y)])
+    await dispatch_touch(cdp, "touchEnd", [])
+
+
+async def insert_text(cdp: CDPSession, text: str) -> None:
+    """Insert a whole string in one event.
+
+    Deliberately **not** how `fill` types -- `type_character` exists precisely
+    because per-keystroke events are what autocomplete and validation widgets
+    hang off, and because instantaneous insertion is an automation tell. This is
+    for the cases where that does not apply: pasting a long value a person would
+    also paste, and re-entering text the caller already typed once.
+    """
+
+    await cdp.send("Input.insertText", {"text": text})
+
+
+async def key_down(cdp: CDPSession, key: str) -> None:
+    """Press and hold. Pairs with `key_up`; use `press_key` for a whole stroke.
+
+    Held keys are how a page distinguishes a drag-with-shift, a
+    hold-to-preview or a game control from a tap, and none of those are
+    expressible as a press.
+    """
+
+    modifiers, main = parse_key(key)
+    mask = sum(_MODIFIER_BITS[m] for m in modifiers)
+    for modifier in modifiers:
+        await _dispatch_key(cdp, "rawKeyDown", _key_descriptor(modifier), _MODIFIER_BITS[modifier])
+    if main:
+        await _dispatch_key(cdp, "rawKeyDown", _key_descriptor(main), mask)
+
+
+async def key_up(cdp: CDPSession, key: str) -> None:
+    modifiers, main = parse_key(key)
+    mask = sum(_MODIFIER_BITS[m] for m in modifiers)
+    if main:
+        await _dispatch_key(cdp, "keyUp", _key_descriptor(main), mask)
+    for modifier in reversed(modifiers):
+        await _dispatch_key(cdp, "keyUp", _key_descriptor(modifier), 0)
+
+
+async def set_checked(cdp: CDPSession, node: EnhancedDOMTreeNode, checked: bool) -> bool:
+    """Set a checkbox/radio directly, and report whether it took.
+
+    The fallback for `check`/`uncheck` when a coordinate click cannot reach the
+    control -- the `display:none` input behind a styled label is the common case,
+    and it is exactly the shape the snapshot now promotes a role for. Ported from
+    agent-browser's `js_click_checkbox` (`interaction.rs:600`).
+
+    `click()` rather than assigning `.checked`: assignment fires no `change`
+    event, so React and every other framework keeps its old state and the page
+    reverts the box on its next render.
+    """
+
+    resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": node.backend_node_id})
+    object_id = (resolved.get("object") or {}).get("objectId")
+    if not object_id:
+        return False
+    outcome = await cdp.send(
+        "Runtime.callFunctionOn",
+        {
+            "objectId": object_id,
+            "functionDeclaration": (
+                "function(want) {"
+                " const el = this.matches('input') ? this"
+                "   : this.querySelector('input[type=checkbox], input[type=radio]');"
+                " if (!el) return false;"
+                " if (el.checked !== want) el.click();"
+                " return el.checked === want; }"
+            ),
+            "arguments": [{"value": checked}],
+            "returnByValue": True,
+        },
+    )
+    return bool((outcome.get("result") or {}).get("value"))

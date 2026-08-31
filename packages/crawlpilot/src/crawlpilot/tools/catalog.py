@@ -20,6 +20,16 @@ from crawlpilot.tools.spec import REF_DESCRIPTION, ToolSpec
 
 _REF = {"ref": REF_DESCRIPTION}
 
+_TARGET = {
+    "ref": (
+        "The element ref from the current page state, e.g. 'e12'. Give this or "
+        "`selector`; a ref is cheaper and reaches inside iframes and shadow roots."
+    ),
+    "selector": (
+        "A CSS selector, when you have no ref for the element. Give this or `ref`."
+    ),
+}
+
 
 @field_validator("url")
 def _http_or_https_only(cls: object, v: str) -> str:  # noqa: N805
@@ -246,6 +256,151 @@ CATALOG: tuple[ToolSpec, ...] = (
         # session-config concept crawlpilot does not have yet.
         agent_fields=None,
         safety="sensitive",
+    ),
+    # Waiting for a state (see `driver.waits`). A wait that expires raises, so a
+    # model can trust that the action after it ran against the state it asked
+    # for -- the whole value of the verb.
+    ToolSpec(
+        name="wait_for_selector",
+        description=(
+            "Wait until a CSS selector matches an element in the given state. Use "
+            "this after an action that triggers loading, instead of guessing at a "
+            "fixed wait."
+        ),
+        action_cls=sa.WaitForSelectorAction,
+        wire_fields=("selector", "state", "timeout_ms"),
+        agent_fields=("selector", "state"),
+    ),
+    ToolSpec(
+        name="wait_for_text",
+        description="Wait until the given text appears anywhere on the page.",
+        action_cls=sa.WaitForTextAction,
+        wire_fields=("text", "timeout_ms"),
+        agent_fields=("text",),
+    ),
+    ToolSpec(
+        name="wait_for_url",
+        description=(
+            "Wait until the page URL contains the given string, or matches it as a "
+            "glob. Use after a click you expect to navigate."
+        ),
+        action_cls=sa.WaitForUrlAction,
+        wire_fields=("url", "timeout_ms"),
+        agent_fields=("url",),
+    ),
+    ToolSpec(
+        name="wait_for_load",
+        description="Wait until the page reaches a load state.",
+        action_cls=sa.WaitForLoadAction,
+        wire_fields=("state", "timeout_ms"),
+        agent_fields=("state",),
+    ),
+    ToolSpec(
+        name="wait_for_function",
+        description="Wait until a JavaScript expression evaluates truthy.",
+        action_cls=sa.WaitForFunctionAction,
+        wire_fields=("expression", "timeout_ms", "poll_ms"),
+        # `execute_js` on a timer. Same reasoning, same answer.
+        agent_fields=None,
+        safety="sensitive",
+    ),
+    # Reading one element (see `driver.queries`). These are what let a model
+    # check an action instead of assuming it worked.
+    ToolSpec(
+        name="get_text",
+        description="Read the visible text of one element.",
+        action_cls=sa.GetTextAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="get_html",
+        description=(
+            "Read one element's inner HTML. Element-scoped only -- to read the "
+            "page, use extract."
+        ),
+        action_cls=sa.GetHtmlAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="get_value",
+        description="Read the current value of an input, textarea or select.",
+        action_cls=sa.GetValueAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="get_attribute",
+        description="Read one attribute of one element.",
+        action_cls=sa.GetAttributeAction,
+        wire_fields=("name", "ref", "selector"),
+        agent_fields=("name", "ref", "selector"),
+        field_descriptions={**_TARGET, "name": "The attribute to read, e.g. 'href'."},
+    ),
+    ToolSpec(
+        name="get_count",
+        description="Count how many elements match a CSS selector.",
+        action_cls=sa.GetCountAction,
+        wire_fields=("selector",),
+        agent_fields=("selector",),
+    ),
+    ToolSpec(
+        name="get_box",
+        description="Read an element's position and size in page coordinates.",
+        action_cls=sa.GetBoxAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="get_styles",
+        description="Read an element's computed CSS properties.",
+        action_cls=sa.GetStylesAction,
+        wire_fields=("ref", "selector", "properties"),
+        agent_fields=("ref", "selector", "properties"),
+        wire_overrides={"properties": (list[str], PydanticField(default_factory=list))},
+        agent_overrides={"properties": (list[str], PydanticField(default_factory=list))},
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="get_url",
+        description="The current page URL.",
+        action_cls=sa.GetUrlAction,
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="get_title",
+        description="The current page title.",
+        action_cls=sa.GetTitleAction,
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="is_visible",
+        description="Whether an element is visible to a user.",
+        action_cls=sa.IsVisibleAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="is_enabled",
+        description="Whether an element is enabled rather than disabled.",
+        action_cls=sa.IsEnabledAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
+    ),
+    ToolSpec(
+        name="is_checked",
+        description="Whether a checkbox or radio is checked.",
+        action_cls=sa.IsCheckedAction,
+        wire_fields=("ref", "selector"),
+        agent_fields=("ref", "selector"),
+        field_descriptions=_TARGET,
     ),
     # JavaScript dialogs. Agent-exposed, and they have to be: a `confirm()` is
     # the page asking a question only the caller can answer, and the alternative

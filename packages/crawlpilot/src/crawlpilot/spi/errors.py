@@ -130,3 +130,17 @@ class SelectorNotFound(DriverError):
     def __init__(self, selector: str) -> None:
         self.selector = selector
         super().__init__(f"selector {selector!r} matched no element on this page")
+
+
+class WaitTimeout(DriverError):
+    """A `wait_for_*` condition did not come true in time.
+
+    Raised rather than reported, because a wait that silently gave up is worse
+    than no wait: the next action in the batch would run against the state the
+    caller was waiting *not* to see, and report success.
+    """
+
+    def __init__(self, condition: str, timeout_ms: int) -> None:
+        self.condition = condition
+        self.timeout_ms = timeout_ms
+        super().__init__(f"timed out after {timeout_ms}ms waiting for {condition}")

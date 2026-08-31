@@ -674,3 +674,92 @@ async def test_an_idle_page_reports_no_change(page, toolbench) -> None:
     await page.diff_snapshot()
 
     assert "nothing changed" in await page.diff_snapshot()
+
+
+# -------------------------------------------------- navigation / waits / getters
+
+
+async def test_forward_returns_to_the_page_back_left(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.navigate(toolbench.url("article.html"))
+    await page.go_back()
+    assert "index.html" in await page.execute_js("location.href")
+
+    await page.forward()
+    assert "article.html" in await page.execute_js("location.href")
+
+
+async def test_reload_re_runs_the_page(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.execute_js("window.__marker = 'survived'")
+    await page.reload()
+    assert await page.execute_js("window.__marker ?? 'gone'") == "gone"
+
+
+async def test_wait_for_selector_returns_once_the_element_is_there(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.execute_js(
+        "setTimeout(() => {"
+        " const d = document.createElement('div');"
+        " d.id = 'late'; d.textContent = 'arrived';"
+        " document.body.appendChild(d); }, 300)"
+    )
+    await page.wait_for_selector("#late")
+    assert await page.get_text(selector="#late") == "text of '#late': 'arrived'"
+
+
+async def test_a_wait_that_expires_raises_rather_than_giving_up_quietly(page, toolbench) -> None:
+    """The point of the verb: an action after a wait can rely on the state it
+    asked for. A wait that returned normally on timeout would let the next
+    action run against the state the caller was waiting *not* to see."""
+
+    from crawlpilot.spi.errors import WaitTimeout
+
+    await _open(page, toolbench)
+    with pytest.raises(WaitTimeout):
+        await page.wait_for_selector("#never-appears", timeout_ms=500)
+
+
+async def test_wait_for_text_and_url(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.wait_for_text("a needle buried far below the fold")
+
+    refs = await _refs(page)
+    await page.click(refs["same-tab"])
+    await page.wait_for_url("via=link")
+    assert "via=link" in await page.execute_js("location.href")
+
+
+async def test_getters_read_one_elements_state(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+
+    assert "hello" not in await page.get_value(refs["query"])
+    await page.fill(refs["query"], "hello")
+    assert "'hello'" in await page.get_value(refs["query"])
+
+    assert "form_target.html" in await page.get_attribute("href", refs["same-tab"])
+    assert "index.html" in await page.get_url()
+    assert "count: 2" in await page.get_count("#dup")
+    assert "width=" in await page.get_box(refs["submit"])
+    assert "display=" in await page.get_styles(refs["submit"])
+
+
+async def test_visibility_and_enabled_and_checked_report_real_state(page, toolbench) -> None:
+    await _open(page, toolbench)
+    refs = await _refs(page)
+
+    assert "is visible" in await page.is_visible(refs["submit"])
+    # `#hidden-box` is a checkbox at opacity:0 -- present and addressable, but
+    # not something a person can see.
+    assert "not visible" in await page.is_visible(selector="#hidden-box")
+    assert "is enabled" in await page.is_enabled(refs["submit"])
+    assert "checked: false" in await page.is_checked(selector="#hidden-box")
+
+
+async def test_a_getter_for_a_selector_that_matches_nothing_says_so(page, toolbench) -> None:
+    from crawlpilot.spi.errors import SelectorNotFound
+
+    await _open(page, toolbench)
+    with pytest.raises(SelectorNotFound):
+        await page.get_text(selector="#no-such-element")

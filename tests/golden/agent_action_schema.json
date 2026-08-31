@@ -41,6 +41,36 @@
           {
             "additionalProperties": false,
             "properties": {
+              "type": {
+                "const": "forward",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ForwardActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "reload",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ReloadActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
               "ref": {
                 "description": "The exact element ref from the current page state, shown in square brackets e.g. 'e12' in `[e12]<button \"Add to cart\"/>`. Copy it verbatim (an `e` followed by digits). Never use a human-readable name/label, a description, or a URL as a ref -- to open a URL use the navigate action.",
                 "title": "Ref",
@@ -414,6 +444,534 @@
               "type"
             ],
             "title": "DiffSnapshotActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "selector": {
+                "title": "Selector",
+                "type": "string"
+              },
+              "state": {
+                "default": "visible",
+                "enum": [
+                  "visible",
+                  "hidden",
+                  "attached",
+                  "detached"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "type": {
+                "const": "wait_for_selector",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "selector"
+            ],
+            "title": "WaitForSelectorActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "title": "Text",
+                "type": "string"
+              },
+              "type": {
+                "const": "wait_for_text",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ],
+            "title": "WaitForTextActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "wait_for_url",
+                "title": "Type",
+                "type": "string"
+              },
+              "url": {
+                "title": "Url",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "WaitForUrlActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "default": "load",
+                "enum": [
+                  "load",
+                  "domcontentloaded",
+                  "networkidle"
+                ],
+                "title": "State",
+                "type": "string"
+              },
+              "type": {
+                "const": "wait_for_load",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "WaitForLoadActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_text",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetTextActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_html",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetHtmlActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_value",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetValueActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "default": "",
+                "description": "The attribute to read, e.g. 'href'.",
+                "title": "Name",
+                "type": "string"
+              },
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_attribute",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetAttributeActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "selector": {
+                "default": "",
+                "title": "Selector",
+                "type": "string"
+              },
+              "type": {
+                "const": "get_count",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetCountActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_box",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetBoxActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "properties": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Properties",
+                "type": "array"
+              },
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "get_styles",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetStylesActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "get_url",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetUrlActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "get_title",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GetTitleActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "is_visible",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IsVisibleActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "is_enabled",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IsEnabledActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The element ref from the current page state, e.g. 'e12'. Give this or `selector`; a ref is cheaper and reaches inside iframes and shadow roots.",
+                "title": "Ref"
+              },
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A CSS selector, when you have no ref for the element. Give this or `ref`.",
+                "title": "Selector"
+              },
+              "type": {
+                "const": "is_checked",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "IsCheckedActionIn",
             "type": "object"
           },
           {
