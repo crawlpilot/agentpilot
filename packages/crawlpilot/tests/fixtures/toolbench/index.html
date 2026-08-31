@@ -127,6 +127,50 @@
               width="360" height="120"></iframe>
     </section>
 
+    <!-- Dialogs. A confirm is the page asking a question the caller may want to
+         answer "yes" to; auto-dismissing it makes this button a silent no-op. -->
+    <section id="dialogs">
+      <button id="confirm-delete"
+              onclick="log(confirm('Delete account?') ? 'confirmed' : 'cancelled')">
+        Delete account
+      </button>
+      <button id="alert-hello" onclick="alert('hello'); log('alerted')">Say hello</button>
+      <button id="prompt-name"
+              onclick="log('name:' + prompt('Your name?', 'anon'))">
+        Ask name
+      </button>
+      <!-- The dialog opens from mousedown, so it lands between the CDP press and
+           release and leaves the button logically held. -->
+      <button id="confirm-on-mousedown"
+              onmousedown="log(confirm('Sure?') ? 'down-confirmed' : 'down-cancelled')">
+        Confirm on mousedown
+      </button>
+    </section>
+
+    <!-- Interactivity-classification cases. Each is a shape that was previously
+         misread: see dom/clickable_elements.py. -->
+    <section id="classification">
+      <!-- One cursor:pointer on the card; every descendant inherits it. Only the
+           card itself should earn a ref. -->
+      <div id="pointer-card" style="cursor: pointer" onclick="log('card')">
+        <span id="card-title">Card title</span>
+        <span id="card-price">$9.99</span>
+        <img id="card-image" alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" />
+      </div>
+      <!-- Programmatically focusable, deliberately NOT tab-reachable. -->
+      <div id="not-tabbable" tabindex="-1">a scroll container, not a control</div>
+      <div id="rich-text" contenteditable="true">editable prose</div>
+      <!-- Chrome drops a display:none input from the AX tree entirely, leaving
+           this label nameless unless its role is promoted. -->
+      <label id="radio-card" style="display:block">
+        <input type="radio" name="plan" value="pro" style="display:none" />
+        Pro plan
+      </label>
+      <!-- A name padded with zero-width characters must render identically to
+           one without, or it reads as a new element every step. -->
+      <button id="zero-width-name" onclick="log('zw')">Check&#8203;out</button>
+    </section>
+
     <div class="spacer"></div>
     <p id="deep">a needle buried far below the fold</p>
 

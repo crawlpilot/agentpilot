@@ -365,3 +365,42 @@ async def test_the_held_button_survives_answering_the_dialog() -> None:
 
     await watcher.drain()
     assert watcher.pending_release is None
+
+
+async def test_accepting_a_prompt_without_text_submits_its_default_not_an_empty_string() -> None:
+    """A person pressing OK on `prompt('Your name?', 'anon')` gets `"anon"`.
+    Playwright's bare `accept()` sends `""`, which is a wrong answer dressed as a
+    right one -- the field looked pre-filled and came back blank."""
+
+    watcher = DialogWatcher("manual")
+    page = FakePage()
+    watcher.attach(page)
+    dialog = FakeDialog("prompt", "Your name?", default="anon")
+    page.handler(dialog)
+
+    await watcher.accept()
+    assert dialog.accepted == "anon"
+
+
+async def test_an_explicit_empty_string_still_submits_an_empty_string() -> None:
+    watcher = DialogWatcher("manual")
+    page = FakePage()
+    watcher.attach(page)
+    dialog = FakeDialog("prompt", "Your name?", default="anon")
+    page.handler(dialog)
+
+    await watcher.accept("")
+    assert dialog.accepted == ""
+
+
+async def test_the_default_substitution_is_confined_to_prompts() -> None:
+    """A confirm has no text to submit; passing one would be meaningless."""
+
+    watcher = DialogWatcher("manual")
+    page = FakePage()
+    watcher.attach(page)
+    dialog = FakeDialog("confirm", "sure?")
+    page.handler(dialog)
+
+    await watcher.accept()
+    assert dialog.accepted is True

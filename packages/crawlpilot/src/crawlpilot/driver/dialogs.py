@@ -289,12 +289,21 @@ async def _answer(dialog: Any, *, accept: bool, prompt_text: str | None = None) 
     The page is blocked on this, so failing to answer would strand it -- but a
     navigation can take a dialog with it, and a stale handle is not a reason to
     fail the action that discovered it.
+
+    Accepting a `prompt` with no text submits the dialog's **own default value**,
+    not the empty string Playwright's bare `accept()` sends. A person pressing OK
+    on `prompt('Your name?', 'anon')` gets back `"anon"`, and an accept that
+    silently blanks a pre-filled field is a wrong answer dressed as a right one.
+    Passing `""` explicitly still submits an empty string.
     """
 
     with contextlib.suppress(Exception):
         if not accept:
             await dialog.dismiss()
-        elif prompt_text is not None:
+            return
+        if prompt_text is None and dialog.type == "prompt":
+            prompt_text = getattr(dialog, "default_value", "") or ""
+        if prompt_text is not None:
             await dialog.accept(prompt_text)
         else:
             await dialog.accept()

@@ -126,6 +126,11 @@ _REF_CONSUMING = (
 an earlier action has invalidated the refs it would use. `WaitAction`/
 `ScrollAction` are checked separately -- their `ref` is optional."""
 
+_DIALOG_ACTIONS = (DialogStatusAction, DialogAcceptAction, DialogDismissAction)
+"""The only actions that may run while a dialog holds the renderer. Everything
+else would block on it, so `_dispatch` refuses them with `DialogInterrupt`
+rather than letting the call hang to its timeout."""
+
 # Interactive actions that get a human `gap` pause *before* them when they
 # follow another action in the same batch -- the between-actions dwell Pulsar
 # applies (InteractSettings `gap`). Navigate/Extract/Snapshot/Wait are excluded
@@ -1004,6 +1009,16 @@ class PatchrightDriver:
     async def _dispatch(
         self, cctx: _Context, live: _Page, action: Action, result: ActionResult
     ) -> None:
+        # While a dialog is open the renderer is blocked, so *nothing* but
+        # answering it can make progress -- not a click, not a `page.evaluate`,
+        # not reading the title. Refusing up front turns what would otherwise be
+        # a hang into the same `DialogInterrupt` the guard raises, and keeps the
+        # rule in one place rather than at every call that happens to touch the
+        # page.
+        pending = live.dialogs.pending
+        if pending is not None and not isinstance(action, _DIALOG_ACTIONS):
+            raise DialogInterrupt(pending)
+
         if isinstance(action, NavigateAction):
             try:
                 goto_kwargs: dict[str, Any] = {
@@ -1051,8 +1066,8 @@ class PatchrightDriver:
             # non-extract batches (interactive click/fill/etc. sequences),
             # and isn't refetched if a batch requests multiple formats.
             if result.page_title is None:
-                result.page_title = await live.page.title()
-            html = await live.page.content()
+                result.page_title = await live.dialogs.guard(live.page.title())
+            html = await live.dialogs.guard(live.page.content())
             base_url = action.base_url or live.page.url
             live_hydration: dict[str, Any] | None = None
             if action.format == "structured_data":
@@ -1075,7 +1090,9 @@ class PatchrightDriver:
                 )
             )
         elif isinstance(action, ScreenshotAction):
-            result.screenshots.append(await live.page.screenshot(full_page=action.full_page))
+            result.screenshots.append(
+                await live.dialogs.guard(live.page.screenshot(full_page=action.full_page))
+            )
         elif isinstance(action, WaitAction):
             if action.ref is not None:
                 node, cdp = await self._resolve_ref(live, action.ref)
@@ -1083,7 +1100,7 @@ class PatchrightDriver:
             else:
                 await asyncio.sleep((action.ms or 0) / 1000)
         elif isinstance(action, ExecuteJsAction):
-            result.js_returns.append(await live.page.evaluate(action.script))
+            result.js_returns.append(await live.dialogs.guard(live.page.evaluate(action.script)))
         elif isinstance(action, ClickAction):
             pre_click_url = live.page.url
             node, cdp = await self._resolve_ref(live, action.ref)

@@ -76,7 +76,10 @@ class InteractiveSession:
     headful: bool
     block_popups: bool
     enable_cdp: bool
-    dialog_policy: spi_actions.DialogPolicy
+    dialog_policy: spi_actions.DialogPolicy = "auto_dismiss"
+    """Defaulted, unlike the fields above it: every existing construction site --
+    the platform's, and the test doubles' -- predates dialogs, and the default is
+    the behaviour they already had."""
 
 
 async def open_interactive_session(
