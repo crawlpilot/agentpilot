@@ -22,11 +22,11 @@ Four things matter on a target like this:
   * **`tier="stealth"`/`"auto"`** -- pins the fingerprint, runs the human
     warm-up and the slow interaction cadence, and turns on body-level block
     detection. `basic` fetches over plain HTTP first and gets walled.
-  * **`headful=True`.** A real window, and the OS-level input path the driver
-    only has with a display. This is not cosmetic: running headless was what
-    served the "Robot or human?" wall on every attempt. A preference, not an
-    assertion -- `PatchrightDriver.open` ensures Xvfb where that exists and
-    otherwise degrades to headless with a log line rather than failing.
+  * **Headful.** A real window, and the OS-level input path the driver only has
+    with a display. This is not cosmetic: running headless was what served the
+    "Robot or human?" wall on every attempt. Set on the `Browser` rather than
+    per-session, because `scrape()` decides `headful` from the rung it is on
+    and its first rung is headless -- see `_browser()`.
   * **`detect_blocks=True` on the session.** Off (the default, right for agent
     runs) the warm-up skips its `_abck` wait and nothing is ever classified --
     so the wall is extracted and returned as though it were the product page.
@@ -107,6 +107,19 @@ def _browser() -> Browser:
         # CRAWLPILOT_BROWSER_CHANNEL=chromium to override (and on arm64 you
         # must -- `patchright install chrome` publishes no arm64 build).
         channel=os.environ.get("CRAWLPILOT_BROWSER_CHANNEL") or None,
+        # Headful for the whole browser, not per-session -- this is the only
+        # way to get a window on the `scrape()` path. `run_ephemeral_scrape`
+        # sets `headful = attempt_tier == "enhanced"`, so an `auto` scrape runs
+        # its first (`stealth`) rung headless, and that rung is the one that
+        # usually succeeds -- no window, ever, unless it had to escalate.
+        # `headless=` on the browser is the documented hard override: it wins
+        # over the per-open flag, because the caller configured the browser and
+        # the session layer only expressed a preference.
+        #
+        # Still a preference in the end -- `ensure_display()` degrades to
+        # headless on a box with no display rather than failing the launch --
+        # so this stays runnable over SSH and in CI.
+        headless=False,
         profiles_root=PROFILES_ROOT,
         extensions=[RetailExtension()],
         proxy_pinner=pinner,
