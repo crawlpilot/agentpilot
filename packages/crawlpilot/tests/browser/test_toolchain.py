@@ -585,8 +585,15 @@ async def test_call_tool_validates_its_arguments(page) -> None:
 # the gateway does.
 
 
-async def _offered(page, **options) -> set[int]:
-    """The refs a snapshot with these options offers a model."""
+async def _offered_refs(page, **options) -> set[int]:
+    """The *refs* a snapshot with these options offers a model.
+
+    Named apart from `_offered` above, which answers the same question in
+    element ids. Both are useful -- ids read better in an assertion about a
+    named element, refs are what a filter actually operates on -- but they are
+    not interchangeable, and one shadowing the other silently broke a test that
+    asked for ids and got integers.
+    """
 
     from crawlpilot.dom.serializer import serialize
     from crawlpilot.spi import actions as sa
@@ -599,20 +606,20 @@ async def _offered(page, **options) -> set[int]:
 
 async def test_an_unfiltered_snapshot_offers_everything(page, toolbench) -> None:
     await _open(page, toolbench)
-    assert len(await _offered(page)) > 10
+    assert len(await _offered_refs(page)) > 10
 
 
 async def test_max_nodes_caps_what_the_snapshot_offers(page, toolbench) -> None:
     await _open(page, toolbench)
-    assert len(await _offered(page, max_nodes=3)) == 3
+    assert len(await _offered_refs(page, max_nodes=3)) == 3
 
 
 async def test_roles_filters_the_snapshot_to_one_role(page, toolbench) -> None:
     await _open(page, toolbench)
-    offered = await _offered(page, roles=("textbox",))
+    offered = await _offered_refs(page, roles=("textbox",))
 
     assert offered, "the toolbench has text inputs"
-    assert offered < await _offered(page), "a role filter must narrow the set"
+    assert offered < await _offered_refs(page), "a role filter must narrow the set"
 
 
 async def test_viewport_only_drops_what_is_below_the_fold(page, toolbench) -> None:
@@ -620,15 +627,15 @@ async def test_viewport_only_drops_what_is_below_the_fold(page, toolbench) -> No
     whole reason that spacer exists."""
 
     await _open(page, toolbench)
-    assert await _offered(page, viewport_only=True) < await _offered(page)
+    assert await _offered_refs(page, viewport_only=True) < await _offered_refs(page)
 
 
 async def test_selector_scopes_the_snapshot_to_one_subtree(page, toolbench) -> None:
     await _open(page, toolbench)
-    scoped = await _offered(page, selector="#dialogs")
+    scoped = await _offered_refs(page, selector="#dialogs")
 
     assert scoped, "#dialogs contains four buttons"
-    assert scoped < await _offered(page)
+    assert scoped < await _offered_refs(page)
 
 
 async def test_a_selector_that_matches_nothing_says_so(page, toolbench) -> None:
@@ -639,7 +646,7 @@ async def test_a_selector_that_matches_nothing_says_so(page, toolbench) -> None:
 
     await _open(page, toolbench)
     with pytest.raises(SelectorNotFound):
-        await _offered(page, selector="#no-such-element")
+        await _offered_refs(page, selector="#no-such-element")
 
 
 # ------------------------------------------------------------- diff_snapshot

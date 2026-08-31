@@ -13,9 +13,12 @@ from crawlpilot.tools.adapters import to_anthropic, to_mcp, to_openai
 from crawlpilot.tools.catalog import BY_NAME, CATALOG
 from crawlpilot.tools.registry import (
     BROWSER_NAMESPACE,
+    PROFILES,
     DuplicateToolError,
     ToolRegistry,
+    UnknownProfileError,
     browser_tools,
+    profile,
 )
 from crawlpilot.tools.spec import REF_DESCRIPTION, ToolSpec, union_of
 
@@ -23,11 +26,14 @@ __all__ = [
     "BROWSER_NAMESPACE",
     "BY_NAME",
     "CATALOG",
+    "PROFILES",
     "REF_DESCRIPTION",
     "DuplicateToolError",
     "ToolRegistry",
     "ToolSpec",
+    "UnknownProfileError",
     "browser_tools",
+    "profile",
     "to_anthropic",
     "to_mcp",
     "to_openai",
