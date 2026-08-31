@@ -126,7 +126,7 @@ async def browser(tmp_path: Path):
 
     from crawlpilot.api import Browser  # noqa: PLC0415 -- keeps collection Chrome-free
 
-    async with Browser(profiles_root=tmp_path / "profiles", headless=True) as instance:
+    async with Browser(profiles_root=tmp_path / "profiles", headful=False) as instance:
         yield instance
 
 

@@ -20,6 +20,19 @@ from crawlpilot.tools.spec import REF_DESCRIPTION, ToolSpec
 
 _REF = {"ref": REF_DESCRIPTION}
 
+_REF_REQUIRED: dict[str, tuple[type, object]] = {"ref": (str, ...)}
+"""Pin `ref` back to a required string for the tool boundary.
+
+The interaction actions gained an optional `selector` alongside `ref` in 0.2, so
+on the dataclass both are now `str | None`. That is right for a *programmatic*
+caller choosing one or the other, and wrong here twice over. It would relax
+`ref` from required to nullable in the published wire schema, breaking an
+integrator's existing request for no reason; and `selector` is deliberately not
+in any `wire_fields`/`agent_fields` list, because a model addresses elements by
+ref -- refs are unambiguous, and they reach into iframes and shadow roots, which
+is the whole argument in `driver/node_index.py`. This keeps the tool schema
+byte-identical to what it was before the selector work."""
+
 _TARGET = {
     "ref": (
         "The element ref from the current page state, e.g. 'e12'. Give this or "
@@ -131,6 +144,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="click",
         description="Click the element identified by `ref` (from the most recent page state).",
         action_cls=sa.ClickAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref", "all"),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -142,6 +157,8 @@ CATALOG: tuple[ToolSpec, ...] = (
             "any existing value; pass clear=false to append instead."
         ),
         action_cls=sa.FillAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref", "text", "clear"),
         agent_fields=("ref", "text", "clear"),
         field_descriptions=_REF,
@@ -158,6 +175,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="hover",
         description="Hover the mouse over the element identified by `ref`.",
         action_cls=sa.HoverAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -263,6 +282,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="double_click",
         description="Double-click the element identified by `ref`.",
         action_cls=sa.DoubleClickAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -271,6 +292,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="focus",
         description="Move keyboard focus to the element identified by `ref`.",
         action_cls=sa.FocusAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -282,6 +305,8 @@ CATALOG: tuple[ToolSpec, ...] = (
             "idempotent, so it cannot un-check a box that was already checked."
         ),
         action_cls=sa.CheckAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -290,6 +315,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="uncheck",
         description="Ensure a checkbox is unchecked.",
         action_cls=sa.UncheckAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -298,6 +325,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="scroll_into_view",
         description="Scroll until the element identified by `ref` is on screen.",
         action_cls=sa.ScrollIntoViewAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -306,6 +335,8 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="clear",
         description="Empty the text field identified by `ref`.",
         action_cls=sa.ClearAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,
@@ -353,6 +384,8 @@ CATALOG: tuple[ToolSpec, ...] = (
             "that respond to touch but not to clicks."
         ),
         action_cls=sa.TapAction,
+        wire_overrides=_REF_REQUIRED,
+        agent_overrides=_REF_REQUIRED,
         wire_fields=("ref",),
         agent_fields=("ref",),
         field_descriptions=_REF,

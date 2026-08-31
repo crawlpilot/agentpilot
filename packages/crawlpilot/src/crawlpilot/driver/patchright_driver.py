@@ -325,6 +325,19 @@ _FIND_ELEMENTS_JS = """(opts) => {
 }"""
 
 
+def _target_label(action: Any) -> str:
+    """How to name an interaction's target in a verification or an error.
+
+    An interaction now carries a `ref` *or* a `selector`, so the messages can no
+    longer say `action.ref` -- half the time it is `None`. `target_description`
+    already renders either form, and is what the read actions have always used.
+    """
+
+    return queries.target_description(
+        getattr(action, "ref", None), getattr(action, "selector", None)
+    )
+
+
 def _render_dropdown_options(ref: str, options: list[dict[str, str]]) -> str:
     if not options:
         return f"dropdown_options: {ref} has no <option> children (is it a real <select>?)"
@@ -1263,7 +1276,9 @@ class PatchrightDriver:
         elif isinstance(action, _WAIT_FOR_ACTIONS):
             await self._wait_for(live, action, result)
         elif isinstance(action, _QUERY_ACTIONS):
-            result.readouts.append(await self._query(live, action))
+            value, readout = await self._query(live, action)
+            result.values.append(value)
+            result.readouts.append(readout)
         elif isinstance(action, SnapshotAction):
             if action.settle:
                 await self._settle(live)
@@ -1291,14 +1306,15 @@ class PatchrightDriver:
             result.fused_trees.append(tree)
             result.snapshot_views.append(SnapshotView())
             if previous is None:
-                result.readouts.append(
-                    "no previous snapshot on this tab to compare against"
-                )
+                readout = "no previous snapshot on this tab to compare against"
             else:
                 diff = diff_snapshots(previous, tree)
-                result.readouts.append(
-                    render_change_block(diff) or "nothing changed since the last snapshot"
-                )
+                readout = render_change_block(diff) or "nothing changed since the last snapshot"
+            # The diff's value *is* its rendered block -- it is a description of
+            # change, with no more structured form to offer -- but it still takes
+            # a slot so `values` and `readouts` stay index-correlated.
+            result.values.append(readout)
+            result.readouts.append(readout)
         elif isinstance(action, ExtractAction):
             # Lazy, once-per-batch: cheap dedicated CDP getter, not tied to a
             # full page.content() fetch -- doesn't add a round trip to
@@ -1371,6 +1387,7 @@ class PatchrightDriver:
             text = await live.dialogs.guard(
                 live.page.evaluate("() => navigator.clipboard.readText()")
             )
+            result.values.append(text)
             result.readouts.append(f"clipboard: {text!r}")
         elif isinstance(action, ClipboardWriteAction):
             await live.dialogs.guard(
@@ -1394,8 +1411,8 @@ class PatchrightDriver:
             result.js_returns.append(await live.dialogs.guard(live.page.evaluate(action.script)))
         elif isinstance(action, ClickAction):
             pre_click_url = live.page.url
-            node, cdp = await self._resolve_ref(live, action.ref)
-            await self._human_click(cdp, node, action.ref, cctx.delay_policy)
+            node, cdp = await self._resolve_target(live, action)
+            await self._human_click(cdp, node, _target_label(action), cctx.delay_policy)
             if live.page.url != pre_click_url:
                 # A click that navigated returns as soon as the event is
                 # dispatched, so the new document may not exist yet -- the very
@@ -1404,13 +1421,15 @@ class PatchrightDriver:
                 # best-effort: a page that never settles still returns whatever
                 # it has, which is better than failing an action that worked.
                 await self._await_document(live)
-                result.verifications.append(f"click on {action.ref} navigated to {live.page.url}")
+                result.verifications.append(
+                    f"click on {_target_label(action)} navigated to {live.page.url}"
+                )
             else:
-                result.verifications.append(f"clicked {action.ref}")
+                result.verifications.append(f"clicked {_target_label(action)}")
         elif isinstance(action, FillAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
+            node, cdp = await self._resolve_target(live, action)
             await self._human_fill(
-                cdp, node, action.ref, action.text, cctx.delay_policy, clear=action.clear
+                cdp, node, _target_label(action), action.text, cctx.delay_policy, clear=action.clear
             )
             # Read-back grounding: confirm the value actually landed in the
             # field rather than assuming success. Best-effort -- a field that
@@ -1418,50 +1437,50 @@ class PatchrightDriver:
             value = await cdp_element.read_value(cdp, node)
             if value is not None:
                 result.verifications.append(
-                    f"filled {action.ref}: field now contains {value[:80]!r}"
+                    f"filled {_target_label(action)}: field now contains {value[:80]!r}"
                 )
         elif isinstance(action, DoubleClickAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
-            box = await cdp_element.element_box(cdp, node, action.ref)
+            node, cdp = await self._resolve_target(live, action)
+            box = await cdp_element.element_box(cdp, node, _target_label(action))
             target = await self._approach(cdp, box)
             # Two presses with `clickCount` 1 then 2, not one with 2: the page
             # listens for the first `click` as well as the `dblclick`, and a
             # single event with a count of two never fires the former.
             await cdp_element.click_at(cdp, *target, click_count=1)
             await cdp_element.click_at(cdp, *target, click_count=2)
-            result.verifications.append(f"double-clicked {action.ref}")
+            result.verifications.append(f"double-clicked {_target_label(action)}")
         elif isinstance(action, FocusAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
+            node, cdp = await self._resolve_target(live, action)
             if not await cdp_element.focus(cdp, node):
-                box = await cdp_element.element_box(cdp, node, action.ref)
+                box = await cdp_element.element_box(cdp, node, _target_label(action))
                 await cdp_element.click_at(cdp, *await self._approach(cdp, box))
-            result.verifications.append(f"focused {action.ref}")
+            result.verifications.append(f"focused {_target_label(action)}")
         elif isinstance(action, (CheckAction, UncheckAction)):
             want = isinstance(action, CheckAction)
-            node, cdp = await self._resolve_ref(live, action.ref)
+            node, cdp = await self._resolve_target(live, action)
             # Click first -- it is what a person does, and it exercises the
             # page's own handlers. The JS path is the fallback for a control a
             # coordinate cannot reach (the display:none input behind a label).
             try:
-                box = await cdp_element.element_box(cdp, node, action.ref)
+                box = await cdp_element.element_box(cdp, node, _target_label(action))
                 await cdp_element.click_at(cdp, *await self._approach(cdp, box))
             except Exception:  # noqa: BLE001 -- no geometry; fall through to JS
                 pass
             settled = await cdp_element.set_checked(cdp, node, want)
             result.verifications.append(
-                f"{'checked' if want else 'unchecked'} {action.ref}"
+                f"{'checked' if want else 'unchecked'} {_target_label(action)}"
                 if settled
-                else f"could not {'check' if want else 'uncheck'} {action.ref}"
+                else f"could not {'check' if want else 'uncheck'} {_target_label(action)}"
             )
         elif isinstance(action, ScrollIntoViewAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
+            node, cdp = await self._resolve_target(live, action)
             await cdp_element.scroll_into_view(cdp, node)
-            result.verifications.append(f"scrolled {action.ref} into view")
+            result.verifications.append(f"scrolled {_target_label(action)} into view")
         elif isinstance(action, ClearAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
-            await self._clear_field(cdp, node, action.ref)
+            node, cdp = await self._resolve_target(live, action)
+            await self._clear_field(cdp, node, _target_label(action))
             value = await cdp_element.read_value(cdp, node)
-            result.verifications.append(f"cleared {action.ref}: now {value!r}")
+            result.verifications.append(f"cleared {_target_label(action)}: now {value!r}")
         elif isinstance(action, DragAction):
             source, cdp = await self._resolve_ref(live, action.ref)
             destination, _ = await self._resolve_ref(live, action.to_ref)
@@ -1486,13 +1505,13 @@ class PatchrightDriver:
             await cdp_element.insert_text(await self._page_session(live), action.text)
             result.verifications.append(f"inserted {action.text[:40]!r}")
         elif isinstance(action, TapAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
-            box = await cdp_element.element_box(cdp, node, action.ref)
+            node, cdp = await self._resolve_target(live, action)
+            box = await cdp_element.element_box(cdp, node, _target_label(action))
             width, height = await cdp_element.viewport_size(cdp)
             point = cdp_element.clamp(mouse.jittered_point_in(box), width, height)
             await cdp_element.tap_at(cdp, *point)
             await cctx.delay_policy.pause("click")
-            result.verifications.append(f"tapped {action.ref}")
+            result.verifications.append(f"tapped {_target_label(action)}")
         elif isinstance(action, SwipeAction):
             await self._swipe(live, action)
             result.verifications.append(
@@ -1501,8 +1520,8 @@ class PatchrightDriver:
         elif isinstance(action, SelectOptionAction):
             await self._select_option(live, action, result)
         elif isinstance(action, HoverAction):
-            node, cdp = await self._resolve_ref(live, action.ref)
-            box = await cdp_element.element_box(cdp, node, action.ref)
+            node, cdp = await self._resolve_target(live, action)
+            box = await cdp_element.element_box(cdp, node, _target_label(action))
             await self._approach(cdp, box)
         elif isinstance(action, PressAction):
             await cdp_element.press_key(await self._page_session(live), action.key)
@@ -1522,11 +1541,16 @@ class PatchrightDriver:
         elif isinstance(action, DropdownOptionsAction):
             node, _ = await self._resolve_ref(live, action.ref)
             options = cdp_element.dropdown_options(node)
+            result.values.append(options)
             result.readouts.append(_render_dropdown_options(action.ref, options))
         elif isinstance(action, SearchPageAction):
-            result.readouts.append(await self._search_page(live, action))
+            matches, readout = await self._search_page(live, action)
+            result.values.append(matches)
+            result.readouts.append(readout)
         elif isinstance(action, FindElementsAction):
-            result.readouts.append(await self._find_elements(live, action))
+            elements, readout = await self._find_elements(live, action)
+            result.values.append(elements)
+            result.readouts.append(readout)
         elif isinstance(action, UploadFileAction):
             node, cdp = await self._resolve_ref(live, action.ref)
             await cdp_element.set_file_input(cdp, node, [action.path])
@@ -1534,6 +1558,7 @@ class PatchrightDriver:
         elif isinstance(action, DialogStatusAction):
             pending = live.dialogs.pending
             result.dialog = pending
+            result.values.append(pending)
             result.readouts.append(
                 pending.describe()
                 if pending is not None
@@ -1640,19 +1665,24 @@ class PatchrightDriver:
         )
         result.verifications.append(f"waited for {described}")
 
-    async def _query(self, live: _Page, action: Action) -> str:
-        """Read one property of one element, as a readout line."""
+    async def _query(self, live: _Page, action: Action) -> tuple[Any, str]:
+        """Read one property of one element, as `(value, readout line)`.
+
+        Both, never one derived from the other: an agent needs the sentence, a
+        program needs the value. See `ActionResult.values`.
+        """
 
         if isinstance(action, GetUrlAction):
-            return f"url: {live.page.url}"
+            return live.page.url, f"url: {live.page.url}"
         if isinstance(action, GetTitleAction):
-            return f"title: {await live.dialogs.guard(live.page.title())!r}"
+            title = await live.dialogs.guard(live.page.title())
+            return title, f"title: {title!r}"
         if isinstance(action, GetCountAction):
             count = await live.page.evaluate(
                 "(opts) => document.querySelectorAll(opts.selector).length",
                 {"selector": action.selector},
             )
-            return f"count: {count} element(s) match {action.selector!r}"
+            return int(count), f"count: {count} element(s) match {action.selector!r}"
 
         ref = getattr(action, "ref", None)
         selector = getattr(action, "selector", None)
@@ -1666,25 +1696,35 @@ class PatchrightDriver:
         read = await self._read_element(live, ref, selector, options)
 
         if isinstance(action, GetTextAction):
-            return f"text of {target}: {read['text']!r}"
+            return read["text"], f"text of {target}: {read['text']!r}"
         if isinstance(action, GetHtmlAction):
-            return f"html of {target}: {read['html']}"
+            return read["html"], f"html of {target}: {read['html']}"
         if isinstance(action, GetValueAction):
-            return f"value of {target}: {read['value']!r}"
+            return read["value"], f"value of {target}: {read['value']!r}"
         if isinstance(action, GetAttributeAction):
-            return f"{action.name} of {target}: {read['attr']!r}"
+            # `None` and the empty string mean different things on an attribute
+            # -- absent versus present-but-empty -- so the value keeps `None`
+            # where the prose renders it as `None`.
+            return read["attr"], f"{action.name} of {target}: {read['attr']!r}"
         if isinstance(action, GetBoxAction):
-            return f"box of {target}: {queries.describe_box(read['box'])}"
+            return read["box"], f"box of {target}: {queries.describe_box(read['box'])}"
         if isinstance(action, GetStylesAction):
-            rendered = ", ".join(f"{k}={v!r}" for k, v in (read["styles"] or {}).items())
-            return f"styles of {target}: {rendered}"
+            styles = read["styles"] or {}
+            rendered = ", ".join(f"{k}={v!r}" for k, v in styles.items())
+            return styles, f"styles of {target}: {rendered}"
         if isinstance(action, IsVisibleAction):
-            return f"{target} is {'visible' if read['visible'] else 'not visible'}"
+            visible = bool(read["visible"])
+            return visible, f"{target} is {'visible' if visible else 'not visible'}"
         if isinstance(action, IsEnabledAction):
-            return f"{target} is {'enabled' if read['enabled'] else 'disabled'}"
+            enabled = bool(read["enabled"])
+            return enabled, f"{target} is {'enabled' if enabled else 'disabled'}"
         if isinstance(action, IsCheckedAction):
+            # `None` for a tri-state checkbox: neither `True` nor `False` is
+            # true of `indeterminate`, and returning `False` would report an
+            # unanswered checkbox as unchecked.
+            checked = None if read["indeterminate"] else bool(read["checked"])
             state = "mixed" if read["indeterminate"] else str(read["checked"]).lower()
-            return f"{target} checked: {state}"
+            return checked, f"{target} checked: {state}"
         raise AssertionError(f"unhandled query action {type(action).__name__}")
 
     async def _read_element(
@@ -2091,6 +2131,79 @@ class PatchrightDriver:
         )
         return node, cdp
 
+    async def _resolve_selector(
+        self, live: _Page, selector: str
+    ) -> tuple[EnhancedDOMTreeNode, CDPSession]:
+        """The element matching a CSS selector, in the shape `_resolve_ref` returns.
+
+        The convenience path. `DOM.querySelector` is document-scoped, so unlike a
+        ref this **cannot reach into a cross-origin iframe or a shadow root**, and
+        an ambiguous selector silently takes the first match -- the three failure
+        modes `driver/node_index.py` documents as the reason refs exist. Refs stay
+        the robust way to address an element; this is for the caller who knows
+        their page and does not want to snapshot first.
+
+        The node still has to come from the captured tree, because everything
+        downstream acts on a fused `EnhancedDOMTreeNode`. So the CSS query resolves
+        a backend node id in the page, and that id is looked up in the current
+        capture -- snapshotting first when there is no capture yet, which is what
+        makes `click(selector=...)` work as the very first action on a page.
+        """
+
+        cdp = await self._page_session(live)
+        document = await cdp.send("DOM.getDocument", {"depth": 0})
+        match = await cdp.send(
+            "DOM.querySelector",
+            {"nodeId": document["root"]["nodeId"], "selector": selector},
+        )
+        node_id = match.get("nodeId")
+        if not node_id:
+            raise SelectorNotFound(selector)
+        described = await cdp.send("DOM.describeNode", {"nodeId": node_id})
+        backend_id = (described.get("node") or {}).get("backendNodeId")
+        if not backend_id:
+            raise SelectorNotFound(selector)
+
+        node = live.nodes.by_backend_id(backend_id)
+        if node is None:
+            # No capture covers this element yet -- the caller has not snapshotted,
+            # or the DOM moved on. Capture now rather than refusing: a selector is
+            # meant to work without a snapshot step.
+            # `no_runtime=True`: this capture is implicit -- the caller asked to
+            # click something, not to snapshot -- so it must not quietly make the
+            # browser more detectable than the caller's tier allows. The Runtime
+            # calls it skips (`getEventListeners`) only feed interactivity
+            # detection, which selector resolution does not use: all we need is
+            # the node in the index.
+            tree = await self._capture_fused(live, no_runtime=True)
+            live.nodes.record(tree)
+            live.last_tree = tree
+            node = live.nodes.by_backend_id(backend_id)
+        if node is None:
+            raise SelectorNotFound(selector)
+        return node, cdp_element.session_for_node(
+            node,
+            page_session=cdp,
+            frame_sessions=live.frame_sessions,
+        )
+
+    async def _resolve_target(
+        self, live: _Page, action: Action
+    ) -> tuple[EnhancedDOMTreeNode, CDPSession]:
+        """An interaction's target, by whichever of `ref` / `selector` it carries.
+
+        The single gate for every interaction verb, so the exactly-one rule and
+        the "never sniff the string" rule are stated once.
+        """
+
+        ref = getattr(action, "ref", None)
+        selector = getattr(action, "selector", None)
+        queries.require_target(ref, selector)
+        if ref is not None:
+            return await self._resolve_ref(live, ref)
+        assert selector is not None
+        return await self._resolve_selector(live, selector)
+
     async def _approach(self, cdp: CDPSession, box: mouse.Box) -> tuple[float, float]:
         """Move the pointer to a jittered point inside `box` along an
         interpolated path, and return the point landed on.
@@ -2323,7 +2436,9 @@ class PatchrightDriver:
         except Exception:
             return False
 
-    async def _search_page(self, live: _Page, action: SearchPageAction) -> str:
+    async def _search_page(
+        self, live: _Page, action: SearchPageAction
+    ) -> tuple[list[str], str]:
         """Grep the page's rendered text.
 
         Runs in the page because the text has to come from the *rendered* DOM,
@@ -2345,17 +2460,19 @@ class PatchrightDriver:
                 },
             )
         except Exception as exc:
-            return f"search_page for {action.pattern!r} failed: {exc}"
+            return [], f"search_page for {action.pattern!r} failed: {exc}"
 
-        found = matches.get("matches") or []
+        found = [str(m) for m in (matches.get("matches") or [])]
         if not found:
-            return f"search_page: no match for {action.pattern!r} on this page"
+            return [], f"search_page: no match for {action.pattern!r} on this page"
         total = matches.get("total", len(found))
         lines = [f"search_page: {total} match(es) for {action.pattern!r}"]
         lines += [f"[{i}] …{m}…" for i, m in enumerate(found, start=1)]
-        return "\n".join(lines)
+        return found, "\n".join(lines)
 
-    async def _find_elements(self, live: _Page, action: FindElementsAction) -> str:
+    async def _find_elements(
+        self, live: _Page, action: FindElementsAction
+    ) -> tuple[list[dict[str, Any]], str]:
         """Query the DOM by CSS selector and read back what matched."""
 
         try:
@@ -2369,11 +2486,11 @@ class PatchrightDriver:
                 },
             )
         except Exception as exc:
-            return f"find_elements for {action.selector!r} failed: {exc}"
+            return [], f"find_elements for {action.selector!r} failed: {exc}"
 
         elements = found.get("elements") or []
         if not elements:
-            return f"find_elements: nothing matched {action.selector!r}"
+            return [], f"find_elements: nothing matched {action.selector!r}"
         lines = [
             f"find_elements: {found.get('total', len(elements))} match(es) "
             f"for {action.selector!r} (showing {len(elements)})"
@@ -2385,7 +2502,7 @@ class PatchrightDriver:
             for key, value in (element.get("attrs") or {}).items():
                 parts.append(f"{key}={value!r}")
             lines.append(f"[{i}] " + " ".join(parts))
-        return "\n".join(lines)
+        return list(elements), "\n".join(lines)
 
     async def _select_option(
         self, live: _Page, action: SelectOptionAction, result: ActionResult

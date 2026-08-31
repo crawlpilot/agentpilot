@@ -25,6 +25,12 @@ and never imports `crawlpilot.driver` at all.
 """
 
 from crawlpilot.api import Browser, BrowserSession
+from crawlpilot.client import (
+    AsyncCrawlpilot,
+    Crawlpilot,
+    SyncSession,
+    proxy_endpoint,
+)
 from crawlpilot.config import (
     BrowserConfig,
     EgressConfig,
@@ -33,18 +39,12 @@ from crawlpilot.config import (
     ProxyHealthConfig,
 )
 from crawlpilot.extensions import (
-    BlockHooks,
-    BlockMount,
-    BrowseHooks,
-    BrowseMount,
-    ContentHooks,
-    ContentMount,
     Extension,
     ExtensionManifest,
     ExtensionRegistry,
     Resolution,
-    ToolMount,
 )
+from crawlpilot.identity.proxy_pinning import ProxyPinner
 from crawlpilot.policy import (
     InMemoryStateStore,
     NullPrototypes,
@@ -58,26 +58,26 @@ from crawlpilot.spi.errors import (
     ContextCrashed,
     DriverError,
     NavigationTimeout,
+    SelectorNotFound,
+    StaleRefError,
+    WaitTimeout,
 )
 from crawlpilot.spi.identity import IdentityRef, ProfileKind
+from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.spi.scrape import Document, ScrapeOptions
 from crawlpilot.tiers import Tier, TierPolicy
 from crawlpilot.tools import ToolRegistry, ToolSpec, browser_tools
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
-    "BlockHooks",
-    "BlockMount",
+    "AsyncCrawlpilot",
     "Browser",
     "BrowserConfig",
     "BrowserSession",
-    "BrowseHooks",
-    "BrowseMount",
     "ChallengeDetected",
-    "ContentHooks",
-    "ContentMount",
     "ContextCrashed",
+    "Crawlpilot",
     "Document",
     "DriverError",
     "EgressConfig",
@@ -92,17 +92,23 @@ __all__ = [
     "ProfileConfig",
     "ProfileKind",
     "PrototypeProvider",
+    "ProxyEndpoint",
     "ProxyHealthConfig",
+    "ProxyPinner",
     "ProxyProvider",
     "Resolution",
     "ScrapeOptions",
+    "SelectorNotFound",
+    "StaleRefError",
     "StateStore",
     "StaticProxies",
+    "SyncSession",
     "Tier",
     "TierPolicy",
-    "ToolMount",
     "ToolRegistry",
     "ToolSpec",
+    "WaitTimeout",
     "__version__",
     "browser_tools",
+    "proxy_endpoint",
 ]

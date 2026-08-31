@@ -36,7 +36,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from crawlpilot.config import DEFAULTS, BrowserConfig
 from crawlpilot.extensions import Extension, ExtensionRegistry
@@ -127,14 +127,42 @@ class BrowserSession:
 
     # ----------------------------------------------------------- interaction
 
-    async def click(self, ref: str, *, all: bool = False) -> ActionResult:
-        return await self.execute([spi_actions.ClickAction(ref=ref, all=all)])
+    async def click(
+        self, selector: str | None = None, *, ref: str | None = None, all: bool = False
+    ) -> ActionResult:
+        """Click an element, addressed by CSS selector or by snapshot ref.
 
-    async def fill(self, ref: str, text: str, *, clear: bool = True) -> ActionResult:
-        """Type into a field. `clear=False` appends to what is already there."""
+            await page.click("#add-to-cart")     # positional -> CSS selector
+            await page.click(ref="e42")          # keyword    -> snapshot ref
+
+        **The parameter decides, never the string.** A ref is `e<index>`, and
+        `e42` is itself a valid CSS type selector, so no rule could tell them
+        apart by looking -- and a wrong guess clicks the wrong element in
+        silence. Passing both is a `ValueError`.
+
+        Prefer a ref when you have one: `DOM.querySelector` is document-scoped,
+        so a selector cannot reach inside a cross-origin iframe or a shadow
+        root, and an ambiguous selector takes the first match. A selector saves
+        you a `snapshot()` when you already know the page.
+        """
+
+        return await self.execute([spi_actions.ClickAction(ref=ref, selector=selector, all=all)])
+
+    async def fill(
+        self,
+        selector: str | None = None,
+        text: str = "",
+        *,
+        ref: str | None = None,
+        clear: bool = True,
+    ) -> ActionResult:
+        """Type into a field, by CSS selector or by ref -- see `click`.
+
+        `clear=False` appends to what is already there.
+        """
 
         return await self.execute(
-            [spi_actions.FillAction(ref=ref, text=text, clear=clear)]
+            [spi_actions.FillAction(ref=ref, selector=selector, text=text, clear=clear)]
         )
 
     async def select_option(self, ref: str, *values: str) -> ActionResult:
@@ -142,8 +170,8 @@ class BrowserSession:
             [spi_actions.SelectOptionAction(ref=ref, values=list(values))]
         )
 
-    async def hover(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.HoverAction(ref=ref)])
+    async def hover(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.HoverAction(ref=ref, selector=selector)])
 
     async def press(self, key: str) -> ActionResult:
         return await self.execute([spi_actions.PressAction(key=key)])
@@ -184,34 +212,61 @@ class BrowserSession:
     # These return their answer directly rather than an `ActionResult` whose
     # `readouts[0]` the caller has to index into -- the same reason `extract()`
     # returns a string.
+    #
+    # And they return the *value*, not the sentence. Until 0.2 they returned
+    # `readouts[0]`, which is prose written for an agent's prompt: `get_count()`
+    # gave `"count: 3 element(s) match '.item'"` rather than `3`, and
+    # `is_visible()` gave `"#buy is visible"` or `"#buy is not visible"` -- two
+    # non-empty strings, so `if await page.is_visible(x)` was always True. The
+    # prose still exists on `ActionResult.readouts` for the agent path; these
+    # read `ActionResult.values` instead.
 
-    async def dropdown_options(self, ref: str) -> str:
-        """The options of a `<select>`, read off the last snapshot."""
+    async def _value(self, action: spi_actions.Action, default: Any = None) -> Any:
+        result = await self.execute([action])
+        return result.values[0] if result.values else default
 
-        result = await self.execute([spi_actions.DropdownOptionsAction(ref=ref)])
-        return result.readouts[0] if result.readouts else ""
+    async def dropdown_options(self, ref: str) -> list[dict[str, str]]:
+        """The options of a `<select>`, read off the last snapshot.
 
-    async def search_page(self, pattern: str, *, regex: bool = False, **kwargs: Any) -> str:
-        """Grep the rendered page text. Cheap; no model, no full observation."""
+        One `{"text": ..., "value": ...}` per `<option>`; empty when the element
+        has none (which usually means it is not a real `<select>`).
+        """
 
-        result = await self.execute(
-            [spi_actions.SearchPageAction(pattern=pattern, regex=regex, **kwargs)]
+        return cast(
+            "list[dict[str, str]]",
+            await self._value(spi_actions.DropdownOptionsAction(ref=ref), []),
         )
-        return result.readouts[0] if result.readouts else ""
+
+    async def search_page(
+        self, pattern: str, *, regex: bool = False, **kwargs: Any
+    ) -> list[str]:
+        """Grep the rendered page text. Cheap; no model, no full observation.
+
+        One string per match, each with a little surrounding context. Empty when
+        nothing matched -- so `if await page.search_page(...)` reads correctly.
+        """
+
+        return cast(
+            "list[str]",
+            await self._value(
+                spi_actions.SearchPageAction(pattern=pattern, regex=regex, **kwargs), []
+            ),
+        )
 
     async def find_elements(
         self, selector: str, *, attributes: Sequence[str] = (), **kwargs: Any
-    ) -> str:
+    ) -> list[dict[str, Any]]:
         """Query the DOM by CSS selector; returns tags, text and attributes."""
 
-        result = await self.execute(
-            [
+        return cast(
+            "list[dict[str, Any]]",
+            await self._value(
                 spi_actions.FindElementsAction(
                     selector=selector, attributes=list(attributes), **kwargs
-                )
-            ]
+                ),
+                [],
+            ),
         )
-        return result.readouts[0] if result.readouts else ""
 
     # -------------------------------------------------------------------- tabs
 
@@ -283,33 +338,56 @@ class BrowserSession:
     # ---------------------------------------------------------------- getters
     #
     # Each returns its answer directly rather than an `ActionResult` whose
-    # `readouts[0]` the caller indexes into -- as `dropdown_options` does.
-
-    async def _readout(self, action: spi_actions.Action) -> str:
-        result = await self.execute([action])
-        return result.readouts[0] if result.readouts else ""
+    # `values[0]` the caller indexes into -- as `dropdown_options` does -- and
+    # each returns a real Python value. See `_value` and `ActionResult.values`
+    # for what these used to return and why it was a trap.
+    #
+    # Every one takes `selector=` as well as `ref=`, unchanged from before.
 
     async def get_text(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.GetTextAction(ref=ref, selector=selector))
+        return cast(
+            str, await self._value(spi_actions.GetTextAction(ref=ref, selector=selector), "")
+        )
 
     async def get_html(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.GetHtmlAction(ref=ref, selector=selector))
+        return cast(
+            str, await self._value(spi_actions.GetHtmlAction(ref=ref, selector=selector), "")
+        )
 
     async def get_value(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.GetValueAction(ref=ref, selector=selector))
+        return cast(
+            str, await self._value(spi_actions.GetValueAction(ref=ref, selector=selector), "")
+        )
 
     async def get_attribute(
         self, name: str, ref: str | None = None, *, selector: str | None = None
-    ) -> str:
-        return await self._readout(
-            spi_actions.GetAttributeAction(name=name, ref=ref, selector=selector)
+    ) -> str | None:
+        """The attribute's value, or `None` when the element does not carry it.
+
+        `None` and `""` are different answers here -- absent versus present but
+        empty (`<input required="">`) -- so this does not flatten them.
+        """
+
+        return cast(
+            "str | None",
+            await self._value(
+                spi_actions.GetAttributeAction(name=name, ref=ref, selector=selector)
+            ),
         )
 
-    async def get_count(self, selector: str) -> str:
-        return await self._readout(spi_actions.GetCountAction(selector=selector))
+    async def get_count(self, selector: str) -> int:
+        return cast(int, await self._value(spi_actions.GetCountAction(selector=selector), 0))
 
-    async def get_box(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.GetBoxAction(ref=ref, selector=selector))
+    async def get_box(
+        self, ref: str | None = None, *, selector: str | None = None
+    ) -> dict[str, float] | None:
+        """The element's bounding box (`x`/`y`/`width`/`height`), or `None` when
+        it has no geometry -- a hidden input, a zero-size wrapper."""
+
+        return cast(
+            "dict[str, float] | None",
+            await self._value(spi_actions.GetBoxAction(ref=ref, selector=selector)),
+        )
 
     async def get_styles(
         self,
@@ -317,27 +395,46 @@ class BrowserSession:
         *,
         selector: str | None = None,
         properties: list[str] | None = None,
-    ) -> str:
-        return await self._readout(
-            spi_actions.GetStylesAction(
-                ref=ref, selector=selector, properties=properties or []
-            )
+    ) -> dict[str, str]:
+        return cast(
+            "dict[str, str]",
+            await self._value(
+                spi_actions.GetStylesAction(
+                    ref=ref, selector=selector, properties=properties or []
+                ),
+                {},
+            ),
         )
 
     async def get_url(self) -> str:
-        return await self._readout(spi_actions.GetUrlAction())
+        return cast(str, await self._value(spi_actions.GetUrlAction(), ""))
 
     async def get_title(self) -> str:
-        return await self._readout(spi_actions.GetTitleAction())
+        return cast(str, await self._value(spi_actions.GetTitleAction(), ""))
 
-    async def is_visible(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.IsVisibleAction(ref=ref, selector=selector))
+    async def is_visible(self, ref: str | None = None, *, selector: str | None = None) -> bool:
+        return cast(
+            bool,
+            await self._value(spi_actions.IsVisibleAction(ref=ref, selector=selector), False),
+        )
 
-    async def is_enabled(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.IsEnabledAction(ref=ref, selector=selector))
+    async def is_enabled(self, ref: str | None = None, *, selector: str | None = None) -> bool:
+        return cast(
+            bool,
+            await self._value(spi_actions.IsEnabledAction(ref=ref, selector=selector), False),
+        )
 
-    async def is_checked(self, ref: str | None = None, *, selector: str | None = None) -> str:
-        return await self._readout(spi_actions.IsCheckedAction(ref=ref, selector=selector))
+    async def is_checked(
+        self, ref: str | None = None, *, selector: str | None = None
+    ) -> bool | None:
+        """`True`/`False`, or `None` for a tri-state checkbox set to
+        `indeterminate` -- where neither answer is true, and `False` would
+        report an unanswered box as deliberately unchecked."""
+
+        return cast(
+            "bool | None",
+            await self._value(spi_actions.IsCheckedAction(ref=ref, selector=selector)),
+        )
 
     # ----------------------------------------------------- files and frames
 
@@ -363,25 +460,29 @@ class BrowserSession:
 
     # --------------------------------------------------------- interaction (2)
 
-    async def double_click(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.DoubleClickAction(ref=ref)])
+    async def double_click(
+        self, selector: str | None = None, *, ref: str | None = None
+    ) -> ActionResult:
+        return await self.execute([spi_actions.DoubleClickAction(ref=ref, selector=selector)])
 
-    async def focus(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.FocusAction(ref=ref)])
+    async def focus(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.FocusAction(ref=ref, selector=selector)])
 
-    async def check(self, ref: str) -> ActionResult:
+    async def check(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
         """Ensure a checkbox or radio is checked. Idempotent, unlike a click."""
 
-        return await self.execute([spi_actions.CheckAction(ref=ref)])
+        return await self.execute([spi_actions.CheckAction(ref=ref, selector=selector)])
 
-    async def uncheck(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.UncheckAction(ref=ref)])
+    async def uncheck(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.UncheckAction(ref=ref, selector=selector)])
 
-    async def scroll_into_view(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.ScrollIntoViewAction(ref=ref)])
+    async def scroll_into_view(
+        self, selector: str | None = None, *, ref: str | None = None
+    ) -> ActionResult:
+        return await self.execute([spi_actions.ScrollIntoViewAction(ref=ref, selector=selector)])
 
-    async def clear(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.ClearAction(ref=ref)])
+    async def clear(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.ClearAction(ref=ref, selector=selector)])
 
     async def drag(self, ref: str, to_ref: str) -> ActionResult:
         return await self.execute([spi_actions.DragAction(ref=ref, to_ref=to_ref)])
@@ -397,8 +498,8 @@ class BrowserSession:
 
         return await self.execute([spi_actions.InsertTextAction(text=text)])
 
-    async def tap(self, ref: str) -> ActionResult:
-        return await self.execute([spi_actions.TapAction(ref=ref)])
+    async def tap(self, selector: str | None = None, *, ref: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.TapAction(ref=ref, selector=selector)])
 
     async def swipe(
         self, direction: str, *, distance: int = 300, ref: str | None = None
@@ -522,17 +623,31 @@ class Browser:
         egress: EgressPolicy | None = None,
         executable_path: str | Path | None = None,
         channel: str | None = None,
-        headless: bool | None = None,
+        headful: bool | None = None,
         cdp_url: str | None = None,
     ) -> None:
         """The launch arguments are flat rather than requiring a `BrowserConfig`.
 
-        `executable_path` / `channel` / `headless` / `cdp_url` are what a user
+        `executable_path` / `channel` / `headful` / `cdp_url` are what a user
         actually reaches for -- "use my Chrome", "use the browser in that
         container" -- and making them assemble a nested config object to say so
         is the difference between a one-liner and a paragraph. They override the
         matching fields on `config.launch`, so a platform that builds its config
         from the environment still works unchanged.
+
+        `headful` decides visible-window-or-not for **everything this browser
+        opens**, `scrape()` included, and it is the same word as
+        `session(headful=...)` -- which it overrides. Until 0.2 this argument was
+        the inverted `headless=`, and the pair was a genuine trap: `scrape()`
+        ignores the session flag entirely and derives headful from the tier rung
+        it is on (`session/ephemeral.py`), so an `auto` scrape ran its first
+        rung headless no matter what the session asked for, and the only way to
+        get a window was the *other*, oppositely-named knob.
+
+        Tri-state, so the default stays honest: `None` means "headful if a
+        display exists", `True` asks for a window, `False` forces headless. Even
+        `True` degrades rather than fails where there is no display -- see
+        `ProcessLauncher.ensure_display`.
         """
 
         base = config or DEFAULTS
@@ -545,7 +660,10 @@ class Browser:
                     for k, v in (
                         ("executable_path", str(executable_path) if executable_path else None),
                         ("channel", channel),
-                        ("headless", headless),
+                        # `LaunchConfig` speaks Playwright's `headless`; the
+                        # public argument is the positive one. Both keep `None`
+                        # meaning "work it out".
+                        ("headless", None if headful is None else not headful),
                         ("cdp_url", cdp_url),
                     )
                     if v is not None

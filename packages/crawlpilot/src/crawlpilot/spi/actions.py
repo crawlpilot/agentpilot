@@ -16,7 +16,7 @@ needed a breaking shape change -- and now dispatch for real in P1 via
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, SnapshotView
@@ -154,15 +154,25 @@ class ExecuteJsAction:
 
 @dataclass
 class ClickAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     all: bool = False
     terminates_sequence: bool = False
 
 
 @dataclass
 class FillAction:
-    ref: str
     text: str
+    """First, because it is the only required field -- `ref` and `selector` are
+    each optional on their own and constrained as a pair."""
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     clear: bool = True
     """Whether to empty the field first. `clear=False` appends, which is how a
     model adds to a field it has already partly filled -- browser-use's
@@ -281,13 +291,21 @@ class DiffSnapshotAction:
 
 @dataclass
 class DoubleClickAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
 @dataclass
 class FocusAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
@@ -300,19 +318,31 @@ class CheckAction:
     which happened. Stating the desired end state removes the failure mode.
     """
 
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
 @dataclass
 class UncheckAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
 @dataclass
 class ScrollIntoViewAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
@@ -320,7 +350,11 @@ class ScrollIntoViewAction:
 class ClearAction:
     """Empty a field. `fill(text="")` does the same; this says so plainly."""
 
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
@@ -371,7 +405,11 @@ class TapAction:
     """A touch tap. Not a click: a page that binds only `touchstart` -- which
     mobile-first sites routinely do -- sees nothing from a mouse event."""
 
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
@@ -689,7 +727,11 @@ class SelectOptionAction:
 
 @dataclass
 class HoverAction:
-    ref: str
+    ref: str | None = None
+    selector: str | None = None
+    """Exactly one of `ref` / `selector` -- `queries.require_target` enforces
+    it, and its docstring explains why the two can never be told apart by
+    inspecting the string."""
     terminates_sequence: bool = False
 
 
@@ -921,6 +963,23 @@ class ActionResult:
     action was asked to *fetch*. Collapsing them would make a page search look
     like a side effect, and would leave a caller no way to distinguish grounding
     it can summarise from data it must pass through intact."""
+    values: list[Any] = field(default_factory=list)
+    """The same answers as `readouts`, index-correlated, as real Python values
+    rather than prose: `str` for a title or text, `int` for a count, `bool` for
+    a visibility check, `dict` for a box or styles, `list` for dropdown options.
+
+    Two consumers with genuinely different needs read these actions. An agent
+    needs a sentence it can put in a prompt ("`#buy` is not visible"), which is
+    what `readouts` carries and why every query action was written to produce
+    one. A *program* needs the value, and it was getting the sentence: with
+    only `readouts`, `is_visible()` returned `"#buy is not visible"` -- a
+    non-empty, therefore truthy, string, so `if await page.is_visible(x)` was
+    always True. `get_count()` returned `"count: 3 element(s) match '.item'"`
+    rather than `3`.
+
+    So both are produced, never one derived from the other. `readouts` is
+    unchanged and stays the agent's channel; `values` is the programmatic one
+    that `api.BrowserSession`'s getters return."""
     sequence_aborted: bool = False
     """Set when a prior `terminates_sequence` action changed the URL and a
     later action in the same batch would otherwise act on a stale DOM."""

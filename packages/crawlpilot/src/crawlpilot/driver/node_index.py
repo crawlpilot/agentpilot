@@ -49,6 +49,16 @@ class NodeIndex:
     """
 
     _nodes: dict[str, EnhancedDOMTreeNode] = field(default_factory=dict)
+    _by_backend: dict[int, EnhancedDOMTreeNode] = field(default_factory=dict)
+    """Parallel index on `backendNodeId`, for the selector path.
+
+    Nothing about the ref model changes: `get()` is still a dict lookup with no
+    CSS in it. This exists because a CSS selector resolves *in the page* to a
+    backend node id (`DOM.querySelector` + `DOM.describeNode`), and that id then
+    has to find its way to the same fused node every verb downstream expects.
+    The query happens once, in Chrome, and the result rejoins the normal path
+    here -- rather than the selector cascade this module replaced, which
+    re-derived a selector for a node it had already captured."""
 
     def __len__(self) -> int:
         return len(self._nodes)
@@ -61,6 +71,7 @@ class NodeIndex:
         fusion refs are keyed only to the tree just captured."""
 
         self._nodes.clear()
+        self._by_backend.clear()
 
     def record(self, root: EnhancedDOMTreeNode) -> None:
         """Index a fused tree so `e<index>` refs resolve.
@@ -75,6 +86,7 @@ class NodeIndex:
         from crawlpilot.spi.dom_tree import NodeType
 
         self._nodes.clear()
+        self._by_backend.clear()
         stack = [root]
         seen: set[int] = set()
         while stack:
@@ -84,6 +96,8 @@ class NodeIndex:
             seen.add(id(node))
             if node.node_type == NodeType.ELEMENT_NODE:
                 self._nodes[f"e{node.selector_index}"] = node
+                if node.backend_node_id:
+                    self._by_backend.setdefault(node.backend_node_id, node)
             if node.content_document is not None:
                 stack.append(node.content_document)
             stack.extend(node.children_and_shadow_roots)
@@ -92,3 +106,14 @@ class NodeIndex:
         """The captured node behind `ref`, or `None` when no capture minted it."""
 
         return self._nodes.get(ref)
+
+    def by_backend_id(self, backend_node_id: int) -> EnhancedDOMTreeNode | None:
+        """The captured node with this `backendNodeId`, for the selector path.
+
+        `setdefault` on record, so when a cross-origin frame's renderer reuses a
+        backend id the first node captured under it wins rather than the last --
+        the same collision `_ref()` in the driver-contract tests avoids by
+        preferring `selector_index`.
+        """
+
+        return self._by_backend.get(backend_node_id)

@@ -137,8 +137,26 @@ def target_description(ref: str | None, selector: str | None) -> str:
 
 
 def require_target(ref: str | None, selector: str | None) -> None:
+    """Exactly one of `ref` / `selector`.
+
+    Both is rejected rather than silently preferring one, because the two can
+    disagree and the caller would never learn which won.
+
+    This pair is also the *whole* answer to "how does a selector differ from a
+    ref": the parameter it arrives in, never the shape of the string. Sniffing
+    is not available to us -- a ref is `e<index>` (`driver/node_index.py`), and
+    `e42` is itself a valid CSS type selector matching an `<e42>` element -- so
+    a rule like `^e\\d+$` would be a guess, and a wrong guess acts on the wrong
+    element without saying so.
+    """
+
     if ref is None and selector is None:
         raise ValueError("one of `ref` or `selector` is required")
+    if ref is not None and selector is not None:
+        raise ValueError(
+            f"pass either `ref` or `selector`, not both (got ref={ref!r}, "
+            f"selector={selector!r})"
+        )
 
 
 def node_object_ref(node: EnhancedDOMTreeNode) -> dict[str, Any]:
