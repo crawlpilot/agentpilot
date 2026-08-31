@@ -227,6 +227,23 @@ _QUERY_ACTIONS = (
 near-identical branches. `assert_never` still sees every member, because the
 union is exhausted by the group tuples plus the individual branches."""
 
+_GESTURE_ACTIONS = (
+    ClickAction,
+    DoubleClickAction,
+    TapAction,
+    PressAction,
+    SendKeysAction,
+    CheckAction,
+    UncheckAction,
+)
+"""Actions that are a user gesture, and so might navigate.
+
+Exactly the set browser-use waits after: a click, a tap, and Enter-as-a-key --
+which is how most forms are actually submitted. `fill` is not here (typing does
+not navigate) and neither is `navigate` itself, which already waits on its own
+`goto`.
+"""
+
 _DIALOG_ACTIONS = (DialogStatusAction, DialogAcceptAction, DialogDismissAction)
 """The only actions that may run while a dialog holds the renderer. Everything
 else would block on it, so `_dispatch` refuses them with `DialogInterrupt`
@@ -323,6 +340,17 @@ is reported dead so the session layer can reopen it, rather than hanging the
 acquire path on an unresponsive Chrome."""
 
 _CLICK_NAVIGATION_TIMEOUT_MS = 5_000
+
+_NAVIGATION_START_TIMEOUT_MS = 150
+"""How long a gesture waits to see whether it started a navigation.
+
+Paid in full only by a gesture that navigates nothing, since the wait is on the
+navigation event and returns the instant one arrives. browser-use pays a
+comparable 100ms *unconditionally* between every pair of actions
+(`wait_between_actions`), so this is the same guarantee at a lower cost on the
+common path -- and generous enough that a form submit on a slow renderer still
+lands inside it.
+"""
 """How long a click waits for a navigation it triggered to parse a document.
 
 Longer than `_SETTLE_TIMEOUT_MS` because this is a real page load rather than a
@@ -467,6 +495,13 @@ class _Page:
     `frame_queue` -- see `start_screencast`/`stop_screencast`."""
     nodes: NodeIndex = field(default_factory=NodeIndex)
     """`ref -> captured node` from the most recent snapshot."""
+    navigated: asyncio.Event = field(default_factory=asyncio.Event)
+    """Set when this tab's main frame navigates.
+
+    An event rather than a URL poll because it fires the moment a navigation
+    *starts*: a gesture that submits a form can return before the URL has
+    changed, and comparing URLs at that instant sees the old page. See
+    `_settle_if_navigating`."""
     last_tree: EnhancedDOMTreeNode | None = None
     """The most recent capture, kept so `DiffSnapshotAction` has something to
     compare against. Per tab, like `nodes`: a diff across two different pages
@@ -890,6 +925,15 @@ class PatchrightDriver:
             # Registering this listener is what turns Playwright's silent
             # auto-dismiss off, so it must happen for every page including
             # popups -- and `_page_session` must wrap the session to match.
+            def _on_navigated(frame: Any) -> None:
+                if frame is not pg.main_frame:
+                    return  # an iframe navigating is not this page moving
+                tracked = cctx.pages.get(pid)
+                if tracked is not None:
+                    tracked.navigated.set()
+
+            pg.on("framenavigated", _on_navigated)
+
             live_page = cctx.pages.get(pid)
             if live_page is not None:
                 live_page.dialogs.set_policy(cctx.dialog_policy)
@@ -1069,8 +1113,16 @@ class PatchrightDriver:
                     await cctx.delay_policy.pause("gap")
                 try:
                     pre_url = live.page.url
+                    live.navigated.clear()
                     await self._dispatch(cctx, live, action, result)
                     dispatched_any = True
+                    # One place, not one per verb: the batch loop already knows
+                    # the pre-action URL and is the only thing that acts on the
+                    # answer (`stale`, below). A gesture that started a
+                    # navigation is settled here, so the URL comparison that
+                    # follows sees the page the caller will actually get.
+                    if isinstance(action, _GESTURE_ACTIONS):
+                        await self._settle_if_navigating(live, pre_url)
                 except DialogInterrupt as exc:
                     # Not a failure: the page asked a question and is waiting for
                     # an answer, which is exactly what a `"manual"` policy was
@@ -1929,6 +1981,40 @@ class PatchrightDriver:
             await live.page.wait_for_load_state(
                 "domcontentloaded", timeout=_CLICK_NAVIGATION_TIMEOUT_MS
             )
+
+    async def _settle_if_navigating(self, live: _Page, pre_url: str) -> bool:
+        """After a gesture, give a navigation it may have started time to begin.
+
+        The problem this fixes: a click that submits a form returns as soon as
+        the input event is dispatched, and the navigation commits some
+        milliseconds later. The URL comparison that follows therefore sees the
+        *old* page, no settle happens, and the next action reads a document that
+        is about to be replaced -- reporting success on the wrong page. It is
+        also why `terminates_sequence` and the URL diff, both ported from
+        browser-use, were not enough on their own: they detect a navigation that
+        has already committed, not one still in flight.
+
+        browser-use closes the same gap with an unconditional
+        `wait_between_actions` sleep of 100ms in its agent loop
+        (`browser/profile.py:694`, `agent/service.py:2771`). Waiting on the
+        navigation *event* instead means a gesture that does navigate returns as
+        soon as it starts rather than always paying the full bound, and only a
+        gesture that navigates nothing pays it in full.
+
+        Returns whether a navigation was observed.
+        """
+
+        if live.page.url != pre_url:
+            await self._await_document(live)
+            return True
+        try:
+            await asyncio.wait_for(
+                live.navigated.wait(), timeout=_NAVIGATION_START_TIMEOUT_MS / 1000
+            )
+        except TimeoutError:
+            return False  # the ordinary case: the gesture changed nothing
+        await self._await_document(live)
+        return True
 
     async def _settle(self, live: _Page) -> None:
         """Best-effort, bounded wait for the page to reach network-idle before
