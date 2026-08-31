@@ -2092,7 +2092,6 @@ class PatchrightDriver:
         source = cdp_element.clamp(mouse.jittered_point_in(start), width, height)
         target = cdp_element.clamp(mouse.jittered_point_in(end), width, height)
 
-        import sys as _s; print('DRAG src', source, 'dst', target, file=_s.stderr)
         await cdp_element.move_to(cdp, *source)
         await cdp_element.dispatch_mouse(
             cdp, "mousePressed", *source, button="left", click_count=1, buttons=1
@@ -2105,11 +2104,9 @@ class PatchrightDriver:
         # press/release pair with a zero count as not a real button interaction
         # and never emits `mouseup`, so the page sees a drag that begins and
         # never ends. `click_at` passes it for the same reason.
-        import sys as _s2; print('DRAG releasing at', target, file=_s2.stderr)
         await cdp_element.dispatch_mouse(
             cdp, "mouseReleased", *target, button="left", click_count=1
         )
-        print('DRAG released', file=_s2.stderr)
 
     async def _swipe(self, live: _Page, action: SwipeAction) -> None:
         """A touch drag, from the element's centre or the viewport's."""

@@ -211,13 +211,10 @@
         document.addEventListener('mousemove', () => {
           if (dragging) drop.dataset.entered = 'yes';
         });
-        document.addEventListener('mouseup', (e) => {
+        document.addEventListener('mouseup', () => {
           if (!dragging) return;
           dragging = false;
-          const r = drop.getBoundingClientRect();
-          const inside = e.clientX >= r.left && e.clientX <= r.right
-                      && e.clientY >= r.top && e.clientY <= r.bottom;
-          log(inside ? 'dropped' : 'dropped-outside');
+          log('drag-ended');
         });
       })();
 

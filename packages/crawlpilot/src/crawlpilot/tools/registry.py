@@ -117,3 +117,88 @@ def browser_tools() -> ToolRegistry:
     """Every built-in browser verb, in the `browser` namespace."""
 
     return ToolRegistry((BROWSER_NAMESPACE, spec) for spec in CATALOG)
+
+
+# --------------------------------------------------------------------- profiles
+
+CORE_PROFILE: frozenset[str] = frozenset(
+    {
+        "navigate", "go_back", "forward", "reload",
+        "click", "fill", "select_option", "dropdown_options", "hover", "press",
+        "send_keys", "scroll", "find_text", "wait",
+        "dialog_status", "dialog_accept", "dialog_dismiss",
+        "search_page", "find_elements", "extract", "screenshot",
+        "new_tab", "switch_tab", "close_tab",
+    }
+)
+"""Everyday browsing: navigate, interact, read, answer a dialog, manage tabs.
+
+Dialogs are in the core set and the other new families are not, because a
+`confirm()` is not optional -- a model that cannot answer one is simply stuck on
+the page, where a model without `get_styles` merely has to work a little harder.
+"""
+
+QUERY_PROFILE: frozenset[str] = frozenset(
+    {
+        "get_text", "get_html", "get_value", "get_attribute", "get_count",
+        "get_box", "get_styles", "get_url", "get_title",
+        "is_visible", "is_enabled", "is_checked",
+        "diff_snapshot", "list_frames",
+    }
+)
+"""Checking the page rather than acting on it -- what turns an assumption that
+an action worked into a verified fact."""
+
+WAIT_PROFILE: frozenset[str] = frozenset(
+    {"wait_for_selector", "wait_for_text", "wait_for_url", "wait_for_load"}
+)
+
+INTERACTION_PROFILE: frozenset[str] = frozenset(
+    {
+        "double_click", "focus", "check", "uncheck", "scroll_into_view",
+        "clear", "drag", "key_down", "key_up", "insert_text", "tap", "swipe",
+    }
+)
+"""The verbs beyond click/fill -- each a shape a click cannot express."""
+
+FILES_PROFILE: frozenset[str] = frozenset({"download", "wait_for_download", "pdf"})
+
+PROFILES: dict[str, frozenset[str]] = {
+    "core": CORE_PROFILE,
+    "query": QUERY_PROFILE,
+    "wait": WAIT_PROFILE,
+    "interaction": INTERACTION_PROFILE,
+    "files": FILES_PROFILE,
+}
+"""Named, composable sets -- agent-browser's `ToolProfile` (`mcp.rs:215-300`),
+which exists for the reason this now does too.
+
+Sixty-four verbs is a schema every request carries and every model reads before
+choosing one of them. A scrape run should not pay context for `get_styles`, and a
+form-filling agent should not pay it for `swipe`. `subset` already did the
+filtering; these are the names worth having for it.
+
+Deliberately not exhaustive: `"all"` is `browser_tools()` itself, and a verb in
+no profile is still reachable by name through `allowed`.
+"""
+
+
+class UnknownProfileError(ValueError):
+    pass
+
+
+def profile(*names: str, agent_exposed: bool = True) -> ToolRegistry:
+    """The union of the named profiles.
+
+    Composable because the useful sets overlap in practice -- a checkout agent
+    wants `core` plus `wait` plus `query`, and enumerating that combination as a
+    seventh profile would just be a name for someone else's guess.
+    """
+
+    unknown = sorted(set(names) - PROFILES.keys())
+    if unknown:
+        raise UnknownProfileError(
+            f"unknown tool profile(s) {unknown}; known: {sorted(PROFILES)}"
+        )
+    allowed = frozenset().union(*(PROFILES[name] for name in names)) if names else frozenset()
+    return browser_tools().subset(allowed=sorted(allowed), agent_exposed=agent_exposed)
