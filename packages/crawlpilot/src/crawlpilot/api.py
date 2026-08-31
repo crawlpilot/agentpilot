@@ -222,6 +222,23 @@ class BrowserSession:
         result = await self.execute([spi_actions.ListTabsAction()])
         return result.tabs[0] if result.tabs else []
 
+    # ----------------------------------------------------------------- dialogs
+
+    async def dialog_status(self) -> spi_actions.DialogInfo | None:
+        """The dialog blocking this page, or None.
+
+        Always safe to call, including when nothing is open -- unlike
+        `dialog_accept`/`dialog_dismiss`, which raise `NoDialogOpen`.
+        """
+
+        return (await self.execute([spi_actions.DialogStatusAction()])).dialog
+
+    async def dialog_accept(self, prompt_text: str | None = None) -> ActionResult:
+        return await self.execute([spi_actions.DialogAcceptAction(prompt_text=prompt_text)])
+
+    async def dialog_dismiss(self) -> ActionResult:
+        return await self.execute([spi_actions.DialogDismissAction()])
+
     # ------------------------------------------------------------------- tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> ActionResult:
@@ -448,6 +465,7 @@ class Browser:
         enable_cdp: bool = False,
         locale: str | None = None,
         timezone_id: str | None = None,
+        dialogs: spi_actions.DialogPolicy = "auto_dismiss",
     ) -> AsyncIterator[BrowserSession]:
         """Open a session, yield it, always release it.
 
@@ -457,6 +475,15 @@ class Browser:
         calls, so repeat visits reuse a profile, a pinned proxy and a
         fingerprint and read as a returning visitor. It is an opaque scope
         handle, never a domain (plan D10).
+
+        `dialogs` decides what happens when the page opens an `alert`/`confirm`/
+        `prompt`. The default answers them the way Playwright always has --
+        dismissed, silently -- which is right for an unattended crawl that must
+        not wedge on one. Pass `"manual"` to have them reported on
+        `ActionResult.dialog` and held for `dialog_accept`/`dialog_dismiss`,
+        which is what an agent driving the page wants: a `confirm()` is a
+        question, and dismissing it unasked turns "delete this" into a no-op
+        that still reports success.
         """
 
         name = identity or f"session-{uuid.uuid4().hex}"
@@ -477,6 +504,7 @@ class Browser:
             lease_ttl_seconds=self.lease_ttl_seconds,
             locale=locale,
             timezone_id=timezone_id,
+            dialog_policy=dialogs,
             browser_config=self.config,
             prototype_provider=self.prototype_provider,
             egress=self.egress,

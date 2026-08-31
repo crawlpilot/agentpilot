@@ -52,10 +52,11 @@ def _node(
     visible: bool = True,
     bg: str | None = None,
     cursor: str | None = None,
+    styles: dict[str, str] | None = None,
 ) -> EnhancedDOMTreeNode:
     snapshot = None
-    if bounds is not None or paint_order is not None or cursor is not None:
-        styles = {"display": "block"}
+    if bounds is not None or paint_order is not None or cursor is not None or styles:
+        styles = {"display": "block", **(styles or {})}
         if bg is not None:
             styles["background-color"] = bg
         snapshot = LayoutInfo(
@@ -243,3 +244,55 @@ def test_an_attribute_that_normalizes_to_the_accessible_name_is_still_deduped() 
     text = serialize(body).llm_text
     assert '"Submit"' in text
     assert "aria-label" not in text
+
+
+# ------------------------------------------------- hidden-control promotion
+
+
+def _card_wrapping_hidden_radio(
+    *, hide: dict[str, str] | None = None, attrs: dict[str, str] | None = None
+) -> EnhancedDOMTreeNode:
+    """The component-library shape: a `<label>` drawn as a card, wrapping an
+    input Chrome has dropped from the accessibility tree."""
+
+    body = _node("body", 1)
+    label = _child(body, _node("label", 10, bounds=BoundingBox(0, 0, 200, 80)))
+    _child(label, _node("input", 11, attrs=attrs or {"type": "radio"}, styles=hide))
+    return body
+
+
+def test_a_label_wrapping_a_display_none_radio_renders_as_a_radio() -> None:
+    text = serialize(_card_wrapping_hidden_radio(hide={"display": "none"})).llm_text
+    assert "[e10]<radio" in text
+    assert "checked=false" in text
+
+
+def test_promotion_reads_the_checked_state_off_the_control() -> None:
+    body = _card_wrapping_hidden_radio(
+        hide={"display": "none"}, attrs={"type": "radio", "checked": ""}
+    )
+    assert "checked=true" in serialize(body).llm_text
+
+
+def test_promotion_accepts_visibility_hidden_and_the_hidden_attribute() -> None:
+    assert "[e10]<radio" in serialize(
+        _card_wrapping_hidden_radio(hide={"visibility": "hidden"})
+    ).llm_text
+    assert "[e10]<checkbox" in serialize(
+        _card_wrapping_hidden_radio(attrs={"type": "checkbox", "hidden": ""})
+    ).llm_text
+
+
+def test_a_visible_control_is_not_promoted_onto_its_wrapper() -> None:
+    """A visible input keeps its own accessibility node, so promoting the label
+    too would show the model the same control twice."""
+
+    text = serialize(_card_wrapping_hidden_radio()).llm_text
+    assert "[e10]<radio" not in text
+
+
+def test_only_radios_and_checkboxes_are_promoted() -> None:
+    body = _card_wrapping_hidden_radio(
+        hide={"display": "none"}, attrs={"type": "hidden", "name": "csrf"}
+    )
+    assert "<radio" not in serialize(body).llm_text

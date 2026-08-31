@@ -220,6 +220,48 @@ CATALOG: tuple[ToolSpec, ...] = (
         agent_fields=None,
         safety="sensitive",
     ),
+    # JavaScript dialogs. Agent-exposed, and they have to be: a `confirm()` is
+    # the page asking a question only the caller can answer, and the alternative
+    # -- Playwright's silent auto-dismiss -- makes a click on "Delete account"
+    # report success while quietly declining on the model's behalf. See
+    # `driver.dialogs` for why the three verbs and the input guard are one
+    # change.
+    ToolSpec(
+        name="dialog_status",
+        description=(
+            "Report the JavaScript dialog (alert/confirm/prompt) currently blocking "
+            "the page, if any. Safe to call at any time -- use it after a click that "
+            "seemed to do nothing."
+        ),
+        action_cls=sa.DialogStatusAction,
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="dialog_accept",
+        description=(
+            "Answer the open dialog affirmatively: OK on an alert, Yes on a confirm, "
+            "submit on a prompt. Nothing else can happen on this page until the "
+            "dialog is answered."
+        ),
+        action_cls=sa.DialogAcceptAction,
+        wire_fields=("prompt_text",),
+        agent_fields=("prompt_text",),
+        field_descriptions={
+            "prompt_text": (
+                "Text to submit for a prompt dialog. Omit for alert and confirm, or "
+                "to submit a prompt's own default value."
+            )
+        },
+    ),
+    ToolSpec(
+        name="dialog_dismiss",
+        description=(
+            "Answer the open dialog negatively: Cancel on a confirm or prompt, and "
+            "the only available answer to an alert."
+        ),
+        action_cls=sa.DialogDismissAction,
+        agent_fields=(),
+    ),
     # Tab management. Agent-exposed, as in browser-use: a link that opens in a
     # new tab, a checkout that pops one, a comparison across two pages are all
     # ordinary tasks, and without these verbs the agent is stranded on whichever

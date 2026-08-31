@@ -294,6 +294,64 @@
           {
             "additionalProperties": false,
             "properties": {
+              "type": {
+                "const": "dialog_status",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DialogStatusActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "prompt_text": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Text to submit for a prompt dialog. Omit for alert and confirm, or to submit a prompt's own default value.",
+                "title": "Prompt Text"
+              },
+              "type": {
+                "const": "dialog_accept",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DialogAcceptActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "const": "dialog_dismiss",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DialogDismissActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
               "pattern": {
                 "title": "Pattern",
                 "type": "string"

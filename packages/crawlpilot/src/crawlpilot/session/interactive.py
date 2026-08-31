@@ -76,6 +76,7 @@ class InteractiveSession:
     headful: bool
     block_popups: bool
     enable_cdp: bool
+    dialog_policy: spi_actions.DialogPolicy
 
 
 async def open_interactive_session(
@@ -88,6 +89,7 @@ async def open_interactive_session(
     headful: bool,
     block_popups: bool,
     enable_cdp: bool,
+    dialog_policy: spi_actions.DialogPolicy = "auto_dismiss",
     registry: RegistryProtocol,
     driver: BrowserDriver,
     profiles_root: Path,
@@ -163,6 +165,7 @@ async def open_interactive_session(
             egress if egress is not None else EgressPolicy(),
             block_popups,
             enable_cdp,
+            dialog_policy,
             **stealth.as_open_kwargs(),
         )
 
@@ -192,6 +195,7 @@ async def open_interactive_session(
         headful=headful,
         block_popups=block_popups,
         enable_cdp=enable_cdp,
+        dialog_policy=dialog_policy,
     )
 
 

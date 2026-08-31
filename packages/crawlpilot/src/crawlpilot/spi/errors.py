@@ -104,3 +104,16 @@ class JobCancelled(DriverError):
     def __init__(self, job_id: str) -> None:
         super().__init__(f"job {job_id!r} was cancelled")
         self.job_id = job_id
+
+
+class NoDialogOpen(DriverError):
+    """A dialog verb was called while no JavaScript dialog was open.
+
+    Its own type rather than a bare error so a caller can turn it into a
+    "nothing to answer" observation: calling `dialog_dismiss` speculatively,
+    without knowing whether the last click raised a `confirm()`, is a reasonable
+    thing for an agent to do and is not a failure.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("no JavaScript dialog is currently open on this page")

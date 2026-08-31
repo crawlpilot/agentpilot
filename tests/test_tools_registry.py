@@ -124,8 +124,11 @@ def test_the_port_only_added_to_the_agent_action_set() -> None:
 
 def test_every_verb_is_registered_once() -> None:
     registry = browser_tools()
-    assert len(registry) == len(CATALOG) == 23
-    assert len({spec.name for spec in registry}) == 23
+    assert len(registry) == len(CATALOG)
+    # Names are unique -- the property that matters. Deliberately not a literal
+    # count: pinning one makes every added verb look like a regression, and
+    # `register` already raises on a duplicate.
+    assert len({spec.name for spec in registry}) == len(CATALOG)
 
 
 def test_registering_a_duplicate_raises_rather_than_overriding() -> None:

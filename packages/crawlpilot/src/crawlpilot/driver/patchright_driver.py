@@ -48,7 +48,8 @@ from patchright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from crawlpilot import metrics
 from crawlpilot.config import LaunchConfig
-from crawlpilot.driver import browser_discovery, cdp_element, humanize, mouse, warmup
+from crawlpilot.driver import browser_discovery, cdp_element, dialogs, humanize, mouse, warmup
+from crawlpilot.driver.dialogs import DialogInterrupt, DialogWatcher, GuardedSession
 from crawlpilot.driver.dom_fusion_engine import capture_fused_tree
 from crawlpilot.driver.live_view import (
     SCREENCAST_START_PARAMS,
@@ -66,6 +67,11 @@ from crawlpilot.spi.actions import (
     ActionResult,
     ClickAction,
     CloseTabAction,
+    DialogAcceptAction,
+    DialogDismissAction,
+    DialogInfo,
+    DialogPolicy,
+    DialogStatusAction,
     DropdownOptionsAction,
     ExecuteJsAction,
     ExtractAction,
@@ -355,6 +361,13 @@ class _Page:
     `frame_queue` -- see `start_screencast`/`stop_screencast`."""
     nodes: NodeIndex = field(default_factory=NodeIndex)
     """`ref -> captured node` from the most recent snapshot."""
+    dialogs: DialogWatcher = field(default_factory=DialogWatcher)
+    """This tab's JavaScript-dialog state.
+
+    Per tab, not per context: a dialog blocks the renderer of the page that
+    opened it, and a background tab's `confirm()` must not abort an action on
+    the foreground one (agent-browser filters the same way by session,
+    `interaction.rs:44-46`)."""
     frame_sessions: dict[str, CDPSession] = field(default_factory=dict)
     """CDP frame id -> that frame's own session, for cross-origin iframes.
 
@@ -442,6 +455,13 @@ class _Context:
     between-actions `gap`. Set from the scrape tier at `open()` (protected tiers
     get STEALTH), so the tier actually modulates interaction cadence rather than
     every context using one hardcoded set of ranges."""
+    dialog_policy: DialogPolicy = dialogs.DEFAULT_POLICY
+    """How this context answers JavaScript dialogs -- see `driver.dialogs`.
+
+    Context-wide rather than per tab because it is a caller's standing choice,
+    not a property of a page: an agent loop wants every tab it opens to hold its
+    dialogs, and a scrape wants every tab to dismiss them. Applied to each
+    `_Page` as it is wired."""
     expecting_explicit_tab: bool = False
     """Set around `_create_tab`'s own `context.new_page()` call.
     `new_page()` fires the exact same context-level `"page"` event an
@@ -587,6 +607,7 @@ class PatchrightDriver:
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
+        dialog_policy: DialogPolicy = dialogs.DEFAULT_POLICY,
         locale: str | None = None,
         timezone_id: str | None = None,
         warmup: bool = False,
@@ -719,6 +740,7 @@ class PatchrightDriver:
             active_page_id=page_id,
             max_tabs=self._max_tabs_per_session,
             block_popups=block_popups,
+            dialog_policy=dialog_policy,
             # A remote browser already has whatever debugging endpoint its owner
             # gave it; we did not open one and must not advertise ours.
             cdp_http_base=(
@@ -755,6 +777,13 @@ class PatchrightDriver:
 
             pg.on("crash", _on_crash)
             pg.on("close", _on_close)
+            # Registering this listener is what turns Playwright's silent
+            # auto-dismiss off, so it must happen for every page including
+            # popups -- and `_page_session` must wrap the session to match.
+            live_page = cctx.pages.get(pid)
+            if live_page is not None:
+                live_page.dialogs.set_policy(cctx.dialog_policy)
+                live_page.dialogs.attach(pg)
 
         def _on_context_close(_context: BrowserContext) -> None:
             cctx.alive = False
@@ -932,6 +961,19 @@ class PatchrightDriver:
                     pre_url = live.page.url
                     await self._dispatch(cctx, live, action, result)
                     dispatched_any = True
+                except DialogInterrupt as exc:
+                    # Not a failure: the page asked a question and is waiting for
+                    # an answer, which is exactly what a `"manual"` policy was
+                    # chosen for. Report the dialog and stop -- every later
+                    # action in the batch would block on the same renderer, and
+                    # answering is a decision only the caller can make.
+                    result.dialog = exc.info
+                    result.sequence_aborted = True
+                    result.verifications.append(
+                        f"page is blocked on a {exc.info.describe()} -- "
+                        "answer it with dialog_accept or dialog_dismiss"
+                    )
+                    break
                 except TargetClosedError as exc:
                     # Belt-and-suspenders alongside `_wire_page`'s "close"
                     # listener above: that listener and the actual close can
@@ -1103,6 +1145,20 @@ class PatchrightDriver:
             node, cdp = await self._resolve_ref(live, action.ref)
             await cdp_element.set_file_input(cdp, node, [action.path])
             result.verifications.append(f"attached {action.path} to {action.ref}")
+        elif isinstance(action, DialogStatusAction):
+            pending = live.dialogs.pending
+            result.dialog = pending
+            result.readouts.append(
+                pending.describe()
+                if pending is not None
+                else "no JavaScript dialog is open on this page"
+            )
+        elif isinstance(action, DialogAcceptAction):
+            answered = await live.dialogs.accept(action.prompt_text)
+            await self._after_dialog(live, result, answered, "accepted")
+        elif isinstance(action, DialogDismissAction):
+            answered = await live.dialogs.dismiss()
+            await self._after_dialog(live, result, answered, "dismissed")
         elif isinstance(action, NewTabAction):
             new_page_id = await self._create_tab(cctx, action.url)
             cctx.active_page_id = new_page_id
@@ -1116,6 +1172,34 @@ class PatchrightDriver:
             result.tabs.append(await self._list_tabs(cctx))
         else:
             assert_never(action)
+
+    async def _after_dialog(
+        self, live: _Page, result: ActionResult, answered: DialogInfo, verb: str
+    ) -> None:
+        """Finish answering a dialog: replay a held mouse button, then let the
+        page settle.
+
+        The release matters. A `confirm()` opened from a `mousedown` handler
+        leaves the button logically down -- the CDP `mouseReleased` that would
+        have followed was the command the dialog blocked. Left held, the next
+        click arrives as a drag, or as the second half of a double-click.
+        agent-browser replays it for the same reason
+        (`interaction.rs::dispatch_pending_release`).
+        """
+
+        release = live.dialogs.pending_release
+        live.dialogs.pending_release = None
+        if release is not None:
+            with contextlib.suppress(Exception):
+                await cdp_element.dispatch_mouse(
+                    release.session, "mouseReleased", release.x, release.y, button="left"
+                )
+
+        # Answering is what unblocks whatever the dialog gated -- commonly a
+        # navigation. Give it the same bounded settle a click that navigated
+        # gets, or the next action reads the page the dialog was holding.
+        await self._await_document(live)
+        result.verifications.append(f"{verb} the {answered.describe()}; now at {live.page.url}")
 
     async def _create_tab(self, cctx: _Context, url: str | None) -> str:
         """Explicit `NewTabAction` counterpart to `open()`'s `_on_new_page`
@@ -1701,7 +1785,11 @@ class PatchrightDriver:
         """
 
         if live.cdp_session is None:
-            live.cdp_session = await live.page.context.new_cdp_session(live.page)
+            session = await live.page.context.new_cdp_session(live.page)
+            # Wrapped once, here, so every `cdp_element` call made through it is
+            # guarded without that module knowing dialogs exist. See
+            # `driver.dialogs.GuardedSession`.
+            live.cdp_session = cast(CDPSession, GuardedSession(session, live.dialogs))
         return live.cdp_session
 
     async def _refresh_frame_sessions(self, live: _Page) -> dict[str, CDPSession]:
@@ -1735,7 +1823,10 @@ class PatchrightDriver:
                 # costs visibility into that one frame, not the whole snapshot.
                 continue
             if frame_id is not None:
-                live_frames[frame_id] = session
+                # Guarded like the page's own session: a `confirm()` raised from
+                # inside an iframe blocks that frame's renderer, and the input
+                # events this session carries are the ones that would hang on it.
+                live_frames[frame_id] = cast(CDPSession, GuardedSession(session, live.dialogs))
 
         for frame_id, session in live.frame_sessions.items():
             if frame_id not in live_frames:

@@ -223,6 +223,48 @@ class UploadFileAction:
     terminates_sequence: bool = False
 
 
+# --- JavaScript dialogs (see `driver.dialogs`) ---
+#
+# Meaningful only under a `"manual"` `DialogPolicy`: under the default the page's
+# dialogs are answered before any caller could see them, and `dialog_status`
+# correctly reports that nothing is open.
+
+
+@dataclass
+class DialogStatusAction:
+    """Report the dialog blocking this page, if any.
+
+    Read-only and always safe to call, which is what makes it usable as the
+    model's "did that click ask me something?" probe. Unlike accept/dismiss it
+    does not raise when nothing is open -- "no dialog" is the answer, not an
+    error.
+    """
+
+    terminates_sequence: bool = False
+
+
+@dataclass
+class DialogAcceptAction:
+    """Answer the open dialog affirmatively -- OK on an `alert`, Yes on a
+    `confirm`, submit on a `prompt`."""
+
+    prompt_text: str | None = None
+    """The text to submit for a `prompt`. Ignored by every other kind, and
+    `None` submits the dialog's own default value."""
+    terminates_sequence: bool = True
+    """A dialog is usually the gate on something consequential -- a form
+    submission, a navigation, a delete -- so what follows it belongs to the next
+    observation, on a page that has actually moved."""
+
+
+@dataclass
+class DialogDismissAction:
+    """Answer the open dialog negatively -- Cancel on a `confirm` or `prompt`,
+    and the only available answer to an `alert`."""
+
+    terminates_sequence: bool = True
+
+
 @dataclass
 class SelectOptionAction:
     ref: str
@@ -309,11 +351,47 @@ Action = (
     | SearchPageAction
     | FindElementsAction
     | UploadFileAction
+    | DialogStatusAction
+    | DialogAcceptAction
+    | DialogDismissAction
     | NewTabAction
     | CloseTabAction
     | SwitchTabAction
     | ListTabsAction
 )
+
+
+DialogPolicy = Literal["auto_dismiss", "auto_accept", "manual"]
+"""What a session does when the page opens a JavaScript dialog.
+
+`"auto_dismiss"` is the default and reproduces Playwright's own behaviour, which
+is what every caller got before dialogs were modelled at all -- an unattended
+scrape must not wedge on a page that greets it with an `alert()`. `"manual"`
+holds the dialog open for the caller to answer, which is what makes
+`dialog_accept` / `dialog_dismiss` mean anything. See `driver.dialogs`.
+"""
+
+
+@dataclass(frozen=True)
+class DialogInfo:
+    """A JavaScript dialog the page has opened and is now blocked on.
+
+    Lives here rather than beside the watcher in `driver.dialogs` because
+    `ActionResult` carries it and `spi` may not import `driver` -- the same
+    reason `ChallengeDetected` carries its verdict as a plain string.
+    """
+
+    kind: str
+    """`"alert"`, `"confirm"`, `"prompt"` or `"beforeunload"`."""
+    message: str
+    default_value: str = ""
+    """The pre-filled text of a `prompt`, empty for every other kind."""
+
+    def describe(self) -> str:
+        text = f"{self.kind} dialog: {self.message!r}"
+        if self.default_value:
+            text += f" (default {self.default_value!r})"
+        return text
 
 
 @dataclass
@@ -384,3 +462,13 @@ class ActionResult:
     soft_weight: int = 0
     """The burn weight of `soft_verdict` (0 when none), for the session layer's
     minor-warning accounting on a retryable soft failure."""
+    dialog: DialogInfo | None = None
+    """A JavaScript dialog left open by this batch, under a `"manual"`
+    `DialogPolicy`.
+
+    The page is *blocked* while this is set: the dialog is why the batch stopped
+    early, and nothing else will run on this tab until `dialog_accept` or
+    `dialog_dismiss` answers it. Reported rather than silently dismissed because
+    a `confirm()` is the page asking a question the caller may well want to
+    answer "yes" to -- auto-dismissing it makes a click on "Delete account"
+    report success while quietly declining on the caller's behalf."""

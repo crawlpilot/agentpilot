@@ -45,6 +45,63 @@
       "title": "CloseTabActionIn",
       "type": "object"
     },
+    "DialogAcceptActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "prompt_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Text"
+        },
+        "type": {
+          "const": "dialog_accept",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DialogAcceptActionIn",
+      "type": "object"
+    },
+    "DialogDismissActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "dialog_dismiss",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DialogDismissActionIn",
+      "type": "object"
+    },
+    "DialogStatusActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "dialog_status",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DialogStatusActionIn",
+      "type": "object"
+    },
     "DropdownOptionsActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -637,6 +694,9 @@
     "mapping": {
       "click": "#/$defs/ClickActionIn",
       "close_tab": "#/$defs/CloseTabActionIn",
+      "dialog_accept": "#/$defs/DialogAcceptActionIn",
+      "dialog_dismiss": "#/$defs/DialogDismissActionIn",
+      "dialog_status": "#/$defs/DialogStatusActionIn",
       "dropdown_options": "#/$defs/DropdownOptionsActionIn",
       "execute_js": "#/$defs/ExecuteJsActionIn",
       "extract": "#/$defs/ExtractActionIn",
@@ -718,6 +778,15 @@
     },
     {
       "$ref": "#/$defs/UploadFileActionIn"
+    },
+    {
+      "$ref": "#/$defs/DialogStatusActionIn"
+    },
+    {
+      "$ref": "#/$defs/DialogAcceptActionIn"
+    },
+    {
+      "$ref": "#/$defs/DialogDismissActionIn"
     },
     {
       "$ref": "#/$defs/NewTabActionIn"

@@ -33,6 +33,12 @@ DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     "scroll",
     "find_text",
     "wait",
+    # Dialogs: a `confirm()` blocks the page until it is answered, so a model
+    # that cannot answer one is simply stuck. `dialog_status` first -- it is the
+    # read-only probe for "did that click ask me something?".
+    "dialog_status",
+    "dialog_accept",
+    "dialog_dismiss",
     # Reading the page: the cheap targeted queries before the expensive full read.
     "search_page",
     "find_elements",

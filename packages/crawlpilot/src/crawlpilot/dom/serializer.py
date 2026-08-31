@@ -42,6 +42,96 @@ _CONTAINMENT_THRESHOLD = 0.99
 _FORM_CONTROL_TAGS = frozenset({"input", "select", "textarea", "option"})
 
 
+@dataclass(frozen=True)
+class PromotedControl:
+    """The identity of a form control that exists in the DOM but not in the
+    accessibility tree, projected onto the wrapper that stands in for it."""
+
+    role: str
+    """`"radio"` or `"checkbox"` -- taken from the hidden input's `type`."""
+    checked: str | None
+    """`"true"` / `"false"` / `"mixed"`, or None when unknown."""
+
+
+def _promoted_control(node: EnhancedDOMTreeNode) -> PromotedControl | None:
+    """The hidden radio/checkbox this node visually stands for, if any.
+
+    The pattern is a component-library staple: a `<label>` (or styled `<div>`)
+    wraps an `<input type=radio>` set to `display:none`, and CSS draws the
+    selected state on the wrapper. Chrome excludes a `display:none` input from
+    the accessibility tree entirely, so the fused node for the wrapper carries
+    role `LabelText` (or nothing) and an empty name -- the model is shown an
+    anonymous box and has no way to tell a selected option from an unselected
+    one.
+
+    Ported from agent-browser's `promote_hidden_inputs` (`snapshot.rs:914`),
+    which detects the same shape in its cursor-interactivity scan.
+
+    Only `display:none` / `visibility:hidden` / the `hidden` attribute count, and
+    deliberately **not** `opacity:0` or an off-screen "sr-only" clip: those
+    inputs stay in the accessibility tree and already surface with their own
+    `role=radio`, so promoting the wrapper too would show the model the same
+    control twice.
+    """
+
+    if node.tag_name in _FORM_CONTROL_TAGS:
+        return None  # a real control speaks for itself
+    control = _hidden_form_control(node)
+    if control is None:
+        return None
+    kind = control.attributes.get("type", "").strip().lower()
+    if kind not in ("radio", "checkbox"):
+        return None
+    return PromotedControl(role=kind, checked=_checked_state(control))
+
+
+def _hidden_form_control(
+    node: EnhancedDOMTreeNode, max_depth: int = 2
+) -> EnhancedDOMTreeNode | None:
+    """The nearest visually hidden `<input>` within `max_depth`. Mirrors the
+    depth bound in `clickable_elements._has_form_control_descendant`, which is
+    what marked this wrapper interactive in the first place."""
+
+    if max_depth <= 0:
+        return None
+    for child in node.children_and_shadow_roots:
+        if child.node_type != NodeType.ELEMENT_NODE:
+            continue
+        if child.tag_name == "input" and _is_visually_hidden(child):
+            return child
+        found = _hidden_form_control(child, max_depth=max_depth - 1)
+        if found is not None:
+            return found
+    return None
+
+
+def _is_visually_hidden(node: EnhancedDOMTreeNode) -> bool:
+    if "hidden" in node.attributes:
+        return True
+    styles = node.snapshot.computed_styles if node.snapshot else None
+    if not styles:
+        return False
+    return styles.get("display") == "none" or styles.get("visibility") == "hidden"
+
+
+def _checked_state(control: EnhancedDOMTreeNode) -> str | None:
+    """`"true"` / `"false"` / `"mixed"` for a checkbox or radio.
+
+    `indeterminate` is a JS-only property with no attribute reflection, so it is
+    only visible when the accessibility tree happens to carry the node. When it
+    does not, absence of `checked` means unchecked -- which is the answer the
+    model needs, and is right for every case except the rare tri-state box.
+    """
+
+    ax_properties = control.ax_node.properties if control.ax_node else None
+    if ax_properties and "checked" in ax_properties:
+        value = ax_properties["checked"]
+        if isinstance(value, str):
+            return value
+        return "true" if value else "false"
+    return "true" if "checked" in control.attributes else "false"
+
+
 @dataclass
 class SimplifiedNode:
     """A retained node in the simplified tree, wrapping a fused node with the
@@ -55,6 +145,11 @@ class SimplifiedNode:
     ignored_by_paint_order: bool = False
     excluded_by_parent: bool = False
     is_shadow_host: bool = False
+    promoted: PromotedControl | None = None
+    """Set when this node stands in for a form control Chrome dropped from the
+    accessibility tree -- see `_promoted_control`. The render prefers it over the
+    node's own role, so the model sees `radio checked=false` rather than an
+    unnamed wrapper."""
 
     def text_content(self) -> str:
         """Own text for a kept non-interactive node -- text-node value, else
@@ -125,6 +220,7 @@ def _build_simplified(node: EnhancedDOMTreeNode) -> SimplifiedNode | None:
         children=children,
         is_interactive=interactive,
         is_shadow_host=is_shadow_host,
+        promoted=_promoted_control(node) if interactive else None,
     )
 
 

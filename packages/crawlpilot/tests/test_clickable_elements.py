@@ -156,9 +156,12 @@ def test_a_child_with_its_own_affordance_keeps_its_ref_inside_a_pointer_parent()
     control inside a clickable card returned True long before."""
 
     card = _node("div", cursor="pointer")
-    assert is_interactive(_with_parent(_node("button", cursor="pointer"), card))
-    assert is_interactive(_with_parent(_node("div", attrs={"onclick": "f()"}, cursor="pointer"), card))
-    assert is_interactive(_with_parent(_node("div", attrs={"role": "menuitem"}, cursor="pointer"), card))
+    for child in (
+        _node("button", cursor="pointer"),
+        _node("div", attrs={"onclick": "f()"}, cursor="pointer"),
+        _node("div", attrs={"role": "menuitem"}, cursor="pointer"),
+    ):
+        assert is_interactive(_with_parent(child, card))
 
 
 def test_pointer_cursor_still_counts_when_the_parent_has_none() -> None:

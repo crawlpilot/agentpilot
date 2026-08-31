@@ -132,10 +132,16 @@ def _element_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> 
     # cross-origin frame's renderer reused an id, and the ref the model is shown
     # has to be the one the driver's index can look up.
     ref = f"e{node.selector_index}"
-    role = original.ax_role or original.tag_name
+    # A promoted role wins over the node's own: this wrapper *is* the radio as
+    # far as the user (and so the model) is concerned, and its real role is the
+    # uninformative `LabelText` Chrome left behind. See
+    # `serializer._promoted_control`.
+    role = node.promoted.role if node.promoted else (original.ax_role or original.tag_name)
     ax_name = normalize_text(original.ax_name)
     name = f' "{ax_name}"' if ax_name else ""
     attrs = _attribute_string(node, include_attributes)
+    if node.promoted is not None and node.promoted.checked is not None:
+        attrs += f" checked={node.promoted.checked}"
     prefix = "*" if node.is_new else ""
     marker = ""
     if original.tag_name in ("iframe", "frame"):

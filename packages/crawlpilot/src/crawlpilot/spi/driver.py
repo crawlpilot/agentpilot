@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from crawlpilot.spi.actions import Action, ActionResult
+from crawlpilot.spi.actions import Action, ActionResult, DialogPolicy
 from crawlpilot.spi.egress import EgressPolicy
 from crawlpilot.spi.health import ContextHealth, HealthStatus
 from crawlpilot.spi.identity import IdentityRef
@@ -30,6 +30,7 @@ class BrowserDriver(Protocol):
         egress: EgressPolicy,
         block_popups: bool = False,
         enable_cdp: bool = False,
+        dialog_policy: DialogPolicy = "auto_dismiss",
         locale: str | None = None,
         timezone_id: str | None = None,
         warmup: bool = False,
