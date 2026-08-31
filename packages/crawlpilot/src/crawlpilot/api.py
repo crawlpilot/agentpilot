@@ -222,6 +222,16 @@ class BrowserSession:
         result = await self.execute([spi_actions.ListTabsAction()])
         return result.tabs[0] if result.tabs else []
 
+    async def diff_snapshot(self, *, settle: bool = False) -> str:
+        """What changed on the page since the last snapshot on this tab.
+
+        Cheaper than re-reading the page to work out what an action did. The
+        first call on a tab has nothing to compare against and says so.
+        """
+
+        result = await self.execute([spi_actions.DiffSnapshotAction(settle=settle)])
+        return result.readouts[0] if result.readouts else ""
+
     # ----------------------------------------------------------------- dialogs
 
     async def dialog_status(self) -> spi_actions.DialogInfo | None:

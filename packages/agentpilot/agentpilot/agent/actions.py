@@ -42,6 +42,7 @@ DEFAULT_ALLOWED_ACTIONS: tuple[str, ...] = (
     # Reading the page: the cheap targeted queries before the expensive full read.
     "search_page",
     "find_elements",
+    "diff_snapshot",
     "extract",
     "screenshot",
     # Tabs last -- needed, but rarely the right first move.

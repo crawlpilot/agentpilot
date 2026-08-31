@@ -126,6 +126,15 @@ class EnhancedAXNode:
 
     role: str | None = None
     name: str | None = None
+    value: str | None = None
+    """The node's live AX value -- what a textbox currently contains, what a
+    slider is set to.
+
+    Chrome puts this in the AX node's own `value` field, *not* among its
+    `properties`, which is why reading properties alone missed it. Without it the
+    only value available was the `value` **attribute**, and typing into a field
+    never updates that -- so a filled input looked unchanged to anything
+    comparing two captures."""
     properties: dict[str, str | bool] = field(default_factory=dict)
     """Flattened AX property name -> value (e.g. ``{"checked": True,
     "expanded": False}``). Only the properties the interactivity/diff logic

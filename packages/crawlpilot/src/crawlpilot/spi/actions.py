@@ -63,6 +63,30 @@ class GoBackAction:
 
 
 @dataclass
+class ForwardAction:
+    """Forward in history. `wait_until` matches `GoBackAction`'s reasoning: a
+    forward navigation is just as likely to be a bfcache restore, which fires
+    neither `DOMContentLoaded` nor `load`."""
+
+    wait_until: NavigateWaitUntil = "commit"
+    timeout_ms: int = 30_000
+    terminates_sequence: bool = True
+
+
+@dataclass
+class ReloadAction:
+    """Reload the current page.
+
+    Unlike back/forward this genuinely re-fetches, so it waits for the document
+    rather than the commit -- there is no bfcache restore to miss.
+    """
+
+    wait_until: NavigateWaitUntil = "domcontentloaded"
+    timeout_ms: int = 30_000
+    terminates_sequence: bool = True
+
+
+@dataclass
 class SnapshotAction:
     viewport_only: bool = False
     max_nodes: int | None = None
@@ -255,6 +279,166 @@ class DiffSnapshotAction:
     terminates_sequence: bool = False
 
 
+# --- Waiting for the page to reach a state (see `driver.waits`) ---
+#
+# Each takes a timeout and fails loudly when it expires. A wait that silently
+# gave up would be worse than no wait at all: the action after it would run
+# against the state the caller was waiting *not* to see, and report success.
+
+
+@dataclass
+class WaitForSelectorAction:
+    """Wait until a CSS selector matches, or stops matching.
+
+    A selector rather than a ref, deliberately: a ref names an element the last
+    snapshot already found, so waiting for one is waiting for something that by
+    definition exists. What a caller actually waits for is an element that is not
+    there yet.
+    """
+
+    selector: str
+    state: Literal["visible", "hidden", "attached", "detached"] = "visible"
+    timeout_ms: int = 10_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class WaitForTextAction:
+    text: str
+    timeout_ms: int = 10_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class WaitForUrlAction:
+    """Wait until the URL contains `url`, or matches it as a glob."""
+
+    url: str
+    timeout_ms: int = 10_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class WaitForLoadAction:
+    state: Literal["load", "domcontentloaded", "networkidle"] = "load"
+    timeout_ms: int = 10_000
+    terminates_sequence: bool = False
+
+
+@dataclass
+class WaitForFunctionAction:
+    """Wait until a JavaScript expression evaluates truthy.
+
+    Wire-only and `safety="sensitive"`: this is `execute_js` in a loop, so a
+    model able to call it is a model able to run arbitrary JS on a schedule.
+    """
+
+    expression: str
+    timeout_ms: int = 10_000
+    poll_ms: int = 100
+    terminates_sequence: bool = False
+
+
+# --- Reading the page (see `driver.queries`) ---
+#
+# Each takes a `ref` **or** a CSS `selector`, matching `find_elements` and
+# `search_page`'s `css_scope`, which already accept CSS. Results go to
+# `ActionResult.readouts` -- the field for "information the action was asked to
+# fetch", as opposed to `verifications`, which say what an action did.
+
+
+@dataclass
+class GetTextAction:
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetHtmlAction:
+    """The element's own markup.
+
+    Element-scoped only, and there is no whole-page mode on purpose: a full
+    `document.documentElement.outerHTML` is enormous and would burn a context
+    window to say what `extract` says in a fraction of it.
+    """
+
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetValueAction:
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetAttributeAction:
+    name: str = ""
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetCountAction:
+    selector: str = ""
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetBoxAction:
+    """The element's bounding box in page coordinates."""
+
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetStylesAction:
+    ref: str | None = None
+    selector: str | None = None
+    properties: list[str] = field(default_factory=list)
+    """Which computed properties to read. Empty means a small default set --
+    never *every* computed style, which is hundreds of entries per element."""
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetUrlAction:
+    terminates_sequence: bool = False
+
+
+@dataclass
+class GetTitleAction:
+    terminates_sequence: bool = False
+
+
+@dataclass
+class IsVisibleAction:
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class IsEnabledAction:
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
+@dataclass
+class IsCheckedAction:
+    ref: str | None = None
+    selector: str | None = None
+    terminates_sequence: bool = False
+
+
 # --- JavaScript dialogs (see `driver.dialogs`) ---
 #
 # Meaningful only under a `"manual"` `DialogPolicy`: under the default the page's
@@ -366,6 +550,8 @@ class ListTabsAction:
 Action = (
     NavigateAction
     | GoBackAction
+    | ForwardAction
+    | ReloadAction
     | SnapshotAction
     | DiffSnapshotAction
     | ExtractAction
@@ -384,6 +570,23 @@ Action = (
     | SearchPageAction
     | FindElementsAction
     | UploadFileAction
+    | WaitForSelectorAction
+    | WaitForTextAction
+    | WaitForUrlAction
+    | WaitForLoadAction
+    | WaitForFunctionAction
+    | GetTextAction
+    | GetHtmlAction
+    | GetValueAction
+    | GetAttributeAction
+    | GetCountAction
+    | GetBoxAction
+    | GetStylesAction
+    | GetUrlAction
+    | GetTitleAction
+    | IsVisibleAction
+    | IsEnabledAction
+    | IsCheckedAction
     | DialogStatusAction
     | DialogAcceptAction
     | DialogDismissAction

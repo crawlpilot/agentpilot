@@ -109,6 +109,12 @@ def _value_of(node: EnhancedDOMTreeNode) -> str:
     attribute. Used to surface filled-field changes as MODIFIED."""
 
     if node.ax_node is not None:
+        # The live AX value first: it is the only one that reflects what a user
+        # (or a `fill`) actually typed. The `value` attribute below is the
+        # *initial* value and never changes, so relying on it made every filled
+        # field look untouched.
+        if node.ax_node.value:
+            return node.ax_node.value
         vt = node.ax_node.properties.get("valuetext")
         if isinstance(vt, str) and vt:
             return vt

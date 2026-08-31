@@ -102,6 +102,26 @@
       "title": "DialogStatusActionIn",
       "type": "object"
     },
+    "DiffSnapshotActionIn": {
+      "additionalProperties": false,
+      "properties": {
+        "settle": {
+          "default": false,
+          "title": "Settle",
+          "type": "boolean"
+        },
+        "type": {
+          "const": "diff_snapshot",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DiffSnapshotActionIn",
+      "type": "object"
+    },
     "DropdownOptionsActionIn": {
       "additionalProperties": false,
       "properties": {
@@ -721,6 +741,7 @@
       "dialog_accept": "#/$defs/DialogAcceptActionIn",
       "dialog_dismiss": "#/$defs/DialogDismissActionIn",
       "dialog_status": "#/$defs/DialogStatusActionIn",
+      "diff_snapshot": "#/$defs/DiffSnapshotActionIn",
       "dropdown_options": "#/$defs/DropdownOptionsActionIn",
       "execute_js": "#/$defs/ExecuteJsActionIn",
       "extract": "#/$defs/ExtractActionIn",
@@ -754,6 +775,9 @@
     },
     {
       "$ref": "#/$defs/SnapshotActionIn"
+    },
+    {
+      "$ref": "#/$defs/DiffSnapshotActionIn"
     },
     {
       "$ref": "#/$defs/ExtractActionIn"

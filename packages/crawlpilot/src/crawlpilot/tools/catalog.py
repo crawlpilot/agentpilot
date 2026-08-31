@@ -46,6 +46,18 @@ CATALOG: tuple[ToolSpec, ...] = (
         agent_fields=(),
     ),
     ToolSpec(
+        name="forward",
+        description="Go forward to the next page in history.",
+        action_cls=sa.ForwardAction,
+        agent_fields=(),
+    ),
+    ToolSpec(
+        name="reload",
+        description="Reload the current page.",
+        action_cls=sa.ReloadAction,
+        agent_fields=(),
+    ),
+    ToolSpec(
         name="snapshot",
         description="Capture the fused DOM/accessibility tree of the current page.",
         action_cls=sa.SnapshotAction,

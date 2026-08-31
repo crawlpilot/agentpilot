@@ -404,6 +404,21 @@
           {
             "additionalProperties": false,
             "properties": {
+              "type": {
+                "const": "diff_snapshot",
+                "title": "Type",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "DiffSnapshotActionIn",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
               "format": {
                 "default": "markdown",
                 "enum": [

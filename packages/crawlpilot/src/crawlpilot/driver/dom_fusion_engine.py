@@ -94,9 +94,14 @@ def build_ax_lookup(ax_tree: dict[str, Any]) -> dict[int, EnhancedAXNode]:
             value = (prop.get("value") or {}).get("value")
             if value is not None:
                 properties[name] = value
+        # The live value lives on the node, not in `properties` -- see
+        # `EnhancedAXNode.value`. Coerced to `str` because a range widget
+        # reports a number.
+        raw_value = (ax_node.get("value") or {}).get("value")
         lookup[backend_id] = EnhancedAXNode(
             role=(ax_node.get("role") or {}).get("value"),
             name=(ax_node.get("name") or {}).get("value"),
+            value=None if raw_value is None else str(raw_value),
             properties=properties,
         )
     return lookup

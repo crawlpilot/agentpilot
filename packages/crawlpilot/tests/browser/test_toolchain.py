@@ -640,3 +640,37 @@ async def test_a_selector_that_matches_nothing_says_so(page, toolbench) -> None:
     await _open(page, toolbench)
     with pytest.raises(SelectorNotFound):
         await _offered(page, selector="#no-such-element")
+
+
+# ------------------------------------------------------------- diff_snapshot
+
+
+async def test_the_first_diff_on_a_tab_has_nothing_to_compare_against(page, toolbench) -> None:
+    """And says so, rather than reporting the whole page as new."""
+
+    await page.navigate(toolbench.index)
+    assert "no previous snapshot" in await page.diff_snapshot()
+
+
+async def test_diff_snapshot_reports_what_an_action_changed(page, toolbench) -> None:
+    """The point of the verb: knowing what an action did without re-reading the
+    page. Filling a field changes that element's observable state, which is a
+    MODIFIED -- the diff tracks interactive elements, so a change to inert text
+    would correctly report nothing."""
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.diff_snapshot()  # establish a baseline
+
+    await page.fill(refs["query"], "hello")
+
+    report = await page.diff_snapshot()
+    assert "nothing changed" not in report
+    assert "hello" in report, report
+
+
+async def test_an_idle_page_reports_no_change(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.diff_snapshot()
+
+    assert "nothing changed" in await page.diff_snapshot()
