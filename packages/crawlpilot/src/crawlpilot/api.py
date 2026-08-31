@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.dom.serializer import serialize
 from crawlpilot.extensions import Extension, ExtensionRegistry
 from crawlpilot.identity.proxy_pinning import ProxyPinner
 from crawlpilot.policy import NullPrototypes, PrototypeProvider
@@ -52,13 +53,14 @@ from crawlpilot.session.interactive import (
 from crawlpilot.session.registry import Registry, RegistryProtocol
 from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.actions import ActionResult
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, Snapshot
 from crawlpilot.spi.driver import BrowserDriver
 from crawlpilot.spi.egress import LIBRARY_EGRESS, EgressPolicy
 from crawlpilot.spi.scrape import Document, ScrapeOptions
 from crawlpilot.tiers import Tier
 from crawlpilot.tools import ToolRegistry
 from crawlpilot.verbs import SessionVerbs
+from crawlpilot.wire import snapshot_of
 
 DEFAULT_LEASE_TTL_SECONDS = 300.0
 
@@ -108,6 +110,17 @@ class BrowserSession(SessionVerbs):
             driver=self._browser.driver,
             page_id=page_id,
         )
+
+    def _serialize_first_tree(self, result: ActionResult) -> Snapshot | None:
+        """In-process, the driver hands back trees and nobody has serialized
+        them yet -- so `snapshot()` does it here, through the same function the
+        gateway uses on its way out (`wire.snapshot_of`), which is what keeps the
+        two transports returning an identical `Snapshot`."""
+
+        if not result.fused_trees:
+            return None
+        view = result.snapshot_views[0] if result.snapshot_views else None
+        return snapshot_of(result.fused_trees[0], view, lambda t, v: serialize(t, view=v))
 
     # --------------------------------------------------------- local-only
 

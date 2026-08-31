@@ -57,8 +57,9 @@ EXPECTED_PUBLIC_API = {
     "ExtensionRegistry", "FingerprintConfig", "IdentityRef",
     "InMemoryStateStore", "NavigationTimeout", "NullPrototypes",
     "ProfileConfig", "ProfileKind", "PrototypeProvider", "ProxyEndpoint",
-    "ProxyHealthConfig", "ProxyPinner", "ProxyProvider", "Resolution",
-    "ScrapeOptions", "SelectorNotFound", "StaleRefError", "StateStore",
+    "ProxyHealthConfig", "ProxyPinner", "ProxyProvider", "RefInfo",
+    "Resolution", "ScrapeOptions", "SelectorNotFound", "SessionVerbs",
+    "Snapshot", "StaleRefError", "StateStore",
     "StaticProxies", "SyncSession", "Tier", "TierPolicy", "ToolRegistry",
     "ToolSpec", "WaitTimeout", "__version__", "browser_tools",
     "proxy_endpoint",
@@ -76,7 +77,15 @@ actually authoritative.
 `ProxyEndpoint` and `proxy_endpoint`, which you need to route through a proxy
 and which were somehow not exported while `StateStore` was; and
 `WaitTimeout`/`StaleRefError`/`SelectorNotFound`, which you need to catch what
-the library raises. Removed: `BlockHooks`, `BlockMount`, `BrowseHooks`,
+the library raises.
+
+Then `SessionVerbs`, `Snapshot` and `RefInfo`, when the verb layer was split off
+`BrowserSession`: `SessionVerbs` is the extension point a second transport
+subclasses, so it has to be importable for anyone to write one, and `Snapshot`
+is what `snapshot()` returns on every transport (the fused tree stays behind
+`BrowserSession.tree()`, deliberately unexported and local-only).
+
+Removed: `BlockHooks`, `BlockMount`, `BrowseHooks`,
 `BrowseMount`, `ContentHooks`, `ContentMount`, `ToolMount` -- the mount
 protocols, which you only touch to *write* an extension and which remain
 importable from `crawlpilot.extensions`."""

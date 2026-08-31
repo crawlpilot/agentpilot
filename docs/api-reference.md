@@ -107,9 +107,21 @@ See [interacting.md](interacting.md).
 | `extract(fmt="markdown", *, main_content=True)` | `str` |
 | `screenshot(*, full_page=False)` | `bytes` |
 | `pdf(*, landscape=False, scale=1.0)` | `bytes` |
-| `snapshot(*, settle=True)` | `EnhancedDOMTreeNode \| None` |
+| `snapshot(*, settle=True)` | `Snapshot \| None` |
+| `tree(*, settle=True)` | `EnhancedDOMTreeNode \| None` — **local only** |
 | `diff_snapshot(*, settle=False)` | `str` |
 | `execute_js(script)` | `Any` |
+
+`snapshot()` returns a `Snapshot`: the indexed-element text a model reads
+(`llm_text`), plus a `refs` map giving the accessible role, name and bounding box
+behind each `e12`-style ref in it. That is the same information on any transport,
+so code written against it works against a local browser or a remote one.
+
+`tree()` returns the fused DOM itself — every node, every attribute, parent
+back-references. It exists only on a local `BrowserSession`, because the tree does
+not survive a network hop and would dwarf every other payload if it tried. Reach
+for it when you need to walk the DOM (`iter_elements`, your own serializer); reach
+for `snapshot()` for everything else.
 
 ### Waiting — each raises `WaitTimeout`
 
@@ -129,10 +141,15 @@ See [interacting.md](interacting.md).
 The primitive everything above is sugar over. One batch, one round trip.
 
 `ActionResult` fields are per-type and index-correlated: `extracts`,
-`screenshots`, `pdfs`, `downloads`, `fused_trees`, `tabs`, `frames`,
+`screenshots`, `pdfs`, `downloads`, `snapshots`, `fused_trees`, `tabs`, `frames`,
 `js_returns`, `verifications`, **`readouts`** (prose, for an agent),
-**`values`** (the same answers as values), `page_title`, `status_code`,
-`soft_verdict`, `dialog`.
+**`values`** (the same answers as real Python values), `page_title`,
+`status_code`, `soft_verdict`, `dialog`.
+
+`snapshots` and `fused_trees` are the same perception at two fidelities:
+`fused_trees` is the tree (in-process only), `snapshots` is its serialized form
+and the one that crosses a network. A remote result carries `snapshots` and an
+empty `fused_trees`.
 
 ---
 

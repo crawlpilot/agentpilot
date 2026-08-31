@@ -30,15 +30,13 @@ runs it on a private event loop in a worker thread. Not `asyncio.run` per call
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
-from concurrent.futures import Future
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
+from crawlpilot._sync import LoopThread, SyncProxy
 from crawlpilot.api import Browser, BrowserSession
 from crawlpilot.extensions import Extension
 from crawlpilot.identity.proxy_pinning import ProxyPinner
@@ -218,20 +216,11 @@ class Crawlpilot:
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(
-            target=self._run_loop, name="crawlpilot", daemon=True
-        )
-        self._thread.start()
+        self._loop = LoopThread(name="crawlpilot")
         self._async = AsyncCrawlpilot(**kwargs)
 
-    def _run_loop(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
-
     def _call(self, coro: Any) -> Any:
-        future: Future[Any] = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result()
+        return self._loop.call(coro)
 
     def __enter__(self) -> Crawlpilot:
         return self
@@ -240,11 +229,9 @@ class Crawlpilot:
         self.close()
 
     def close(self) -> None:
-        if self._loop.is_closed():
+        if self._loop.closed:
             return
         self._call(self._async.close())
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=10)
         self._loop.close()
 
     # The async client owns the behaviour; these only cross the thread boundary.
@@ -272,29 +259,16 @@ class Crawlpilot:
             self._call(ctx.__aexit__(None, None, None))
 
 
-class SyncSession:
+class SyncSession(SyncProxy):
     """A `BrowserSession` with the `await` taken off.
 
-    Every public coroutine of `BrowserSession` is forwarded to the client's loop
-    by `__getattr__`, so this needs no per-method wrapper and cannot drift out of
-    step with the class it wraps. Properties (`session_id`, `tier`) pass through
-    untouched.
+    The forwarding lives in `_sync.SyncProxy`, which a remote client's sync half
+    reuses rather than reimplementing -- see that module. This subclass exists to
+    keep the name a caller sees (`crawlpilot.SyncSession`) tied to what it wraps.
     """
 
     def __init__(self, page: BrowserSession, call: Any) -> None:
-        self._page = page
-        self._call = call
-
-    def __getattr__(self, name: str) -> Any:
-        attr = getattr(self._page, name)
-        if not callable(attr):
-            return attr
-
-        def sync(*args: Any, **kwargs: Any) -> Any:
-            result = attr(*args, **kwargs)
-            return self._call(result) if asyncio.iscoroutine(result) else result
-
-        return sync
+        super().__init__(page, call)
 
 
 def _failed_document(url: str, exc: Exception) -> Document:

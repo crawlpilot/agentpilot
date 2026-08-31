@@ -96,11 +96,17 @@ async def main() -> None:
 
             # --- 1. What the page looks like to the library -----------------
             #
-            # `snapshot()` returns the fused CDP tree; `serialize()` turns it
-            # into the compact text an agent reads, with a `[ref]` on every
-            # interactive node. Printing it is the fastest way to understand
-            # what refs are.
-            tree = await page.snapshot()
+            # `snapshot()` gives you that compact text directly, with a `[ref]`
+            # on every interactive node, and works the same against a remote
+            # browser. Printing it is the fastest way to understand what refs
+            # are:
+            #
+            #     print((await page.snapshot()).llm_text)
+            #
+            # This example goes one level lower instead, because `_find_ref`
+            # below matches on `id` attributes -- and attributes live on the
+            # fused tree, which `tree()` returns and only a local session has.
+            tree = await page.tree()
             assert tree is not None
             dom = serialize(tree)
             print("=== page as the library sees it ===")

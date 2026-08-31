@@ -28,6 +28,10 @@ PUBLIC_SUBMODULES = {
     # because the platform *and* any client both encode/decode against it -- a
     # shape owned by one side would be the drift this module exists to remove.
     "crawlpilot.wire",
+    # The ~60 browser verbs over an abstract `execute`. Published because it is
+    # the seam a second transport subclasses -- a remote session inherits the
+    # vocabulary rather than restating it.
+    "crawlpilot.verbs",
     "crawlpilot.tiers",
     "crawlpilot.policy",
     "crawlpilot.extensions",

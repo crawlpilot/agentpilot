@@ -563,12 +563,28 @@ class SessionVerbs:
 
         if name.startswith("_"):
             raise AttributeError(name)
-        spec = self.tools.get(name)
-        if spec is None or spec.agent_fields is None:
+
+        registry = self.tools
+        # An attribute cannot contain a dot, so a bare name has to be resolved
+        # across namespaces -- `registry.get` alone would only ever look in
+        # `browser.`, which is precisely the namespace an extension's verb is
+        # not in.
+        keys = [key for key in registry.names if key.split(".", 1)[1] == name]
+        if len(keys) > 1:
+            raise AttributeError(
+                f"{name!r} is ambiguous across namespaces ({', '.join(sorted(keys))}); "
+                f"call it by its full name: await page.call_tool({keys[0]!r}, {{...}})"
+            )
+        if not keys:
             raise AttributeError(name)
 
+        spec = registry[keys[0]]
+        if spec.agent_fields is None:
+            raise AttributeError(name)
+        full_name = keys[0]
+
         async def call(**arguments: Any) -> ActionResult:
-            return await self.call_tool(name, arguments)
+            return await self.call_tool(full_name, arguments)
 
         call.__name__ = name
         call.__doc__ = spec.description
@@ -622,4 +638,22 @@ class SessionVerbs:
         """
 
         result = await self.execute([spi_actions.SnapshotAction(settle=settle)])
-        return result.snapshots[0] if result.snapshots else None
+        if result.snapshots:
+            return result.snapshots[0]
+        return self._serialize_first_tree(result)
+
+    def _serialize_first_tree(self, result: ActionResult) -> Snapshot | None:
+        """Serialize a locally-produced tree, for transports that have one.
+
+        A remote result arrives with `snapshots` already filled and never takes
+        this path. A local one arrives with `fused_trees` and no `snapshots` --
+        the driver produces trees; serializing them is the caller's job -- so the
+        local transport overrides this.
+
+        A hook rather than doing it in `execute` so the cost is paid only when
+        someone actually asks for a snapshot: `tree()` wants the tree itself and
+        should not pay to render text nobody reads. And a hook here rather than
+        an import there, because `verbs` may not import `crawlpilot.dom`.
+        """
+
+        return None

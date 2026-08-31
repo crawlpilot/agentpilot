@@ -40,11 +40,8 @@ the element — which is why the agent tools are refs-only.
 ## Snapshots and refs
 
 ```python
-from crawlpilot.dom.serializer import serialize
-
-tree = await page.snapshot()
-dom = serialize(tree)
-print(dom.llm_text)
+snapshot = await page.snapshot()
+print(snapshot.llm_text)
 ```
 
 ```
@@ -54,13 +51,23 @@ print(dom.llm_text)
 [e25]<textbox "Promo code" id=promo type=text />
 ```
 
-Each `[eNN]` is a ref you can pass as `ref=`. `dom.selector_map` maps the index
-to the captured node, so picking one is a dict scan:
+Each `[eNN]` is a ref you can pass as `ref=`. `snapshot.refs` maps each one to
+its accessible role, name and box, so picking one is a dict scan:
 
 ```python
-ref = next(f"e{i}" for i, node in dom.selector_map.items()
-           if (node.attributes or {}).get("id") == "add-to-cart")
+ref = next(r for r, info in snapshot.refs.items() if info.name == "Add to cart")
 await page.click(ref=ref)
+```
+
+A `Snapshot` is the same on a local browser and a remote one. If you need the
+fused DOM itself — every node and attribute, to walk or serialize yourself —
+that is `await page.tree()`, and it exists only in-process:
+
+```python
+from crawlpilot.spi.dom_tree import iter_elements
+
+tree = await page.tree()
+ids = [n.attributes.get("id") for n in iter_elements(tree)]
 ```
 
 **Refs are epoch-scoped.** Every snapshot and every navigation clears the index,
@@ -110,7 +117,7 @@ print(result.extracts[0])
 ```
 
 `ActionResult` carries per-type, index-correlated lists: `extracts`,
-`screenshots`, `values`, `readouts`, `fused_trees`, `verifications`. One batch,
+`screenshots`, `values`, `readouts`, `snapshots`, `verifications`. One batch,
 one round trip — which is the difference that matters at volume.
 
 ## Waiting

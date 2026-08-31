@@ -53,6 +53,7 @@ from crawlpilot.policy import (
     StateStore,
     StaticProxies,
 )
+from crawlpilot.spi.dom_tree import RefInfo, Snapshot
 from crawlpilot.spi.errors import (
     ChallengeDetected,
     ContextCrashed,
@@ -67,6 +68,7 @@ from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.spi.scrape import Document, ScrapeOptions
 from crawlpilot.tiers import Tier, TierPolicy
 from crawlpilot.tools import ToolRegistry, ToolSpec, browser_tools
+from crawlpilot.verbs import SessionVerbs
 
 __version__ = "0.2.0"
 
@@ -96,9 +98,12 @@ __all__ = [
     "ProxyHealthConfig",
     "ProxyPinner",
     "ProxyProvider",
+    "RefInfo",
     "Resolution",
     "ScrapeOptions",
     "SelectorNotFound",
+    "SessionVerbs",
+    "Snapshot",
     "StaleRefError",
     "StateStore",
     "StaticProxies",
