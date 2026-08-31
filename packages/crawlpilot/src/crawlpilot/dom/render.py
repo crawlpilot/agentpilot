@@ -57,6 +57,48 @@ DEFAULT_INCLUDE_ATTRIBUTES: tuple[str, ...] = (
 _MAX_VALUE_LEN = 80
 _REDACTED = "<redacted>"
 
+_ZERO_WIDTH = str.maketrans(
+    "",
+    "",
+    "﻿"  # BOM / zero-width no-break space
+    "​"  # zero-width space
+    "‌"  # zero-width non-joiner
+    "‍"  # zero-width joiner
+    "⁠",  # word joiner
+)
+"""Characters that occupy no width, so deleting them changes nothing a reader
+sees. Sites emit them as CSS-free line-break hints and as tracking/scraper bait,
+and they make two visually identical names compare unequal -- which is how the
+same button reads as "new" on every step."""
+
+_UNICODE_SPACES = str.maketrans(
+    {
+        c: " "
+        for c in "          "
+        "     　"
+    }
+)
+"""Spaces that are *not* deleted, only folded.
+
+agent-browser's `INVISIBLE_CHARS` (`snapshot.rs:68-75`) lumps `U+00A0` in with
+the zero-width set and removes it, which turns a non-breaking-space-separated
+`Add to cart` into `Addtocart` -- a name the model then cannot match against
+anything it reads on the page. A non-breaking space *is* visible: it is a space.
+Folding it to `U+0020` gets the intended benefit (identical-looking names
+compare equal) without corrupting the text."""
+
+
+def normalize_text(value: str) -> str:
+    """The canonical form of any string shown to the model.
+
+    Deletes zero-width characters, folds exotic Unicode spaces to `U+0020`, then
+    collapses runs of whitespace. A string that was *only* invisible characters
+    normalizes to `""`, which is what makes callers treat it as absent rather
+    than as a mysterious unnamed node.
+    """
+
+    return " ".join(value.translate(_ZERO_WIDTH).translate(_UNICODE_SPACES).split())
+
 
 def _attribute_string(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> str:
     original = node.original
@@ -66,12 +108,17 @@ def _attribute_string(node: SimplifiedNode, include_attributes: tuple[str, ...])
     for key in include_attributes:
         if key not in attrs:
             continue
-        value = attrs[key]
+        value = normalize_text(attrs[key])
         # Never leak a password field's value to the model.
         if is_password and key == "value":
             value = _REDACTED
         # Drop an attribute value that merely repeats the accessible name.
-        elif value == original.ax_name and key not in ("id", "type", "name"):
+        # Both sides are normalized, so a name and an `aria-label` that differ
+        # only by a stray zero-width character are still recognised as the same
+        # string and the duplicate is dropped.
+        elif value == normalize_text(original.ax_name) and key not in ("id", "type", "name"):
+            continue
+        if not value:
             continue
         if len(value) > _MAX_VALUE_LEN:
             value = value[:_MAX_VALUE_LEN] + "…"
@@ -86,7 +133,8 @@ def _element_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> 
     # has to be the one the driver's index can look up.
     ref = f"e{node.selector_index}"
     role = original.ax_role or original.tag_name
-    name = f' "{original.ax_name}"' if original.ax_name else ""
+    ax_name = normalize_text(original.ax_name)
+    name = f' "{ax_name}"' if ax_name else ""
     attrs = _attribute_string(node, include_attributes)
     prefix = "*" if node.is_new else ""
     marker = ""

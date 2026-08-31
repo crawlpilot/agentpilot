@@ -6,6 +6,7 @@ truncation. Synthetic fused trees; no browser."""
 from __future__ import annotations
 
 from crawlpilot.dom.paint_order import PaintEntry, Rect, RectUnionPure, compute_occluded
+from crawlpilot.dom.render import normalize_text
 from crawlpilot.dom.serializer import serialize
 from crawlpilot.driver.dom_fusion import LayoutInfo
 from crawlpilot.spi.dom_tree import EnhancedAXNode, EnhancedDOMTreeNode, NodeType
@@ -181,3 +182,64 @@ def test_compression_reduces_node_count() -> None:
     # Only the 3 buttons get indexed; wrappers/script contribute no refs.
     assert set(result.selector_map) == {20, 21, 22}
     assert result.llm_text.count("[e") == 3
+
+
+# --------------------------------------------------------- invisible characters
+
+
+def test_normalize_text_deletes_zero_width_and_folds_exotic_spaces() -> None:
+    assert normalize_text("​Buy﻿ now⁠") == "Buy now"
+    # A string of nothing but zero-width characters is empty to a reader.
+    assert normalize_text("​﻿⁠‌‍") == ""
+    assert normalize_text("  spaced   out  ") == "spaced out"
+
+
+def test_normalize_text_keeps_nbsp_separated_words_apart() -> None:
+    """The divergence from agent-browser's `INVISIBLE_CHARS`, which deletes
+    `U+00A0` along with the zero-width set and so renders this `Addtocart` --
+    a name the model cannot match against anything it reads on the page."""
+
+    assert normalize_text("Add to cart") == "Add to cart"
+    assert normalize_text("a　b c") == "a b c"
+
+
+def test_a_text_node_of_only_zero_width_characters_is_dropped() -> None:
+    body = _node("body", 1)
+    _child(body, _node("#text", 2, node_type=NodeType.TEXT_NODE, value="​﻿"))
+    _child(body, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="real text"))
+
+    text = serialize(body).llm_text
+    assert "real text" in text
+    # One line, not two: the invisible node contributed nothing and so must not
+    # have cost an indentation level either.
+    assert text.count("\n") == 0
+
+
+def test_zero_width_padding_does_not_change_the_rendered_name() -> None:
+    """Two captures of the same button, one padded with a zero-width space by an
+    anti-scraping script, must render identically -- otherwise every step reports
+    the element as changed."""
+
+    def render_button(name: str) -> str:
+        body = _node("body", 1)
+        _child(body, _node("button", 7, ax_name=name, bounds=BoundingBox(0, 0, 50, 20)))
+        return serialize(body).llm_text
+
+    assert render_button("​Checkout​") == render_button("Checkout")
+
+
+def test_an_attribute_that_normalizes_to_the_accessible_name_is_still_deduped() -> None:
+    body = _node("body", 1)
+    _child(
+        body,
+        _node(
+            "button",
+            8,
+            attrs={"aria-label": "Submit​"},
+            ax_name="Submit",
+            bounds=BoundingBox(0, 0, 50, 20),
+        ),
+    )
+    text = serialize(body).llm_text
+    assert '"Submit"' in text
+    assert "aria-label" not in text

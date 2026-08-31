@@ -61,7 +61,7 @@ class SimplifiedNode:
         empty (structural nodes contribute only indentation/children)."""
 
         if self.original.node_type == NodeType.TEXT_NODE:
-            return self.original.node_value.strip()
+            return render.normalize_text(self.original.node_value)
         return ""
 
 
@@ -86,7 +86,10 @@ def _build_simplified(node: EnhancedDOMTreeNode) -> SimplifiedNode | None:
     it nor any descendant is worth keeping."""
 
     if node.node_type == NodeType.TEXT_NODE:
-        text = node.node_value.strip()
+        # Normalized, not merely stripped: a text node holding nothing but
+        # zero-width characters is empty as far as a reader is concerned, and
+        # keeping it costs the model an indentation level for an invisible line.
+        text = render.normalize_text(node.node_value)
         return SimplifiedNode(original=node) if text else None
 
     if node.node_type not in (
