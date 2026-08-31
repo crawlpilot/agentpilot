@@ -200,6 +200,33 @@
         '<input type="text" id="shadow-field">';
       root.getElementById('shadow-button').addEventListener('click', () => log('shadow-clicked'));
 
+      // A *mouse-driven* drag target -- the kind sortable lists and canvas
+      // editors implement. Native HTML5 drag-and-drop is deliberately not
+      // exercised: it needs Input.dispatchDragEvent, which `drag` does not use.
+      (() => {
+        const handle = document.getElementById('draggable');
+        const drop = document.getElementById('drop');
+        let dragging = false;
+        handle.addEventListener('mousedown', () => { dragging = true; });
+        document.addEventListener('mousemove', () => {
+          if (dragging) drop.dataset.entered = 'yes';
+        });
+        document.addEventListener('mouseup', (e) => {
+          if (!dragging) return;
+          dragging = false;
+          const r = drop.getBoundingClientRect();
+          const inside = e.clientX >= r.left && e.clientX <= r.right
+                      && e.clientY >= r.top && e.clientY <= r.bottom;
+          log(inside ? 'dropped' : 'dropped-outside');
+        });
+      })();
+
+      // Swipe tracker: records that touchmove actually arrived, which a mouse
+      // drag would not produce.
+      document.addEventListener('touchmove', () => {
+        document.getElementById('held').textContent = 'swiped';
+      }, { passive: true });
+
       // Touch-only: binds touchstart and nothing else, so a dispatched mouse
       // event does nothing here. This is the shape `tap` exists for.
       document.getElementById('touch-only')

@@ -1379,6 +1379,13 @@ class PatchrightDriver:
         elif isinstance(action, DragAction):
             source, cdp = await self._resolve_ref(live, action.ref)
             destination, _ = await self._resolve_ref(live, action.to_ref)
+            # Bring both on screen *before* measuring either. `element_box`
+            # scrolls its own element into view, so measuring the second one
+            # moves the page out from under the first and the press lands
+            # wherever the source used to be. Same failure the click path
+            # re-measures to avoid, one step earlier.
+            await cdp_element.scroll_into_view(cdp, source)
+            await cdp_element.scroll_into_view(cdp, destination)
             start = await cdp_element.element_box(cdp, source, action.ref)
             end = await cdp_element.element_box(cdp, destination, action.to_ref)
             await self._human_drag(cdp, start, end)
@@ -2085,6 +2092,7 @@ class PatchrightDriver:
         source = cdp_element.clamp(mouse.jittered_point_in(start), width, height)
         target = cdp_element.clamp(mouse.jittered_point_in(end), width, height)
 
+        import sys as _s; print('DRAG src', source, 'dst', target, file=_s.stderr)
         await cdp_element.move_to(cdp, *source)
         await cdp_element.dispatch_mouse(
             cdp, "mousePressed", *source, button="left", click_count=1, buttons=1
@@ -2093,7 +2101,15 @@ class PatchrightDriver:
             await cdp_element.dispatch_mouse(cdp, "mouseMoved", x, y, button="left", buttons=1)
             await asyncio.sleep(random.uniform(0.006, 0.018))
         await cdp_element.dispatch_mouse(cdp, "mouseMoved", *target, button="left", buttons=1)
-        await cdp_element.dispatch_mouse(cdp, "mouseReleased", *target, button="left")
+        # `click_count=1` on the release, not the default 0: Chrome treats a
+        # press/release pair with a zero count as not a real button interaction
+        # and never emits `mouseup`, so the page sees a drag that begins and
+        # never ends. `click_at` passes it for the same reason.
+        import sys as _s2; print('DRAG releasing at', target, file=_s2.stderr)
+        await cdp_element.dispatch_mouse(
+            cdp, "mouseReleased", *target, button="left", click_count=1
+        )
+        print('DRAG released', file=_s2.stderr)
 
     async def _swipe(self, live: _Page, action: SwipeAction) -> None:
         """A touch drag, from the element's centre or the viewport's."""

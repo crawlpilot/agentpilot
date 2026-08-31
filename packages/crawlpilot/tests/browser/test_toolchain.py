@@ -841,7 +841,6 @@ async def test_tap_reaches_a_page_that_only_listens_for_touch(page, toolbench) -
 async def test_scroll_into_view_brings_a_buried_element_on_screen(page, toolbench) -> None:
     await _open(page, toolbench)
     refs = await _refs(page)
-    assert "not visible" not in await page.is_visible(refs["deep"]) or True
 
     await page.scroll_into_view(refs["deep"])
     on_screen = await page.execute_js(
@@ -879,3 +878,28 @@ async def test_download_saves_the_file_where_the_driver_chose(page, toolbench) -
     assert saved is not None
     assert saved.filename == "sample.txt"
     assert pathlib.Path(saved.path).read_text() == "downloaded-content"
+
+
+async def test_drag_moves_the_pointer_rather_than_teleporting(page, toolbench) -> None:
+    """The drop target only registers if `mousemove` events arrived between the
+    press and the release -- which is what sortable lists, sliders and canvas
+    editors all drive their state from. A drag that jumped straight to the
+    destination would land nothing while reporting success.
+
+    Mouse-driven drag, not native HTML5 drag-and-drop: the latter needs
+    `Input.dispatchDragEvent`, which `drag` deliberately does not use.
+    """
+
+    await _open(page, toolbench)
+    refs = await _refs(page)
+    await page.drag(refs["draggable"], refs["drop"])
+
+    assert await page.execute_js("document.getElementById('drop').dataset.entered") == "yes"
+    assert await _log(page) == "dropped"
+
+
+async def test_swipe_emits_real_touchmove_events(page, toolbench) -> None:
+    await _open(page, toolbench)
+    await page.swipe("up", distance=200)
+
+    assert await page.execute_js("document.getElementById('held').textContent") == "swiped"
