@@ -15,8 +15,11 @@ FROM base
 
 WORKDIR /app
 COPY . .
+# `--no-dev` must match worker-base.Dockerfile's sync exactly: a mismatch makes
+# this layer re-resolve the environment the base already built (and re-download
+# the dev group) instead of just installing the project on top of it.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --extra driver --extra postgres --extra bedrock --package agentpilot
+    uv sync --no-dev --extra driver --extra postgres --extra bedrock --package agentpilot
 
 EXPOSE 8000
 ENTRYPOINT ["/app/docker/worker-entrypoint.sh"]

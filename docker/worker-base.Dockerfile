@@ -37,8 +37,12 @@ COPY packages/agentpilot/pyproject.toml packages/agentpilot/README.md ./packages
 # psycopg[pool] -- without it the worker crashes at boot importing psycopg_pool.
 # bedrock extra: the worker is where LLMConfig.from_env() runs, so
 # AGENTPILOT_LLM_PROVIDER=bedrock needs `anthropic` present in this image.
+# `--no-dev`: `uv sync` installs the workspace root's `dev` dependency-group by
+# default, so the runtime image was pulling ruff/mypy/pytest/import-linter/
+# fakeredis/lupa -- build time and image size spent on tooling no container ever
+# runs. CI installs them explicitly (`uv sync --all-extras`); images don't.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-install-project --extra driver --extra postgres --extra bedrock --package agentpilot
+    uv sync --no-dev --no-install-project --extra driver --extra postgres --extra bedrock --package agentpilot
 
 # Chrome + its apt deps depend only on the (already-installed) patchright
 # version. `--no-sync` uses the venv from the step above without trying to

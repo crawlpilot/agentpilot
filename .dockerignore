@@ -1,5 +1,10 @@
 # Python
 .venv
+# The extra local venvs CI/dev create (`.venv-crawlpilot`, `.venv-published` --
+# ~500MB together) were NOT matched by the `.venv` line above, so every
+# `COPY . .` shipped them into the image and busted the code layer whenever
+# either was re-synced.
+.venv-*
 **/__pycache__
 *.pyc
 .pytest_cache
