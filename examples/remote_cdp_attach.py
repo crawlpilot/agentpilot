@@ -79,7 +79,7 @@ def main() -> None:
                 # From here on, nothing knows the browser is elsewhere.
                 page.navigate("https://example.com")
                 print("title:  ", page.get_title())
-                print("visible:", page.is_visible("h1"))
+                print("visible:", page.is_visible(selector="h1"))
                 print("markdown:", page.markdown()[:200])
 
                 snapshot = page.snapshot()

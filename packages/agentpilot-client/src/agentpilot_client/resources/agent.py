@@ -38,7 +38,7 @@ class AgentRun:
     async def status(self) -> dict[str, Any]:
         """`{data: {...run...}, steps: [...], next: cursor}`."""
 
-        return await self._transport.request("GET", f"/v1/agent/runs/{self.id}")
+        return await self._transport.request_object("GET", f"/v1/agent/runs/{self.id}")
 
     async def steps(self) -> list[dict[str, Any]]:
         """Every step recorded so far -- what the model saw, chose, and got."""
@@ -128,4 +128,4 @@ class AgentResource:
             params["after"] = after
         if limit is not None:
             params["limit"] = limit
-        return await self._transport.request("GET", "/v1/agent/runs", params=params or None)
+        return await self._transport.request_object("GET", "/v1/agent/runs", params=params or None)

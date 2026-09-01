@@ -187,7 +187,7 @@ async def test_a_typed_getter_reads_values_not_prose(httpserver: HTTPServer) -> 
 
     async with AsyncAgentPilot(transport=_transport(httpserver)) as ap:
         async with ap.session() as page:
-            assert await page.is_visible("#buy") is False
+            assert await page.is_visible(selector="#buy") is False
 
 
 async def test_the_action_a_verb_sends_is_the_shape_the_gateway_validates(

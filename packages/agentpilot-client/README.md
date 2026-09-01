@@ -24,7 +24,7 @@ def flow(cp):
     with cp.session() as page:
         page.navigate("https://example.com")
         page.click("#buy")
-        return page.get_title(), page.is_visible("#cart")
+        return page.get_title(), page.is_visible(selector="#cart")
 
 flow(Crawlpilot())                 # a browser on this machine
 flow(AgentPilot(api_key=KEY))      # a browser on the fleet

@@ -102,6 +102,9 @@ jobs:
       - name: Layer contracts (agentpilot)
         working-directory: packages/agentpilot
         run: uv run --project ../.. lint-imports
+      - name: Layer contracts (agentpilot-client)
+        working-directory: packages/agentpilot-client
+        run: uv run --project ../.. lint-imports
 
   # ---------------------------------------------------------------- job 3
   agentpilot-published:
@@ -158,3 +161,63 @@ jobs:
 
       - name: Run agentpilot's suite against the published wheel
         run: .venv-published/bin/python -m pytest -q tests --ignore=tests/driver_contract
+
+  # ---------------------------------------------------------------- job 4
+  agentpilot-client:
+    name: agentpilot-client alone (clean venv)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv python install 3.12
+
+      # The client's whole value proposition is that you can install it without
+      # installing a browser platform or a server. This job is what makes that
+      # a fact rather than an intention: a clean venv with only the built
+      # client and the crawlpilot it depends on.
+      - name: Build and install the client alone
+        run: |
+          uv build --package crawlpilot
+          uv build --package agentpilot-client
+          uv venv .venv-client
+          VIRTUAL_ENV=.venv-client uv pip install \
+            --no-sources --find-links dist agentpilot-client \
+            pytest pytest-asyncio pytest-httpserver
+
+      # Job 1's list, plus `patchright`: this package drives no browser, and a
+      # dependency edit that pulled one in would quietly triple the install size
+      # and make it unusable in the environments it exists for.
+      - name: Assert no server or browser leaked into the closure
+        run: |
+          set -euo pipefail
+          installed=$(VIRTUAL_ENV=.venv-client uv pip list --format=freeze | cut -d= -f1 | tr 'A-Z' 'a-z')
+          for banned in agentpilot fastapi starlette psycopg prometheus-client redis patchright anthropic openai; do
+            if echo "$installed" | grep -qx "$banned"; then
+              echo "::error::$banned leaked into agentpilot-client's closure"
+              exit 1
+            fi
+          done
+          echo "closure clean"
+
+      - name: Run the client's suite
+        run: |
+          VIRTUAL_ENV=.venv-client .venv-client/bin/python -m pytest -q \
+            -p no:cacheprovider -c /dev/null packages/agentpilot-client/tests
+
+      # The property the whole integration rests on: a remote session is not a
+      # lookalike of a local one, it is the same class.
+      - name: Assert the client inherits crawlpilot's verbs rather than restating them
+        run: |
+          .venv-client/bin/python - <<'PY'
+          from agentpilot_client import RemoteSession
+          from crawlpilot.verbs import SessionVerbs
+
+          assert issubclass(RemoteSession, SessionVerbs)
+          own = {n for n, v in vars(RemoteSession).items() if callable(v) and not n.startswith("_")}
+          inherited = {n for n in dir(RemoteSession) if not n.startswith("_")} - own
+          for verb in ("navigate", "click", "fill", "get_text", "is_visible", "markdown"):
+              assert verb in inherited, f"{verb} is restated on the client, not inherited"
+          print(f"ok: {len(inherited)} verbs inherited, {len(own)} defined here")
+          PY

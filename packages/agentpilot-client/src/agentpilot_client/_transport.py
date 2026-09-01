@@ -113,6 +113,24 @@ class Transport:
             await asyncio.sleep(wait)
             attempt += 1
 
+    async def request_object(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        """A call whose response is a JSON object.
+
+        Not merely a typed wrapper: a 200 carrying something that is *not* an
+        object means the caller reached something other than the gateway -- a
+        proxy's HTML error page, a login redirect. Saying so here beats an
+        `AttributeError` three frames later on a string that came back from a
+        captive portal.
+        """
+
+        payload = await self.request(method, path, **kwargs)
+        if not isinstance(payload, dict):
+            raise DriverError(
+                f"expected a JSON object from {path}, got {type(payload).__name__} -- "
+                f"is {self.base_url} an agentpilot gateway?"
+            )
+        return payload
+
     # -------------------------------------------------------- capabilities
 
     async def capabilities(self) -> dict[str, Any]:

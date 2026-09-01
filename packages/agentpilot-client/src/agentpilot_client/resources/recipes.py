@@ -20,7 +20,7 @@ class RecipeResource:
     # ------------------------------------------------------------------ CRUD
 
     async def create(self, **fields: Any) -> dict[str, Any]:
-        return await self._transport.request(
+        return await self._transport.request_object(
             "POST", "/v1/recipes", json={"tenant": "-", **fields}
         )
 
@@ -30,16 +30,16 @@ class RecipeResource:
             params["after"] = after
         if limit is not None:
             params["limit"] = limit
-        return await self._transport.request("GET", "/v1/recipes", params=params or None)
+        return await self._transport.request_object("GET", "/v1/recipes", params=params or None)
 
     async def get(self, recipe_id: str) -> dict[str, Any]:
-        return await self._transport.request("GET", f"/v1/recipes/{recipe_id}")
+        return await self._transport.request_object("GET", f"/v1/recipes/{recipe_id}")
 
     async def versions(self, recipe_id: str) -> dict[str, Any]:
         """Every version of a recipe. A heal writes a new one rather than
         editing in place, so this is the audit trail of what the site did."""
 
-        return await self._transport.request("GET", f"/v1/recipes/{recipe_id}/versions")
+        return await self._transport.request_object("GET", f"/v1/recipes/{recipe_id}/versions")
 
     # ------------------------------------------------------------ run / heal
 
@@ -69,6 +69,6 @@ class RecipeResource:
         return str(payload["run_id"])
 
     async def run_status(self, recipe_id: str, run_id: str) -> dict[str, Any]:
-        return await self._transport.request(
+        return await self._transport.request_object(
             "GET", f"/v1/recipes/{recipe_id}/runs/{run_id}"
         )

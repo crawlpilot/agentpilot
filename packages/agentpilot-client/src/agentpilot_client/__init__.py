@@ -17,7 +17,7 @@ That is what makes this true:
     def flow(cp):                        # one body
         with cp.session() as page:
             page.navigate("https://example.com")
-            return page.get_title(), page.is_visible("h1")
+            return page.get_title(), page.is_visible(selector="h1")
 
     flow(Crawlpilot())                   # a browser on this machine
     flow(AgentPilot(api_key=KEY))        # a browser on the fleet

@@ -49,7 +49,7 @@ class CrawlJob:
             params["after"] = after
         if limit is not None:
             params["limit"] = limit
-        return await self._transport.request(
+        return await self._transport.request_object(
             "GET", f"/v1/crawl/{self.id}", params=params or None
         )
 
