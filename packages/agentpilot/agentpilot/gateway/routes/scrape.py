@@ -104,7 +104,9 @@ async def scrape(
         exclude_tags=tuple(req.exclude_tags) or None,
         timeout_ms=req.timeout_ms,
         wait_for_ms=req.wait_for_ms,
-        actions=tuple(to_spi_action(a, wiring.extensions.tools) for a in req.actions),
+        actions=tuple(
+            to_spi_action(a, wiring.extensions_for(req.extensions).tools) for a in req.actions
+        ),
         screenshot=req.screenshot,
         full_page_screenshot=req.full_page_screenshot,
         extract=ExtractConfig(json_schema=req.extract.json_schema, prompt=req.extract.prompt)
@@ -116,7 +118,7 @@ async def scrape(
         document, screenshot_bytes = await run_ephemeral_scrape(
             browser_config=wiring.browser_config,
             prototype_provider=wiring.prototype_provider,
-            block_hooks=wiring.extensions.blocks,
+            block_hooks=wiring.extensions_for(req.extensions).blocks,
             structured_extractor=extract_structured,
             scope=req.tenant,
             domain=domain,

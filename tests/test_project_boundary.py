@@ -135,11 +135,22 @@ def test_no_private_names_cross_the_boundary() -> None:
     the caller needs a different answer.
     """
 
-    offenders = [
-        f"{path.relative_to(AGENTPILOT)}:{lineno}: {module}.{name}"
-        for path, lineno, module, name in _imported_names()
-        if name.startswith("_")
-    ]
+    offenders: list[str] = []
+    for path, lineno, module, name in _imported_names():
+        if not name.startswith("_"):
+            continue
+        # An explicit `__all__` is the author saying what is public, and it wins
+        # over the naming convention -- `crawlpilot.__version__` is a dunder and
+        # is exported deliberately. Without this the rule would forbid the one
+        # underscore-prefixed name the library most obviously means to publish.
+        try:
+            published = getattr(importlib.import_module(module), "__all__", ())
+        except Exception:
+            published = ()
+        if name in published:
+            continue
+        offenders.append(f"{path.relative_to(AGENTPILOT)}:{lineno}: {module}.{name}")
+
     assert not offenders, (
         "agentpilot imported a private name from crawlpilot:\n  " + "\n  ".join(offenders)
     )

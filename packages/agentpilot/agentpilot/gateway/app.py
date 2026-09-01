@@ -40,6 +40,7 @@ from agentpilot.gateway.role import get_role
 from agentpilot.gateway.routes import (
     agent_runs,
     api_keys,
+    capabilities,
     cdp,
     cdp_proxy,
     crawl,
@@ -83,6 +84,10 @@ configure_logging()
 app = FastAPI(title="agentpilot", version="0.1.0", lifespan=_lifespan)
 register_exception_handlers(app)
 app.include_router(health.router)
+# Every role, unauthenticated, like `/healthz`: it exposes no tenant data, and a
+# client needs to agree on the wire version *before* it can be sure its
+# credential will even be understood.
+app.include_router(capabilities.router, prefix="/v1/capabilities")
 
 _role = get_role()
 

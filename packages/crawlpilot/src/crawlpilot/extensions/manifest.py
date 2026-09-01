@@ -57,28 +57,49 @@ class CompatibilityVerdict:
         return self.compatibility is not Compatibility.REFUSE
 
 
-def check_compatibility(
-    manifest: ExtensionManifest, host_api_version: str = API_VERSION
+def compare_api_versions(
+    theirs_version: str | None, ours_version: str, *, subject: str
 ) -> CompatibilityVerdict:
-    theirs, ours = _major(manifest.api_version), _major(host_api_version)
+    """The verdict table, over any two declared API versions.
+
+    Extracted from `check_compatibility` when the client/server wire handshake
+    needed exactly this policy: "older than me is fine with a warning, newer than
+    me is refused rather than failing deep inside a call later". That asymmetry
+    is the whole value here, and it is as right for a client talking to a server
+    as it is for a host loading an extension -- so it is stated once and both
+    callers use it. See `crawlpilot.wire.WIRE_API_VERSION`.
+
+    `subject` names the thing being checked, so the message reads naturally
+    either way ("extension 'retail'", "server at https://...").
+    """
+
+    theirs, ours = _major(theirs_version), _major(ours_version)
     if ours is None:
         return CompatibilityVerdict(Compatibility.LOAD, "host api version unknown")
     if theirs is None:
         return CompatibilityVerdict(
             Compatibility.LOAD_WITH_WARNING,
-            f"extension {manifest.name!r} declares no parseable api_version "
-            f"({manifest.api_version!r}); loading best-effort",
+            f"{subject} declares no parseable api_version "
+            f"({theirs_version!r}); loading best-effort",
         )
     if theirs == ours:
         return CompatibilityVerdict(Compatibility.LOAD)
     if theirs < ours:
         return CompatibilityVerdict(
             Compatibility.LOAD_WITH_WARNING,
-            f"extension {manifest.name!r} targets api {manifest.api_version} but the "
-            f"host implements {host_api_version}; loading, but it may miss newer hooks",
+            f"{subject} targets api {theirs_version} but the "
+            f"host implements {ours_version}; loading, but it may miss newer hooks",
         )
     return CompatibilityVerdict(
         Compatibility.REFUSE,
-        f"extension {manifest.name!r} targets api {manifest.api_version}, newer than the "
-        f"host's {host_api_version}; refusing rather than failing inside a hook later",
+        f"{subject} targets api {theirs_version}, newer than the "
+        f"host's {ours_version}; refusing rather than failing inside a hook later",
+    )
+
+
+def check_compatibility(
+    manifest: ExtensionManifest, host_api_version: str = API_VERSION
+) -> CompatibilityVerdict:
+    return compare_api_versions(
+        manifest.api_version, host_api_version, subject=f"extension {manifest.name!r}"
     )

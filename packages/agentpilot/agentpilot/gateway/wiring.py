@@ -30,6 +30,7 @@ connect/role rules as their crawl counterparts.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -143,10 +144,15 @@ class Wiring:
             for n in os.environ.get("AGENTPILOT_DISABLED_EXTENSIONS", "").split(",")
             if n.strip()
         ]
+        self._extension_instances = [
+            RetailExtension(self.browser_config.content.amazon_expect_district)
+        ]
+        self._extensions_disabled = disabled
         self.extensions = ExtensionRegistry(
-            [RetailExtension(self.browser_config.content.amazon_expect_district)],
+            self._extension_instances,
             disabled=disabled,
         )
+        self._extension_variants: dict[frozenset[str], ExtensionRegistry] = {}
 
         # The prototype catalog: a platform-owned directory tree, injected as a
         # `policy.PrototypeProvider`. The browser layer ships no catalog.
@@ -164,6 +170,37 @@ class Wiring:
             self._init_gateway()
         else:
             self._init_worker()
+
+    def extensions_for(self, names: Sequence[str] | None) -> ExtensionRegistry:
+        """The extension registry one request should run with.
+
+        `None` -- the overwhelmingly common case -- returns the deployment's own
+        registry unchanged, so nothing is built and nothing changes for a caller
+        that never heard of this. A list is an allowlist by name, which is the
+        only shape selection *can* take over HTTP: an `Extension` is code, and
+        code does not cross a network (see `ScrapeRequest.extensions`).
+
+        Variants are cached by name-set. Building one is cheap -- it wires hooks
+        and registers tools, no I/O -- but a scrape-per-request rebuild would
+        still be pure waste, and the set of distinct selections a deployment
+        sees is small and bounded by what is installed.
+
+        An operator's `AGENTPILOT_DISABLED_EXTENSIONS` is passed through, so
+        "off here" still beats a caller asking for it by name.
+        """
+
+        if names is None:
+            return self.extensions
+        key = frozenset(names)
+        variant = self._extension_variants.get(key)
+        if variant is None:
+            variant = ExtensionRegistry(
+                self._extension_instances,
+                disabled=self._extensions_disabled,
+                enabled=names,
+            )
+            self._extension_variants[key] = variant
+        return variant
 
     def _assert_shared_state_for_worker(self) -> None:
         """A `worker` without Redis is running on process-local state.

@@ -46,8 +46,28 @@ class ExtensionRegistry:
         extensions: Sequence[Extension] = (),
         *,
         disabled: Iterable[str] = (),
+        enabled: Iterable[str] | None = None,
         host_api_version: str = API_VERSION,
     ) -> None:
+        """`disabled` and `enabled` are the two shapes of the same decision, and
+        both are needed because they answer different questions.
+
+        `disabled` is an operator's: "this deployment has a bad extension
+        installed, turn it off". It names exceptions to a default of *all*.
+
+        `enabled` is a caller's: "run this request with only these". It is an
+        allowlist, so `None` (the default) means the deployment's normal set and
+        an empty sequence means none at all -- a distinction a caller needs and
+        which `disabled` cannot express, since there is no list of "everything
+        except everything".
+
+        The second exists because an `Extension` is *code* and cannot cross a
+        network. A remote caller cannot hand the worker an object, so site
+        knowledge arrives as a `pip install` into the worker image and the
+        caller selects among what is there **by name**. This is the parameter
+        that selection lands on.
+        """
+
         self.browse = BrowseHooks()
         self.content = ContentHooks()
         self.blocks = BlockHooks()
@@ -57,6 +77,7 @@ class ExtensionRegistry:
 
         self._loaded: list[ExtensionManifest] = []
         self._disabled = set(disabled)
+        self._enabled = None if enabled is None else set(enabled)
         self._host_api_version = host_api_version
         for extension in extensions:
             self.register(extension)
@@ -67,6 +88,18 @@ class ExtensionRegistry:
     def loaded(self) -> tuple[str, ...]:
         return tuple(m.name for m in self._loaded)
 
+    @property
+    def manifests(self) -> tuple[ExtensionManifest, ...]:
+        """The full manifests, not just their names.
+
+        `loaded` answers "is X on?", which is what logging and assertions want.
+        A caller choosing *between* extensions needs the version and description
+        too -- that is what `GET /v1/capabilities` publishes, and selecting by
+        name is not much use without a way to see what the names mean.
+        """
+
+        return tuple(self._loaded)
+
     def register(self, extension: Extension) -> bool:
         """Returns whether the extension was loaded."""
 
@@ -75,9 +108,22 @@ class ExtensionRegistry:
             log.warning("extension.no_manifest", extension=type(extension).__name__)
             return False
 
+        # An allowlist, when the caller gave one, wins over every default --
+        # including `default_enabled`, which is the extension author's opinion
+        # about deployments in general and not about this request.
+        if self._enabled is not None and manifest.name not in self._enabled:
+            log.info("extension.not_selected", extension=manifest.name)
+            return False
+
         # Disable-by-config: an operator can turn one off without uninstalling.
-        if manifest.name in self._disabled or not manifest.default_enabled:
+        # Checked after the allowlist so an operator's "off" still wins over a
+        # caller asking for it by name.
+        if manifest.name in self._disabled:
             log.info("extension.disabled", extension=manifest.name)
+            return False
+
+        if self._enabled is None and not manifest.default_enabled:
+            log.info("extension.not_default_enabled", extension=manifest.name)
             return False
 
         verdict = check_compatibility(manifest, self._host_api_version)

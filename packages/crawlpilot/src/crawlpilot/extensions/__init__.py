@@ -19,6 +19,7 @@ from crawlpilot.extensions.manifest import (
     Compatibility,
     ExtensionManifest,
     check_compatibility,
+    compare_api_versions,
 )
 from crawlpilot.extensions.mounts import (
     BlockHooks,
@@ -55,5 +56,6 @@ __all__ = [
     "Resolution",
     "ToolMount",
     "check_compatibility",
+    "compare_api_versions",
     "discover_extensions",
 ]

@@ -37,6 +37,14 @@ class SessionOpenRequest(BaseModel):
     block_popups: bool = False
     live_view: bool = False
     enable_cdp: bool = True
+    # No per-session `extensions` allowlist, deliberately -- see
+    # `ScrapeRequest.extensions`, which has one. An interactive session's
+    # extension hooks reach it through the *driver*, which is constructed once
+    # per process (`wiring.py`'s `PatchrightDriver(block_hooks=...)`), so they
+    # are a property of the deployment rather than of a session. Offering the
+    # field here would accept it and silently do nothing. Making it work means
+    # threading hooks through `open_interactive_session` to the context, which
+    # is a change to how the driver is built, not to this schema.
 
 
 class SessionMetadata(BaseModel):
@@ -169,6 +177,23 @@ class ScrapeRequest(BaseModel):
     timezone_id: str | None = None
     """Overrides the browser's reported timezone (e.g. `"America/New_York"`).
     Should be coherent with `locale`. Unset leaves Chrome's own default."""
+    extensions: list[str] | None = None
+    """Which of the deployment's extensions to run this scrape with, by name.
+
+    An `Extension` is *code* -- hooks that rewrite a URL, warm a site up, or
+    resolve a detected wall -- so it cannot travel over HTTP. Site knowledge
+    reaches a worker as a `pip install` into its image (the
+    `crawlpilot.extensions` entry-point group); this selects among what is
+    already there.
+
+    `None` means the deployment's normal set, so nothing changes for existing
+    callers. `[]` means run with none, which is how you see a page exactly as it
+    is served rather than as an extension repaired it. `GET /v1/capabilities`
+    lists the names available here.
+
+    Scrape-only: an ephemeral scrape takes its hooks per call
+    (`run_ephemeral_scrape(block_hooks=...)`), whereas an interactive session
+    inherits them from the process-wide driver -- see `SessionOpenRequest`."""
 
 
 class ScrapeMetadataOut(BaseModel):
