@@ -27,10 +27,6 @@ from typing import Any
 
 import httpx
 
-from crawlpilot._sync import LoopThread, SyncProxy
-from crawlpilot.spi.scrape import Document
-from crawlpilot.tools import ToolRegistry, ToolSpec, browser_tools
-
 from agentpilot_client._transport import DEFAULT_TIMEOUT, Transport
 from agentpilot_client.resources import (
     AgentResource,
@@ -43,6 +39,9 @@ from agentpilot_client.resources import (
     ScrapeResource,
 )
 from agentpilot_client.session import RemoteSession
+from crawlpilot._sync import LoopThread, SyncProxy
+from crawlpilot.spi.scrape import Document
+from crawlpilot.tools import ToolRegistry, ToolSpec, browser_tools
 
 
 class AsyncAgentPilot:

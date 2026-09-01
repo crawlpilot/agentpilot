@@ -7,9 +7,10 @@ so plain `None` placeholders are fine here."""
 
 from __future__ import annotations
 
+from tests.fusion_fixtures import fnode
+
 from agentpilot.recipe.evaluate import evaluate_field_locator, find_ax_role_refs
 from agentpilot.recipe.models import FieldLocator
-from tests.fusion_fixtures import fnode
 
 STRUCTURED_DATA = {
     "json_ld": [{"@type": "Product", "offers": {"price": "19.99"}}],

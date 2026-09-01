@@ -12,10 +12,9 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from agentpilot_client.resources.scrape import document_from_wire
 from crawlpilot.spi.errors import DriverError
 from crawlpilot.spi.scrape import Document
-
-from agentpilot_client.resources.scrape import document_from_wire
 
 if TYPE_CHECKING:
     from agentpilot_client._transport import Transport

@@ -6,9 +6,10 @@ interactive set (a name change or an added element)."""
 
 from __future__ import annotations
 
+from tests.fusion_fixtures import fnode
+
 from agentpilot.agent.observation import identity_fingerprint
 from crawlpilot.spi.geometry import BoundingBox
-from tests.fusion_fixtures import fnode
 
 
 def _tree(*children):

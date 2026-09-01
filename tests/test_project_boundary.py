@@ -205,6 +205,34 @@ def test_the_public_api_is_importable_and_complete() -> None:
         assert hasattr(crawlpilot, name), f"crawlpilot.__all__ names a missing {name!r}"
 
 
+def test_the_server_does_not_import_the_client() -> None:
+    """The third package, and the direction that would be worst.
+
+    `agentpilot-client` depends on the server's *contract*, not on the server.
+    An import the other way would make the gateway undeployable without a
+    package it exists to be talked to by -- and would be an easy accident, since
+    both live in this workspace and both are importable here.
+
+    `crawlpilot` is covered by its own import-linter contract; this is the pair
+    that no contract can express, because the client is external to agentpilot.
+    """
+
+    offenders = [
+        f"{path.relative_to(AGENTPILOT)}:{node.lineno}"
+        for path in AGENTPILOT.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if (
+            isinstance(node, ast.ImportFrom)
+            and (node.module or "").startswith("agentpilot_client")
+        )
+        or (
+            isinstance(node, ast.Import)
+            and any(a.name.startswith("agentpilot_client") for a in node.names)
+        )
+    ]
+    assert not offenders, offenders
+
+
 def test_crawlpilot_does_not_import_agentpilot() -> None:
     """The other direction, which would be worse: a library depending on the
     application built on it."""

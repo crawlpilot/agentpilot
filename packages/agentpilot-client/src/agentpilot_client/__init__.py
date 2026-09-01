@@ -30,6 +30,12 @@ Errors are `crawlpilot.spi.errors` -- `StaleRefError`, `CapacityExhausted`,
 `except` clauses you write against a local browser catch the remote one too.
 """
 
+from agentpilot_client._transport import IncompatibleServer, Transport
+from agentpilot_client.client import AgentPilot, AsyncAgentPilot
+from agentpilot_client.resources.agent import AgentRun, AgentRunFailed
+from agentpilot_client.resources.crawl import CrawlFailed, CrawlJob
+from agentpilot_client.resources.maps import Link
+from agentpilot_client.session import RemoteSession
 from crawlpilot.spi.errors import (
     CapacityExhausted,
     ChallengeDetected,
@@ -40,13 +46,6 @@ from crawlpilot.spi.errors import (
     WaitTimeout,
 )
 from crawlpilot.spi.scrape import Document
-
-from agentpilot_client._transport import IncompatibleServer, Transport
-from agentpilot_client.client import AgentPilot, AsyncAgentPilot
-from agentpilot_client.resources.agent import AgentRun, AgentRunFailed
-from agentpilot_client.resources.crawl import CrawlFailed, CrawlJob
-from agentpilot_client.resources.maps import Link
-from agentpilot_client.session import RemoteSession
 
 __version__ = "0.1.0"
 

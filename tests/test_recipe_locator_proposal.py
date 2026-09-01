@@ -9,11 +9,11 @@ import json
 
 import httpx
 import pytest
+from tests.fusion_fixtures import fnode
 
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.locator_proposal import propose_and_verify_fields, propose_field_locators
 from agentpilot.recipe.schema import FieldSpec
-from tests.fusion_fixtures import fnode
 
 CONFIG = LLMConfig(api_key="test-key", base_url="https://llm.test/v1", model="m", timeout_s=5.0)
 

@@ -4,9 +4,10 @@ given a static fused-tree fixture. No browser."""
 
 from __future__ import annotations
 
+from tests.fusion_fixtures import fnode
+
 from agentpilot.recipe.generalize import generalize_option_locator, single_option_fallback
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
-from tests.fusion_fixtures import fnode
 
 
 def _size_swatch_snapshot() -> EnhancedDOMTreeNode:

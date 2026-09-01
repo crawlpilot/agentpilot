@@ -24,7 +24,7 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["packages/crawlpilot/tests", "tests"]
+testpaths = ["packages/crawlpilot/tests", "packages/agentpilot-client/tests", "tests"]
 markers = [
     "browser: drives a real browser (opt in with `-m browser`)",
 ]
@@ -45,7 +45,7 @@ target-version = "py312"
 # Without this the Phase 7 move silently reclassified every internal import as
 # third-party and produced ~100 spurious I001s. The only addition to this
 # section -- the rule selection below is the pre-split configuration verbatim.
-src = ["packages/crawlpilot/src", "packages/agentpilot"]
+src = ["packages/crawlpilot/src", "packages/agentpilot", "packages/agentpilot-client/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -57,7 +57,7 @@ ignore = ["B008"]
 [tool.mypy]
 python_version = "3.12"
 strict = false
-mypy_path = "packages/crawlpilot/src:packages/agentpilot"
+mypy_path = "packages/crawlpilot/src:packages/agentpilot:packages/agentpilot-client/src"
 
 # The single owner of mypy strictness for both projects. `packages/agentpilot/
 # pyproject.toml` used to carry its own duplicated `[[tool.mypy.overrides]]`
