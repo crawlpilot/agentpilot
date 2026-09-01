@@ -293,7 +293,7 @@ async def test_click_with_unknown_ref_raises_stale_ref_error(
 
     with pytest.raises(StaleRefError) as exc_info:
         await driver.execute(open_ctx, [ClickAction(ref="e999")])
-    assert exc_info.value.epoch_superseded is False
+    assert exc_info.value.ref == "e999"
 
 
 async def test_ref_from_superseded_snapshot_raises_stale_ref_error(
@@ -305,8 +305,9 @@ async def test_ref_from_superseded_snapshot_raises_stale_ref_error(
     Replacing the element between snapshots (rather than just re-snapshotting
     an unchanged page) frees up its `backendNodeId`, so the old `e<id>` ref is
     no longer in the current fused index -- the fusion path raises
-    `StaleRefError` (it does not distinguish "superseded" from "never existed";
-    both are simply absent from the fresh capture)."""
+    `StaleRefError`: it is simply absent from the fresh capture, which is the
+    same dict miss as a ref that never existed and wants the same answer --
+    snapshot again."""
 
     httpserver.expect_request("/").respond_with_data(ARTICLE_HTML, content_type="text/html")
     snap1 = await driver.execute(

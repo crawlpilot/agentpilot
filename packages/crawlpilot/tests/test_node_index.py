@@ -1,14 +1,14 @@
-"""The ref lifecycle: mint, resolve, invalidate, diagnose.
+"""The ref lifecycle: mint, resolve, invalidate.
 
 A `ref` is an `e<n>` string a snapshot hands out. It resolves to a captured
 fused node by dictionary lookup and nothing else -- no CSS, no XPath, no
 Playwright selector engine -- which is what lets it reach inside iframes and
-shadow roots, and what makes it *epoch-scoped*: the index is dropped on every
-snapshot and every navigation, so a ref from a superseded capture must never
+shadow roots, and what makes it *capture-scoped*: the index is dropped on every
+snapshot and every navigation, so a ref from a replaced capture must never
 resolve against the new DOM. Silently resolving one is how you click a lookalike.
 
-This is the mechanism behind `STALE_REF`, and until now nothing exercised it in
-CI. The tests that did live in `tests/driver_contract/` (which both CI jobs pass
+This is the mechanism behind `STALE_REF`, and nothing exercised it in CI. The
+tests that did live in `tests/driver_contract/` (which both CI jobs pass
 `--ignore` to) and `tests/browser/` (deselected by `-m 'not browser'`), so the
 whole ref flow was covered only by suites that never run. These are unit tests
 over `NodeIndex` and need no browser.
@@ -132,89 +132,46 @@ def test_a_fresh_capture_replaces_the_previous_one() -> None:
     assert "e13" not in index
 
 
-def test_the_epoch_advances_on_everything_that_invalidates_a_ref() -> None:
-    index = NodeIndex()
-    assert index.epoch == 0
-
-    index.record(_page(12))
-    index.reset()
-    index.record(_page(13))
-
-    assert index.epoch == 3
-
-
-# ------------------------------------------------------------- diagnosing
+# ---------------------------------------------------------------- the miss
 #
-# The half that was missing. Both failures below are "ref not in the index", and
-# they used to be reported identically -- so the message named the wrong cause
-# for one of them and every cause for the other.
+# Every way a ref fails to resolve is one dict miss, and the answer is always
+# "snapshot again". browser-use's model exactly: `get_dom_element_by_index`
+# returns the node or `None`, and the caller says "page may have changed. Try
+# refreshing browser state."
 
 
-def test_a_ref_from_a_superseded_capture_is_recognised_as_superseded() -> None:
-    """The recoverable case: the caller is holding a ref from before the last
-    snapshot or navigation, and simply needs to re-snapshot."""
-
-    index = NodeIndex()
-    index.record(_page(12))
-    index.record(_page(14))  # supersedes it
-
-    assert "e12" not in index
-    assert index.was_minted("e12") is True
-
-
-def test_a_ref_that_never_existed_is_not_reported_as_superseded() -> None:
-    """The unrecoverable case, and the one a helpful message matters most for:
-    re-snapshotting will not help, because the ref was never real. The common
-    shape is a *selector* passed where a ref belongs -- `is_visible("#buy")`,
-    since the query verbs take a ref positionally."""
+def test_a_ref_from_a_superseded_capture_does_not_resolve() -> None:
+    """The point of dropping the index: if this resolved, a click would land on
+    whatever element happens to hold that id on the *new* page."""
 
     index = NodeIndex()
     index.record(_page(12))
+    index.record(_page(14))
 
-    assert index.was_minted("e999") is False
-    assert index.was_minted("#buy") is False
+    assert index.get("e12") is None
 
 
-def test_a_navigation_also_leaves_its_refs_diagnosable() -> None:
-    """`reset()` retires the capture rather than discarding it silently, so a
-    ref used after a navigation still gets the accurate answer."""
-
+def test_a_ref_that_never_existed_does_not_resolve() -> None:
     index = NodeIndex()
     index.record(_page(12))
-    index.reset()
 
-    assert index.was_minted("e12") is True
+    assert index.get("e999") is None
+    # A selector passed where a ref belongs -- the query verbs take a ref
+    # positionally, so `is_visible("#buy")` arrives here as a ref.
+    assert index.get("#buy") is None
 
 
-def test_the_error_message_says_which_kind_it_was() -> None:
-    """The distinction is only worth keeping if it reaches the human reading the
-    traceback."""
+def test_the_message_tells_the_caller_what_to_do() -> None:
+    """One actionable sentence rather than a cause the caller cannot act on
+    differently. Both misses above produce this."""
 
     from crawlpilot.spi.errors import StaleRefError
 
-    superseded = StaleRefError("e12", epoch_superseded=True)
-    never = StaleRefError("e999", epoch_superseded=False)
+    error = StaleRefError("e12")
 
-    assert "epoch superseded" in str(superseded)
-    assert "gone within epoch" in str(never)
-    assert superseded.epoch_superseded is True
-    assert never.epoch_superseded is False
-
-
-def test_diagnosis_is_bounded_so_a_long_session_does_not_grow_without_limit() -> None:
-    """A page can hold thousands of refs and a long session snapshots
-    repeatedly. Only recent captures are retained -- enough to diagnose the
-    mistake this exists for, and older refs degrade to the answer they gave
-    before rather than being remembered forever."""
-
-    index = NodeIndex()
-    for backend_id in range(1, 30):
-        index.record(_page(backend_id))
-
-    assert "e29" in index  # the live capture, not superseded at all
-    assert index.was_minted("e28") is True  # the one just replaced
-    assert index.was_minted("e2") is False  # long retired, degrades gracefully
-    assert len(index._superseded) <= 8  # noqa: SLF001 -- the bound is the point
+    assert error.ref == "e12"
+    assert "e12" in str(error)
+    assert "fresh snapshot" in str(error)
 
 
 # ----------------------------------------------------- collision resolution

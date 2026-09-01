@@ -103,8 +103,7 @@ def test_internal_error_resolves_to_the_base_not_a_random_subclass() -> None:
 
 
 def test_reconstruction_survives_a_custom_init() -> None:
-    """`StaleRefError(ref, *, epoch_superseded)` and `WaitTimeout(condition,
-    timeout_ms)` take arguments the wire does not carry. Calling `__init__`
+    """`WaitTimeout(condition, timeout_ms)` and `TabNotFound(page_id)` take arguments the wire does not carry. Calling `__init__`
     would raise `TypeError: missing argument` instead of the error the server
     reported -- so reconstruction goes through `__new__`."""
 
