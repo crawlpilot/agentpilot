@@ -1,0 +1,74 @@
+[project]
+name = "agentpilot-client"
+version = "0.1.0"
+description = "The client for an agentpilot fleet: the same object as a local crawlpilot browser, driven over HTTP."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "Rahul Bisht", email = "rahulbisht1694@gmail.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
+# Two dependencies, and the second one is the point.
+#
+# `crawlpilot` (base -- *not* `[engine]`, so no browser and no Patchright) is
+# where the shared vocabulary lives: the action models come from
+# `tools.CATALOG`, the ~60 session verbs from `verbs.SessionVerbs`, the result
+# decoding from `wire.from_wire`, `Document` from `spi.scrape`, and the
+# exceptions from `spi.errors`. This package restates none of it. That is why a
+# verb added to `tools/catalog.py` reaches this client with no edit here, and
+# why a script written against a local browser runs unchanged against a fleet.
+#
+# What it must NOT pull is a server's closure -- no fastapi, no redis, no
+# psycopg, no patchright. CI job 4 installs this alone and asserts exactly that.
+dependencies = [
+    "httpx[http2]>=0.27",
+    "crawlpilot>=0.2,<0.3",
+]
+
+[project.urls]
+Repository = "https://github.com/crawlpilot/agentpilot"
+Issues = "https://github.com/crawlpilot/agentpilot/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentpilot_client"]
+
+[tool.uv.sources]
+# The workspace copy during development, the published wheel everywhere else --
+# the same one-declaration-two-resolutions arrangement `agentpilot` uses. CI's
+# clean-venv job resolves the built wheel instead, which is the only way a
+# broken dependency declaration shows up before a consumer hits it.
+crawlpilot = { workspace = true }
+
+[tool.importlinter]
+root_package = "agentpilot_client"
+include_external_packages = true
+
+# The rule that keeps this a *client*. It may speak HTTP and it may speak
+# crawlpilot's vocabulary; it may not acquire a server. `agentpilot` in
+# particular is unimportable here by construction (it is not a dependency), and
+# saying so mechanically stops someone "just importing one schema" later --
+# which is how the client would quietly become undeployable without the server
+# package installed.
+[[tool.importlinter.contracts]]
+name = "the client never imports the server"
+type = "forbidden"
+source_modules = ["agentpilot_client"]
+forbidden_modules = [
+    "agentpilot",
+    "fastapi",
+    "starlette",
+    "psycopg",
+    "redis",
+    "prometheus_client",
+    "patchright",
+]
