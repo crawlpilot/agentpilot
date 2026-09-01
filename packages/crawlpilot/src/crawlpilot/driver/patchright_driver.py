@@ -539,7 +539,6 @@ class _Page:
     whole browser, `block_popups`), which moved to `_Context` below."""
 
     page: Page
-    epoch: int = 0
     alive: bool = True
     death_reason: str | None = None
     cdp_session: CDPSession | None = None
@@ -1247,7 +1246,6 @@ class PatchrightDriver:
             # rather than relying on every caller to re-snapshot before reusing
             # a ref. Without this, a stale ref left in the index could resolve
             # against an unrelated element on the new page.
-            live.epoch += 1
             live.nodes.reset()
             result.verifications.append(f"navigated to {live.page.url}")
             await self._post_navigate(cctx, live, result, response)
@@ -1258,7 +1256,6 @@ class PatchrightDriver:
                 )
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
-            live.epoch += 1
             live.nodes.reset()
             result.verifications.append(f"went back to {live.page.url}")
         elif isinstance(action, ForwardAction):
@@ -1268,7 +1265,6 @@ class PatchrightDriver:
                 )
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
-            live.epoch += 1
             live.nodes.reset()
             result.verifications.append(f"went forward to {live.page.url}")
         elif isinstance(action, ReloadAction):
@@ -1278,7 +1274,6 @@ class PatchrightDriver:
                 )
             except PlaywrightTimeoutError as exc:
                 raise NavigationTimeout(str(exc)) from exc
-            live.epoch += 1
             live.nodes.reset()
             result.verifications.append(f"reloaded {live.page.url}")
         elif isinstance(action, _WAIT_FOR_ACTIONS):
@@ -1290,7 +1285,6 @@ class PatchrightDriver:
         elif isinstance(action, SnapshotAction):
             if action.settle:
                 await self._settle(live)
-            live.epoch += 1
             # CDP DOM/Snapshot/AX fusion -> EnhancedDOMTreeNode with stable
             # (session_id, backendNodeId) identity and cross-step change
             # detection. Refs are `e<selector_index>`, resolved to a captured
@@ -1307,7 +1301,6 @@ class PatchrightDriver:
             if action.settle:
                 await self._settle(live)
             previous = live.last_tree
-            live.epoch += 1
             tree = await self._capture_fused(live, no_runtime=action.no_runtime)
             live.nodes.record(tree)
             live.last_tree = tree
@@ -1757,7 +1750,7 @@ class PatchrightDriver:
             )
             object_id = (resolved.get("object") or {}).get("objectId")
             if not object_id:
-                raise StaleRefError(ref, epoch_superseded=False)
+                raise StaleRefError(ref)
             outcome = await cdp.send(
                 "Runtime.callFunctionOn",
                 {
@@ -2131,7 +2124,10 @@ class PatchrightDriver:
 
         node = live.nodes.get(ref)
         if node is None:
-            raise StaleRefError(ref, epoch_superseded=False)
+            # A dict miss, and the answer is the same either way: snapshot again.
+            # browser-use's `get_dom_element_by_index` does exactly this -- node
+            # or `None`, one message.
+            raise StaleRefError(ref)
         cdp = cdp_element.session_for_node(
             node,
             page_session=await self._page_session(live),

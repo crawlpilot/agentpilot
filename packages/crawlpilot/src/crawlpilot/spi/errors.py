@@ -81,15 +81,34 @@ class ChallengeDetected(DriverError):
 
 
 class StaleRefError(DriverError):
+    """A ref does not resolve against the current capture.
+
+    Refs are minted by a snapshot and dropped on the next snapshot or
+    navigation, so the overwhelmingly common cause is acting on a ref taken
+    before the page changed. The answer is always the same -- snapshot again and
+    use a fresh ref -- which is why the message says that rather than
+    speculating about the cause.
+
+    It used to carry an `epoch_superseded` flag meant to distinguish "the
+    capture that minted this is gone" from "this ref was never real". All three
+    raise sites passed `False`, and the counter that would have answered the
+    question was incremented in six places and read in none, so the flag only
+    ever produced one branch of its own message. browser-use, whose ref model
+    this is (`browser/session.py`), keeps no such distinction either:
+    `get_dom_element_by_index` returns the node or `None`, and the caller says
+    "page may have changed. Try refreshing browser state." One actionable
+    sentence beats two that a caller cannot act on differently.
+    """
+
     code: ClassVar[str] = "STALE_REF"
     http_status: ClassVar[int] = 409
 
-    def __init__(self, ref: str, *, epoch_superseded: bool) -> None:
+    def __init__(self, ref: str) -> None:
         super().__init__(
-            f"stale ref {ref!r} ({'epoch superseded' if epoch_superseded else 'gone within epoch'})"
+            f"ref {ref!r} is not available -- the page may have changed. "
+            "Take a fresh snapshot and use a ref from it."
         )
         self.ref = ref
-        self.epoch_superseded = epoch_superseded
 
 
 class TabNotFound(DriverError):

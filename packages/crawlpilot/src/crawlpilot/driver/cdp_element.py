@@ -94,7 +94,7 @@ async def element_box(cdp: CDPSession, node: EnhancedDOMTreeNode, ref: str) -> m
     if box is None:
         box = await _model_box(cdp, node)
     if box is None or box["width"] <= 0 or box["height"] <= 0:
-        raise StaleRefError(ref, epoch_superseded=False)
+        raise StaleRefError(ref)
     return box
 
 

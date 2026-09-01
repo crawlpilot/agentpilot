@@ -19,7 +19,7 @@ from crawlpilot.spi.errors import CapacityExhausted, NavigationTimeout, StaleRef
 def test_classify_error_taxonomy() -> None:
     assert classify_error(TimeoutError()) is ErrorClass.TIMEOUT
     assert classify_error(ValueError("bad action")) is ErrorClass.VALIDATION
-    assert classify_error(StaleRefError("e1", epoch_superseded=False)) is ErrorClass.TRANSIENT
+    assert classify_error(StaleRefError("e1")) is ErrorClass.TRANSIENT
     assert classify_error(NavigationTimeout("nav")) is ErrorClass.TRANSIENT
     assert classify_error(CapacityExhausted()) is ErrorClass.PERMANENT
 
@@ -31,7 +31,7 @@ async def test_retry_retries_transient_then_succeeds() -> None:
         nonlocal calls
         calls += 1
         if calls < 3:
-            raise StaleRefError("e1", epoch_superseded=False)
+            raise StaleRefError("e1")
         return "ok"
 
     result = await RetryStrategy(max_retries=3, base_delay_s=0.0).execute(flaky)
