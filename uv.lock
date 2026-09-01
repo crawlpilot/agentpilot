@@ -9,6 +9,7 @@ resolution-markers = [
 [manifest]
 members = [
     "agentpilot",
+    "agentpilot-client",
     "crawlpilot",
 ]
 
@@ -70,6 +71,21 @@ requires-dist = [
     { name = "websockets", specifier = ">=13.0" },
 ]
 provides-extras = ["driver", "postgres", "bedrock"]
+
+[[package]]
+name = "agentpilot-client"
+version = "0.1.0"
+source = { editable = "packages/agentpilot-client" }
+dependencies = [
+    { name = "crawlpilot" },
+    { name = "httpx", extra = ["http2"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "crawlpilot", editable = "packages/crawlpilot" },
+    { name = "httpx", extras = ["http2"], specifier = ">=0.27" },
+]
 
 [[package]]
 name = "alembic"
