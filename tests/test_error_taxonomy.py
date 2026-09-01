@@ -103,10 +103,11 @@ def test_internal_error_resolves_to_the_base_not_a_random_subclass() -> None:
 
 
 def test_reconstruction_survives_a_custom_init() -> None:
-    """`WaitTimeout(condition, timeout_ms)` and `TabNotFound(page_id)` take arguments the wire does not carry. Calling `__init__`
-    would raise `TypeError: missing argument` instead of the error the server
-    reported -- so reconstruction goes through `__new__`."""
+    """`WaitTimeout(condition, timeout_ms)` and `TabNotFound(page_id)` take
+    arguments the wire does not carry. Calling `__init__` would raise
+    `TypeError: missing argument` instead of the error the server reported -- so
+    reconstruction goes through `__new__`."""
 
-    error = error_from_wire("STALE_REF", "stale ref 'e12' (epoch superseded)")
+    error = error_from_wire("STALE_REF", "ref 'e12' is not available")
     assert isinstance(error, spi_errors.StaleRefError)
-    assert str(error) == "stale ref 'e12' (epoch superseded)"
+    assert str(error) == "ref 'e12' is not available"

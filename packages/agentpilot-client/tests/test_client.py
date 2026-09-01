@@ -62,12 +62,12 @@ async def test_a_server_error_becomes_the_exception_it_names(httpserver: HTTPSer
     neither side keeps a code->class table."""
 
     httpserver.expect_request("/v1/scrape").respond_with_json(
-        {"success": False, "code": "STALE_REF", "error": "stale ref 'e12'"},
+        {"success": False, "code": "STALE_REF", "error": "ref 'e12' is not available"},
         status=409,
     )
 
     async with AsyncAgentPilot(transport=_transport(httpserver)) as ap:
-        with pytest.raises(StaleRefError, match="stale ref"):
+        with pytest.raises(StaleRefError, match="not available"):
             await ap.scrape("https://example.com")
 
 
