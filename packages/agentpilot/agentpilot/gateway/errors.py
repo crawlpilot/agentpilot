@@ -24,6 +24,15 @@ log = structlog.get_logger(__name__)
 
 
 class ErrorCode(StrEnum):
+    """The wire vocabulary, kept as an enum for the HTTP layer's own use.
+
+    Not the source of truth any more -- `crawlpilot.spi.errors` is, and a test
+    asserts every code an exception declares appears here, so the two cannot
+    drift. What justifies keeping it: `BAD_REQUEST` and `INTERNAL_ERROR` are
+    HTTP-level outcomes with no exception behind them (a malformed body, an
+    unhandled crash), and this is what the frontend reads.
+    """
+
     BAD_REQUEST = "BAD_REQUEST"
     NOT_FOUND = "NOT_FOUND"
     SESSION_LEASE_CONFLICT = "SESSION_LEASE_CONFLICT"
@@ -40,28 +49,25 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
-_DRIVER_ERROR_MAPPING: dict[type[Exception], tuple[int, ErrorCode]] = {
-    spi_errors.LeaseConflict: (409, ErrorCode.SESSION_LEASE_CONFLICT),
-    spi_errors.CapacityExhausted: (503, ErrorCode.CAPACITY_EXHAUSTED),
-    spi_errors.NodeLost: (502, ErrorCode.NODE_LOST),
-    spi_errors.NavigationTimeout: (504, ErrorCode.NAVIGATION_TIMEOUT),
-    spi_errors.ChallengeDetected: (422, ErrorCode.CHALLENGE_UNRESOLVED),
-    spi_errors.ContextCrashed: (500, ErrorCode.CONTEXT_CRASHED),
-    spi_errors.EgressBlocked: (403, ErrorCode.EGRESS_BLOCKED),
-    spi_errors.TabNotFound: (404, ErrorCode.NOT_FOUND),
-    # A ref from a superseded epoch or one that no longer resolves is a
-    # client-side "you're acting on a stale snapshot" error (re-snapshot and
-    # retry), not a server fault -- 409, same family as SESSION_LEASE_CONFLICT.
-    spi_errors.StaleRefError: (409, ErrorCode.STALE_REF),
-    # Not found in the strict sense -- the session exists, but this specific
-    # deployment/session can't do CDP. 409 ("retry differently"), same family
-    # as SESSION_LEASE_CONFLICT/STALE_REF, not a bare 404.
-    spi_errors.CdpNotAvailable: (409, ErrorCode.CDP_NOT_AVAILABLE),
-    spi_errors.JobNotFound: (404, ErrorCode.JOB_NOT_FOUND),
-    spi_errors.JobCancelled: (409, ErrorCode.JOB_CANCELLED),
-}
-
-_RETRY_AFTER_CODES = (ErrorCode.SESSION_LEASE_CONFLICT, ErrorCode.CAPACITY_EXHAUSTED)
+# The 14-entry `_DRIVER_ERROR_MAPPING` and the `_RETRY_AFTER_CODES` tuple that
+# used to sit here are gone. Each exception carries its own `code`,
+# `http_status` and `retry_after_seconds` now (`crawlpilot.spi.errors`), for two
+# reasons.
+#
+# It was four edits to add an error type -- the class, the enum below, this
+# table, and eventually a client's inverse copy -- and this table was on the
+# *server* side of a distribution boundary, so a client could not have imported
+# it even if we wanted the fourth copy to be shared. Now adding an error type is
+# adding a class.
+#
+# And the lookup was `type(exc)`, an exact match: a subclass of
+# `NavigationTimeout` would have quietly become a 500. Reading a class attribute
+# inherits, which is what anyone would have assumed was happening.
+#
+# The rationale for the less obvious statuses moved onto the classes themselves:
+# `StaleRefError` is a 409 rather than a 404 (re-snapshot and retry -- a client
+# problem, not a server fault) and `CdpNotAvailable` likewise (the session
+# exists, it just cannot do CDP).
 
 
 def _error_response(
@@ -84,9 +90,15 @@ def _error_response(
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(spi_errors.DriverError)
     async def _driver_error_handler(request: Request, exc: spi_errors.DriverError) -> JSONResponse:
-        status_code, code = _DRIVER_ERROR_MAPPING.get(type(exc), (500, ErrorCode.INTERNAL_ERROR))
-        retry_after = 5 if code in _RETRY_AFTER_CODES else None
-        return _error_response(status_code, code, str(exc), retry_after=retry_after)
+        """Every field read off the exception's own class -- see the note above
+        the `ErrorCode` enum."""
+
+        return _error_response(
+            exc.http_status,
+            ErrorCode(exc.code),
+            str(exc),
+            retry_after=exc.retry_after_seconds,
+        )
 
     @app.exception_handler(NotImplementedError)
     async def _not_implemented_handler(request: Request, exc: NotImplementedError) -> JSONResponse:
