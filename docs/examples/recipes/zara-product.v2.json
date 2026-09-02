@@ -1,0 +1,439 @@
+{
+  "_readme": [
+    "WORKED EXAMPLE — Zara product page. Every selector, JSON-LD path and revealed-panel class in",
+    "this file was READ OFF THE LIVE PAGE with real Chrome (patchright, channel=chrome, headed) on",
+    "2026-09-02. Nothing here is a plausible-looking guess.",
+    "",
+    "WHAT THE PAGE ACTUALLY LOOKS LIKE, and why the recipe is shaped this way:",
+    "",
+    "1. A plain HTTP fetch of this URL returns 403. Zara is behind Akamai. A real browser with a",
+    "   warm profile gets the page. This is the whole of recipe-operations.md D5.1 in one fact:",
+    "   'no field resolved' from a 403 wall looks identical to 'every selector broke', and if heal",
+    "   cannot tell them apart it will rebuild this recipe against the wall and destroy it.",
+    "",
+    "2. The page emits ONE JSON-LD script, @type=ProductGroup — not Product — carrying name,",
+    "   description, material, 9 image URLs, additionalProperty, and hasVariant[] with five full",
+    "   Product entries (size, sku, color, offers.price, offers.priceCurrency, offers.availability).",
+    "   There is NO top-level 'offers' and NO __NEXT_DATA__/hydration state at all.",
+    "   So the entire size/price/stock table is available WITHOUT touching the page. It is modelled",
+    "   as repeat.kind=json, not as five clicks. See recipe-contract-v2.md section 6.",
+    "",
+    "3. Only two things genuinely require interaction, and they are in SEPARATE groups on purpose:",
+    "     - COMPOSITION, CARE & ORIGIN   button[data-qa-action=show-extra-detail]",
+    "     - PRODUCT MEASUREMENTS         button[data-qa-action=open-interactive-size-guide-accordion]",
+    "   Both open a right-hand drawer. Clicking the second while the first is open TIMES OUT — the",
+    "   open drawer covers the other button. That was observed, not theorised, and it is exactly why",
+    "   replay re-navigates before every field group (recipe-contract-v2.md section 11).",
+    "",
+    "4. The measurements drawer shows body measurements PER SIZE, so it is a genuine DOM repeat:",
+    "   pick a size inside the drawer, read the values, repeat. The values render as three unlabelled",
+    "   spans over a diagram ('62 cm', '90 cm', '82 cm') — the dimension names exist only visually.",
+    "   The recipe records them positionally and says so, rather than inventing labels.",
+    "",
+    "5. The consent banner was not visible on the profile used, so the dismiss step is genuinely",
+    "   optional. It is kept with on_error=continue — which is the correct shape for a step that is",
+    "   present for some visitors and absent for others."
+  ],
+
+  "name": "zara-product",
+  "status": "draft",
+  "version": 1,
+
+  "target": {
+    "match": [{ "kind": "glob", "pattern": "https://www.zara.com/*/*-p*.html" }]
+  },
+
+  "sample_urls": [
+    "https://www.zara.com/in/en/limited-edition-printed-midi-dress-p08004856.html"
+  ],
+  "_sample_urls_note": "Only one URL was verified live while authoring. recipe-operations.md D4.1 requires >= 3 same-type pages before this leaves draft: a candidate that resolves on one page is an overfit guess, not an induced wrapper. verified_on below reflects the truth (1), not an aspiration.",
+
+  "built_under": { "tier": "stealth", "proxy_region": "in" },
+  "has_script": true,
+
+  "defaults": {
+    "step_timeout_ms": 10000,
+    "navigate_timeout_ms": 30000,
+    "max_repeat_iterations": 20,
+    "lua_timeout_ms": 250
+  },
+
+  "variants": [
+    {
+      "variant_id": "with_size_guide",
+      "priority": 10,
+      "label": "Garment with an interactive body-measurements guide",
+      "detect": [
+        { "kind": "selector_present", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" }
+      ]
+    },
+    {
+      "variant_id": "no_size_guide",
+      "priority": 20,
+      "label": "Accessory / perfume / anything without a size guide",
+      "detect": [
+        { "kind": "selector_absent", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" }
+      ]
+    }
+  ],
+
+  "global_setup": [
+    {
+      "op": "click",
+      "label": "Accept cookies if the OneTrust banner is showing",
+      "target": { "kind": "css", "selector": "#onetrust-banner-sdk #onetrust-accept-btn-handler" },
+      "when": [{ "kind": "visible", "selector": "#onetrust-banner-sdk" }],
+      "on_error": "continue",
+      "timeout_ms": 3000
+    },
+    {
+      "op": "wait_for_load",
+      "label": "Let the SPA settle before anything reads the DOM",
+      "args": { "state": "networkidle" },
+      "timeout_ms": 15000,
+      "on_error": "continue"
+    }
+  ],
+
+  "fields": {
+    "name": {
+      "description": "Product display name",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "required": true,
+      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }],
+      "assertions": [{ "kind": "length", "min": 2, "max": 200 }]
+    },
+    "description": {
+      "description": "Marketing description paragraph",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }]
+    },
+    "product_id": {
+      "description": "Zara product group id, e.g. 08004856",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "required": true,
+      "assertions": [{ "kind": "matches", "regex": "^[0-9]{6,10}$" }]
+    },
+    "price": {
+      "description": "Current selling price of the product group, as a number",
+      "type": { "kind": "scalar", "value_type": "price" },
+      "required": true,
+      "emit_raw": true,
+      "assertions": [
+        { "kind": "range", "min": 0.01, "max": 1000000 },
+        { "kind": "cross_source_agrees", "tolerance": 0.01 }
+      ]
+    },
+    "currency": {
+      "description": "ISO-4217 currency code for the price",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "required": true,
+      "transform": [{ "op": "case", "mode": "upper" }],
+      "assertions": [{ "kind": "in_set", "values": ["INR", "EUR", "USD", "GBP", "AED", "JPY", "CNY"] }]
+    },
+    "images": {
+      "description": "All product image URLs, absolute",
+      "type": { "kind": "list", "items": { "kind": "scalar", "value_type": "url" } },
+      "transform": [{ "op": "filter_empty" }, { "op": "unique" }],
+      "assertions": [{ "kind": "length", "min": 1, "max": 60 }]
+    },
+    "composition": {
+      "description": "Fabric composition, e.g. '100% viscose'",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }]
+    },
+    "origin": {
+      "description": "Country of manufacture, e.g. 'Morocco'. Only present in the detail drawer.",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "transform": [
+        { "op": "regex_extract", "pattern": "Made in\\s+(.+?)\\s*$", "group": 1 },
+        { "op": "trim" }
+      ]
+    },
+    "variants": {
+      "description": "One row per purchasable size, with its own SKU, price and stock status",
+      "type": {
+        "kind": "table",
+        "columns": {
+          "size": { "kind": "scalar", "value_type": "string" },
+          "sku": { "kind": "scalar", "value_type": "string" },
+          "color": { "kind": "scalar", "value_type": "string" },
+          "price": { "kind": "scalar", "value_type": "float" },
+          "available": { "kind": "scalar", "value_type": "boolean" }
+        }
+      },
+      "required": true
+    },
+    "body_measurements": {
+      "description": "Body measurements per size, from the interactive size guide. Values are positional: the page renders them as unlabelled callouts over a diagram, so the dimension names are visual only and are NOT recoverable from the DOM.",
+      "type": {
+        "kind": "table",
+        "columns": {
+          "size": { "kind": "scalar", "value_type": "string" },
+          "values_cm": { "kind": "list", "items": { "kind": "scalar", "value_type": "float" } }
+        }
+      }
+    }
+  },
+
+  "field_groups": [
+    {
+      "group_id": "core_structured",
+      "_comment": "Everything obtainable with zero interaction. JSON-LD first, meta second, DOM last — the ordering that survives a redesign. On this page all three tiers actually exist for name, which is why it has three candidates.",
+      "field_names": ["name", "description", "product_id", "price", "currency", "images", "composition"],
+      "steps": [],
+      "bindings": {
+        "name": [
+          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].name" }, "verified_on": 1 },
+          { "priority": 20, "locator": { "kind": "meta", "path": "og:title" }, "verified_on": 1 },
+          {
+            "priority": 30,
+            "locator": { "kind": "css", "selector": "h1.product-detail-info__header-name", "attribute": "text" },
+            "verified_on": 1
+          }
+        ],
+        "description": [
+          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].description" }, "verified_on": 1 },
+          { "priority": 20, "locator": { "kind": "meta", "path": "og:description" }, "verified_on": 1 }
+        ],
+        "product_id": [
+          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].productGroupID" }, "verified_on": 1 },
+          {
+            "priority": 20,
+            "_comment": "The canonical URL ends in -p<id>.html — a stable fallback that survives any DOM change.",
+            "locator": { "kind": "meta", "path": "og:url" },
+            "transform": [{ "op": "regex_extract", "pattern": "-p(\\d+)\\.html", "group": 1 }],
+            "verified_on": 1
+          }
+        ],
+        "price": [
+          {
+            "priority": 10,
+            "_comment": "JSON-LD gives '9550' — a clean integer string. A cast is all it needs.",
+            "locator": { "kind": "json_ld", "path": "[0].hasVariant[0].offers.price" },
+            "transform": [{ "op": "cast", "to": "float" }],
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "_comment": "The DOM gives '₹ 9,550.00'. Same field, different source, different cleanup — this is precisely why per-candidate transforms exist. With cross_source_agrees on the field, both are read and compared, so a selector that drifts onto the 'compare at' price is caught the day it drifts.",
+            "locator": { "kind": "css", "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main", "attribute": "text" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "([\\d.,]+)" },
+              { "op": "regex_replace", "pattern": ",", "repl": "" },
+              { "op": "cast", "to": "float" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "currency": [
+          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].hasVariant[0].offers.priceCurrency" }, "verified_on": 1 },
+          {
+            "priority": 20,
+            "_comment": "No og:price:currency on this page — the symbol in the price node is the only DOM signal.",
+            "locator": { "kind": "css", "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main", "attribute": "text" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "^([^\\d\\s]+)", "group": 1 },
+              { "op": "map_lookup", "table": { "₹": "INR", "€": "EUR", "$": "USD", "£": "GBP" }, "default": null }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "images": [
+          {
+            "priority": 10,
+            "_comment": "Nine full-resolution URLs, already absolute.",
+            "locator": { "kind": "json_ld", "path": "[0].image" },
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "_comment": "all=true is the v2 addition that reads a list field without the repeat machinery.",
+            "locator": { "kind": "css", "selector": "img.media-image__image", "attribute": "src", "all": true },
+            "transform": [{ "op": "url_resolve" }],
+            "verified_on": 1
+          }
+        ],
+        "composition": [
+          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].material" }, "verified_on": 1 },
+          {
+            "priority": 20,
+            "locator": { "kind": "json_ld", "path": "[0].additionalProperty[0].value" },
+            "verified_on": 1,
+            "note": "additionalProperty[0] is {propertyID: 'Composition', name: 'OUTER SHELL', value: '100% viscose'}"
+          }
+        ]
+      }
+    },
+
+    {
+      "group_id": "size_table",
+      "_comment": "The whole size/price/stock table, from one structured-data read. Five sizes with individual SKUs and stock status, and not a single click. Modelling this as a DOM repeat would cost five clicks, five settles and a re-render race to reproduce data the page already published.",
+      "field_names": ["variants"],
+      "expect": { "min_rows": 1, "max_rows": 20 },
+      "steps": [],
+      "repeat": {
+        "kind": "json",
+        "rows_locator": { "kind": "json_ld", "path": "[0].hasVariant" },
+        "max_iterations": 20,
+        "row_field": "variants"
+      },
+      "bindings": {
+        "size": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "size" }, "verified_on": 1 }],
+        "sku": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "sku" }, "verified_on": 1 }],
+        "color": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "color" }, "verified_on": 1 }],
+        "price": [
+          {
+            "priority": 10,
+            "locator": { "kind": "json_ld", "path": "offers.price" },
+            "transform": [{ "op": "cast", "to": "float" }],
+            "verified_on": 1
+          }
+        ],
+        "available": [
+          {
+            "priority": 10,
+            "_comment": "schema.org availability is a URL: https://schema.org/InStock | .../OutOfStock. map_lookup turns that vocabulary into a boolean with no regex and no script.",
+            "locator": { "kind": "json_ld", "path": "offers.availability" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "([^/]+)$", "group": 1 },
+              {
+                "op": "map_lookup",
+                "table": {
+                  "InStock": true, "LimitedAvailability": true, "PreOrder": true,
+                  "OutOfStock": false, "SoldOut": false, "Discontinued": false
+                },
+                "default": false
+              }
+            ],
+            "verified_on": 1
+          }
+        ]
+      }
+    },
+
+    {
+      "group_id": "detail_drawer",
+      "_comment": "Origin and care live ONLY in this drawer — no JSON-LD, no meta. This is what a reveal step is actually for. It is its own group because the two drawers on this page occlude each other; see the readme.",
+      "field_names": ["origin"],
+      "steps": [
+        {
+          "op": "click",
+          "label": "Open COMPOSITION, CARE & ORIGIN",
+          "target": { "kind": "css", "selector": "button[data-qa-action='show-extra-detail']" },
+          "on_error": "skip_group",
+          "timeout_ms": 10000,
+          "retry": { "attempts": 2, "backoff_ms": 500 }
+        },
+        {
+          "op": "wait_for_selector",
+          "label": "Wait for the drawer to render, not merely for the click to land",
+          "args": { "state": "visible" },
+          "target": { "kind": "css", "selector": ".product-detail-actions-extra-detail-modal" },
+          "timeout_ms": 10000,
+          "on_error": "skip_group"
+        }
+      ],
+      "bindings": {
+        "origin": [
+          {
+            "priority": 10,
+            "_comment": "The drawer's text ends with 'ORIGIN\\nMade in Morocco'. The field's regex_extract pulls the country out.",
+            "locator": { "kind": "css", "selector": ".product-detail-actions-extra-detail-modal", "attribute": "text" },
+            "transform": [{ "op": "regex_extract", "pattern": "Made in\\s+([^\\n]+)", "group": 1 }],
+            "verified_on": 1
+          }
+        ]
+      }
+    },
+
+    {
+      "group_id": "measurements",
+      "_comment": "The genuine DOM repeat: the drawer shows measurements for ONE size at a time, so each size is clicked inside the drawer and the callouts re-read. Scoped to the with_size_guide variant, because plenty of Zara products have no size guide at all.",
+      "field_names": ["body_measurements"],
+      "expect": { "min_rows": 1, "max_rows": 12 },
+      "steps": [
+        {
+          "op": "click",
+          "label": "Open PRODUCT MEASUREMENTS",
+          "target": { "kind": "css", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" },
+          "on_error": "skip_group",
+          "timeout_ms": 10000
+        },
+        {
+          "op": "wait_for_selector",
+          "args": { "state": "visible" },
+          "target": { "kind": "css", "selector": ".interactive-size-guide__drawer" },
+          "timeout_ms": 10000,
+          "on_error": "skip_group"
+        },
+        {
+          "op": "click",
+          "label": "Force centimetres so the unit is known rather than inherited",
+          "target": {
+            "kind": "css",
+            "selector": ".zrc-size-guide-unit-selector__button",
+            "index": 0
+          },
+          "on_error": "continue",
+          "timeout_ms": 4000
+        }
+      ],
+      "repeat": {
+        "kind": "dom",
+        "_comment": "within-scoping matters here: 'XS'/'S'/'M' are common strings and a whole-tree match would collide with the page's own size selector outside the drawer. This is the false-positive risk v1 documented and could not fix.",
+        "option_locator": {
+          "kind": "css",
+          "selector": "button.zds-nav-row__list-item-wrapper",
+          "within": { "kind": "css", "selector": ".zrc-size-guide-size-selector" },
+          "all": true
+        },
+        "action": "click",
+        "max_iterations": 12,
+        "row_field": "body_measurements",
+        "settle": {
+          "op": "wait_for_selector",
+          "args": { "state": "visible" },
+          "target": { "kind": "css", "selector": ".zds-nav-row__list-item--active" },
+          "timeout_ms": 3000,
+          "on_error": "continue"
+        }
+      },
+      "bindings": {
+        "size": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "css",
+              "selector": ".zrc-size-guide-size-selector__size-item.zds-nav-row__list-item--active",
+              "attribute": "text"
+            },
+            "variant_id": "with_size_guide",
+            "verified_on": 1
+          }
+        ],
+        "values_cm": [
+          {
+            "priority": 10,
+            "_comment": "Three unlabelled callouts over the diagram: '62 cm', '90 cm', '82 cm'. The lua step strips the unit and casts, which the declarative ops cannot do element-wise inside a list in one pass. Dimension NAMES are not in the DOM at all — the recipe does not invent them.",
+            "locator": {
+              "kind": "css",
+              "selector": "span.zrc-interactive-size-guide-image__info-box",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "with_size_guide",
+            "transform": [
+              { "op": "filter_empty" },
+              {
+                "op": "lua",
+                "source": "local n = v:match('([%d%.]+)')\nreturn n and tonumber(n) or nil"
+              }
+            ],
+            "verified_on": 1
+          }
+        ]
+      }
+    }
+  ]
+}

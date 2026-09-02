@@ -1,0 +1,469 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crawlpilot.dev/schemas/recipe-v2.schema.json",
+  "title": "Recipe v2",
+  "description": "A versioned, URL-independent description of how to collect a caller-declared set of fields from one kind of page. See docs/recipe-contract-v2.md — that document is normative, this schema is its machine-readable projection.",
+  "type": "object",
+  "required": ["name", "target", "fields", "field_groups", "sample_urls"],
+  "additionalProperties": false,
+  "properties": {
+    "recipe_id": { "type": "string" },
+    "tenant": { "type": "string" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "status": { "enum": ["draft", "approved", "published"], "default": "draft" },
+    "target": { "$ref": "#/$defs/TargetSpec" },
+    "fields": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/FieldSpec" }
+    },
+    "variants": { "type": "array", "items": { "$ref": "#/$defs/PageVariant" } },
+    "global_setup": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+    "field_groups": { "type": "array", "items": { "$ref": "#/$defs/FieldGroup" } },
+    "defaults": { "$ref": "#/$defs/ExecutionDefaults" },
+    "sample_urls": {
+      "type": "array",
+      "items": { "type": "string", "format": "uri" },
+      "minItems": 1,
+      "description": "Pages this recipe was induced and verified on. One is permitted; three or more is what makes a candidate an induced wrapper rather than an overfit guess."
+    },
+    "built_under": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": { "type": "string" },
+        "proxy_region": { "type": ["string", "null"] }
+      }
+    },
+    "has_script": { "type": "boolean", "default": false },
+    "health_status": { "enum": ["healthy", "degraded", "broken"], "default": "healthy" },
+    "heal_attempts": { "type": "integer", "minimum": 0 },
+    "schedule_interval_seconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+    "notes": { "type": "string" }
+  },
+
+  "$defs": {
+
+    "TargetSpec": {
+      "type": "object",
+      "required": ["match"],
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/UrlMatcher" },
+          "description": "A guard, not a navigation target. An empty list means the recipe applies to any URL."
+        }
+      }
+    },
+
+    "UrlMatcher": {
+      "type": "object",
+      "required": ["kind", "pattern"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["glob", "regex", "host"] },
+        "pattern": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "Locator": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["css", "xpath", "ax_role", "text", "json_ld", "hydration", "meta"] },
+        "selector": { "type": "string" },
+        "index": { "type": ["integer", "null"], "minimum": 0 },
+        "all": { "type": "boolean", "default": false },
+        "attribute": { "type": "string", "default": "text" },
+        "role": { "type": "string" },
+        "name_contains": { "type": ["string", "null"] },
+        "name_in": { "type": ["array", "null"], "items": { "type": "string" } },
+        "name_regex": { "type": ["string", "null"] },
+        "path": { "type": "string" },
+        "text": { "type": "string" },
+        "within": { "$ref": "#/$defs/Locator" },
+        "frame": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["css", "xpath"] } }, "required": ["kind"] },
+          "then": { "required": ["selector"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "ax_role" } }, "required": ["kind"] },
+          "then": { "required": ["role"] }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "enum": ["json_ld", "hydration", "meta"] } },
+            "required": ["kind"]
+          },
+          "then": { "required": ["path"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "text" } }, "required": ["kind"] },
+          "then": { "required": ["text"] }
+        }
+      ]
+    },
+
+    "Predicate": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "selector_present", "selector_absent", "visible", "text_present",
+            "url_matches", "json_path_present", "count_at_least", "meta_equals"
+          ]
+        },
+        "selector": { "type": "string" },
+        "text": { "type": "string" },
+        "url": { "type": "string" },
+        "path": { "type": "string" },
+        "source": { "enum": ["json_ld", "hydration", "meta"] },
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "n": { "type": "integer", "minimum": 1 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["selector_present", "selector_absent", "visible", "count_at_least"] }
+            },
+            "required": ["kind"]
+          },
+          "then": { "required": ["selector"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "count_at_least" } }, "required": ["kind"] },
+          "then": { "required": ["n"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "text_present" } }, "required": ["kind"] },
+          "then": { "required": ["text"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "url_matches" } }, "required": ["kind"] },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "json_path_present" } }, "required": ["kind"] },
+          "then": { "required": ["path", "source"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "meta_equals" } }, "required": ["kind"] },
+          "then": { "required": ["key", "value"] }
+        }
+      ]
+    },
+
+    "StepOp": {
+      "description": "Every op is an existing entry in crawlpilot/tools/catalog.py. execute_js and wait_for_function are deliberately excluded (safety=sensitive).",
+      "enum": [
+        "navigate", "click", "double_click", "hover", "fill", "clear", "press", "send_keys",
+        "select_option", "check", "uncheck", "scroll", "scroll_into_view", "find_text",
+        "drag", "tap", "swipe", "wait",
+        "wait_for_selector", "wait_for_text", "wait_for_url", "wait_for_load",
+        "dialog_accept", "dialog_dismiss",
+        "new_tab", "switch_tab", "close_tab", "download"
+      ]
+    },
+
+    "Step": {
+      "type": "object",
+      "required": ["op"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "$ref": "#/$defs/StepOp" },
+        "target": { "$ref": "#/$defs/Locator" },
+        "args": { "type": "object" },
+        "timeout_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "retry": {
+          "type": ["object", "null"],
+          "required": ["attempts"],
+          "additionalProperties": false,
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "backoff_ms": { "type": "integer", "minimum": 0, "default": 250 }
+          }
+        },
+        "on_error": { "enum": ["fail", "continue", "skip_group"], "default": "fail" },
+        "optional": { "type": "boolean", "default": false },
+        "when": { "type": "array", "items": { "$ref": "#/$defs/Predicate" } },
+        "repeat_until": { "$ref": "#/$defs/Predicate" },
+        "max_repeats": { "type": "integer", "minimum": 1 },
+        "label": { "type": ["string", "null"] }
+      },
+      "dependentRequired": { "repeat_until": ["max_repeats"] }
+    },
+
+    "PageVariant": {
+      "type": "object",
+      "required": ["variant_id", "detect"],
+      "additionalProperties": false,
+      "properties": {
+        "variant_id": { "type": "string", "minLength": 1 },
+        "priority": { "type": "integer", "default": 100 },
+        "detect": { "type": "array", "items": { "$ref": "#/$defs/Predicate" }, "minItems": 1 },
+        "label": { "type": ["string", "null"] }
+      }
+    },
+
+    "ValueType": {
+      "enum": [
+        "string", "text", "number", "float", "integer", "price",
+        "boolean", "url", "date", "datetime", "json"
+      ]
+    },
+
+    "TypeSpec": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["scalar", "list", "object", "table"] },
+        "value_type": { "$ref": "#/$defs/ValueType" },
+        "items": { "$ref": "#/$defs/TypeSpec" },
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/TypeSpec" } },
+        "columns": { "type": "object", "additionalProperties": { "$ref": "#/$defs/TypeSpec" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "scalar" } }, "required": ["kind"] },
+          "then": { "required": ["value_type"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "list" } }, "required": ["kind"] },
+          "then": { "required": ["items"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "object" } }, "required": ["kind"] },
+          "then": { "required": ["properties"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "table" } }, "required": ["kind"] },
+          "then": { "required": ["columns"] }
+        }
+      ]
+    },
+
+    "Transform": {
+      "type": "object",
+      "required": ["op"],
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "enum": [
+            "regex_extract", "regex_replace", "trim", "collapse_ws", "strip_control",
+            "strip_accents", "case", "split", "join", "slice", "index", "unique",
+            "filter_empty", "map_lookup", "template", "url_resolve", "json_parse",
+            "json_path", "cast", "default", "lua"
+          ]
+        },
+        "pattern": { "type": "string" },
+        "group": { "type": "integer", "minimum": 0, "default": 0 },
+        "flags": { "type": "string", "default": "" },
+        "repl": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0, "default": 0 },
+        "mode": { "enum": ["lower", "upper", "title"] },
+        "sep": { "type": "string" },
+        "limit": { "type": "integer", "default": -1 },
+        "start": { "type": ["integer", "null"] },
+        "end": { "type": ["integer", "null"] },
+        "i": { "type": "integer" },
+        "table": { "type": "object" },
+        "default": {},
+        "format": { "type": "string" },
+        "path": { "type": "string" },
+        "to": { "$ref": "#/$defs/ValueType" },
+        "value": {},
+        "source": {
+          "type": "string",
+          "description": "Lua chunk. function body over (v, ctx); returns the new value. Sandboxed, deterministic, resource-capped."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "const": "regex_extract" } }, "required": ["op"] },
+          "then": { "required": ["pattern"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "regex_replace" } }, "required": ["op"] },
+          "then": { "required": ["pattern", "repl"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "case" } }, "required": ["op"] },
+          "then": { "required": ["mode"] }
+        },
+        {
+          "if": { "properties": { "op": { "enum": ["split", "join"] } }, "required": ["op"] },
+          "then": { "required": ["sep"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "index" } }, "required": ["op"] },
+          "then": { "required": ["i"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "map_lookup" } }, "required": ["op"] },
+          "then": { "required": ["table"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "template" } }, "required": ["op"] },
+          "then": { "required": ["format"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "json_path" } }, "required": ["op"] },
+          "then": { "required": ["path"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "cast" } }, "required": ["op"] },
+          "then": { "required": ["to"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "default" } }, "required": ["op"] },
+          "then": { "required": ["value"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "lua" } }, "required": ["op"] },
+          "then": { "required": ["source"] }
+        }
+      ]
+    },
+
+    "Assertion": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "range", "matches", "in_set", "length", "not_empty",
+            "cross_source_agrees", "not_equals_previous"
+          ]
+        },
+        "min": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] },
+        "regex": { "type": "string" },
+        "values": { "type": "array" },
+        "tolerance": { "type": "number", "minimum": 0, "default": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "matches" } }, "required": ["kind"] },
+          "then": { "required": ["regex"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "in_set" } }, "required": ["kind"] },
+          "then": { "required": ["values"] }
+        }
+      ]
+    },
+
+    "FieldSpec": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string", "description": "Read by the authoring model — write it for a reader." },
+        "type": { "$ref": "#/$defs/TypeSpec" },
+        "required": { "type": "boolean", "default": false },
+        "emit_raw": { "type": "boolean", "default": false },
+        "transform": { "type": "array", "items": { "$ref": "#/$defs/Transform" } },
+        "assertions": { "type": "array", "items": { "$ref": "#/$defs/Assertion" } }
+      }
+    },
+
+    "Candidate": {
+      "type": "object",
+      "required": ["locator"],
+      "additionalProperties": false,
+      "properties": {
+        "priority": { "type": "integer", "default": 100, "description": "Lower is tried first; ties break by list order." },
+        "locator": { "$ref": "#/$defs/Locator" },
+        "when": { "type": "array", "items": { "$ref": "#/$defs/Predicate" } },
+        "variant_id": { "type": ["string", "null"] },
+        "transform": { "type": ["array", "null"], "items": { "$ref": "#/$defs/Transform" } },
+        "verified_on": { "type": "integer", "minimum": 0, "default": 0 },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+
+    "RepeatSpec": {
+      "type": "object",
+      "required": ["kind", "max_iterations", "row_field"],
+      "additionalProperties": false,
+      "description": "Produces the rows of a table-typed field, from DOM options (kind=dom) or from an array already present in structured data (kind=json). Prefer json: if the data is already in the page's JSON, do not click for it.",
+      "properties": {
+        "kind": { "enum": ["dom", "json"] },
+        "option_locator": {
+          "$ref": "#/$defs/Locator",
+          "description": "kind=dom: must match MULTIPLE elements at replay time; re-resolved before every iteration."
+        },
+        "action": { "$ref": "#/$defs/StepOp", "default": "click" },
+        "settle": { "$ref": "#/$defs/Step" },
+        "rows_locator": {
+          "$ref": "#/$defs/Locator",
+          "description": "kind=json: resolves to an array; each element is a row and becomes the root for the column candidates' paths."
+        },
+        "max_iterations": { "type": "integer", "minimum": 1 },
+        "row_field": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "dom" } }, "required": ["kind"] },
+          "then": { "required": ["option_locator"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "json" } }, "required": ["kind"] },
+          "then": { "required": ["rows_locator"] }
+        }
+      ]
+    },
+
+    "FieldGroup": {
+      "type": "object",
+      "required": ["group_id", "field_names", "bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "group_id": { "type": "string", "minLength": 1 },
+        "field_names": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/Candidate" },
+            "minItems": 1
+          }
+        },
+        "repeat": { "$ref": "#/$defs/RepeatSpec" },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_rows": { "type": ["integer", "null"], "minimum": 0 },
+            "max_rows": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "ExecutionDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "step_timeout_ms": { "type": "integer", "minimum": 0, "default": 10000 },
+        "navigate_timeout_ms": { "type": "integer", "minimum": 0, "default": 30000 },
+        "max_repeat_iterations": { "type": "integer", "minimum": 1, "default": 20 },
+        "lua_timeout_ms": { "type": "integer", "minimum": 1, "default": 250 }
+      }
+    }
+  }
+}
