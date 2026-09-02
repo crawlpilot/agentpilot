@@ -48,12 +48,24 @@ def _env(suffix: str, default: str = "") -> str:
     own environment -- a name that means nothing to them and that leaks a product
     they are not using. The old names keep working so a deployed service does not
     break on upgrade; new deployments should use `CRAWLPILOT_*`.
+
+    **Set-but-empty counts as unset**, and falls through to the next name and
+    then to `default`. docker-compose's passthrough idiom
+    (`AGENTPILOT_PROXY_MAX_SUCCESS: ${AGENTPILOT_PROXY_MAX_SUCCESS:-}`) exports
+    the variable as `""` whenever the host shell has not set it, so "unset" in
+    the operator's mental model arrives here as an empty string, not as absent.
+    Every other caller already coerced that itself (`or None`, `or DEFAULT`,
+    `if configured`); `ProxyHealthConfig` was the one that *parsed* the value
+    instead, and crashed every worker at boot with `invalid literal for int()
+    with base 10: ''`. Centralised here so the next parsing caller inherits the
+    guard rather than rediscovering it.
     """
 
-    value = os.environ.get(f"CRAWLPILOT_{suffix}")
-    if value is None:
-        value = os.environ.get(f"AGENTPILOT_{suffix}")
-    return (value if value is not None else default).strip()
+    for name in (f"CRAWLPILOT_{suffix}", f"AGENTPILOT_{suffix}"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return default.strip()
 
 
 @dataclass(frozen=True)

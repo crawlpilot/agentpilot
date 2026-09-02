@@ -13,4 +13,8 @@ for _ in $(seq 1 20); do
     sleep 0.25
 done
 
-exec uv run uvicorn agentpilot.gateway.app:app --host 0.0.0.0 --port 8000
+# `--no-sync`: run the environment worker.Dockerfile built, don't re-resolve it
+# at boot. See the note in docker/gateway.Dockerfile's CMD -- a bare `uv run`
+# rebuilds the workspace wheels and pulls the dev group on every start, and its
+# implicit sync carries none of this image's `--extra driver/postgres/bedrock`.
+exec uv run --no-sync uvicorn agentpilot.gateway.app:app --host 0.0.0.0 --port 8000

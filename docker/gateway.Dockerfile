@@ -38,4 +38,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --extra postgres --package agentpilot
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "agentpilot.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# `--no-sync` (same flag worker-base.Dockerfile already uses for `patchright
+# install`): a bare `uv run` re-syncs the environment on EVERY container start
+# -- rebuilding all three workspace wheels and re-downloading the dev group
+# inside the running container, before uvicorn binds. That is a slow boot, a
+# hard network dependency at runtime, and a silent drift risk: the startup sync
+# carries none of this image's `--extra postgres`, so it reconciles the venv
+# built above against a different resolution than the one that was tested.
+# The image IS the environment; run it, don't re-resolve it.
+CMD ["uv", "run", "--no-sync", "uvicorn", "agentpilot.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]

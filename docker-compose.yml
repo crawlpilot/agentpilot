@@ -64,7 +64,11 @@ services:
     build:
       context: .
       dockerfile: docker/gateway.Dockerfile
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    # `--no-sync` for the same reason as the gateway CMD it shares an image with:
+    # `alembic` comes from that image's `--extra postgres`, and a bare `uv run`
+    # re-syncs at start without that extra -- so the migrator was re-resolving
+    # (and rebuilding the workspace wheels) before every `alembic upgrade head`.
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     environment:
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
     restart: "no"
