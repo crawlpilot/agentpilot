@@ -279,7 +279,7 @@ def _apply_scalar(value: Any, t: Transform, ctx: TransformContext) -> Any:  # no
     if op == "cast":
         if not t.to:
             raise TransformError("cast requires `to`")
-        return _coerce(value, t.to, ctx)  # type: ignore[arg-type]
+        return _coerce(value, t.to, ctx)
 
     if op == "html_select":
         return _html_select(value, t)
@@ -480,7 +480,10 @@ def _html_select(value: Any, t: Transform) -> Any:
     except ImportError as exc:  # pragma: no cover - lxml is a crawlpilot dependency
         raise TransformError("html_select requires lxml with cssselect") from exc
     try:
-        matches = CSSSelector(t.selector)(root)
+        # CSSSelector.__call__ is typed as returning the full XPath result
+        # union (bool/float/str/list); against an element tree it is always the
+        # element list, which is the only case this op is defined for.
+        matches: list[Any] = list(CSSSelector(t.selector)(root))  # type: ignore[arg-type]
     except Exception as exc:  # noqa: BLE001 - cssselect raises several types
         raise TransformError(f"invalid css selector {t.selector!r}: {exc}") from exc
 

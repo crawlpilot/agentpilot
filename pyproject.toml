@@ -82,5 +82,5 @@ strict = true
 # `anthropic` ships with the optional `bedrock` extra, so a dev env synced
 # without it must still typecheck agentpilot.llm.bedrock's guarded import.
 [[tool.mypy.overrides]]
-module = ["anthropic.*"]
+module = ["anthropic.*", "jmespath.*", "lupa.*"]
 ignore_missing_imports = true
