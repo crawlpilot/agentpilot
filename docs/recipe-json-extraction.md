@@ -7,12 +7,18 @@ A recipe reads from four places: the DOM (CSS, XPath), the accessibility tree (`
 is about the third, because on modern commerce pages it is where most of the data actually is,
 and because choosing its query language badly is a correctness problem, not a convenience one.
 
-Everything below is measured against two real pages, loaded with real Chrome on 2026-09-02:
+Everything below is measured against three real pages, loaded with real Chrome on 2026-09-02:
 
-- **Zara** — `limited-edition-printed-midi-dress-p08004856.html`. One JSON-LD script,
-  `@type: ProductGroup`, no hydration state at all.
-- **Walmart** — `Dove-Body-Wash-Strawberry-Cookie-20oz/7843261295`. A **352 KB** `__NEXT_DATA__`
-  blob, and JSON-LD carrying only `WebPage` + `BreadcrumbList` — no `Product` whatsoever.
+| Page | JSON-LD | Hydration | Verdict |
+|---|---|---|---|
+| **Zara** `…-p08004856.html` | 1 script, `@type: ProductGroup` | none | everything in one standard blob |
+| **Walmart** `…/7843261295` | `WebPage` + `BreadcrumbList` only — **no `Product`** | **352 KB** `__NEXT_DATA__` | everything in a proprietary blob |
+| **Amazon** `…/dp/B08J4FJ63D` | **0 scripts** | **none** | **no structured data at all** |
+
+Those three outcomes are the entire argument for why candidate ordering is per-field and
+per-page rather than a global policy. "Prefer JSON-LD" is excellent advice that would collect
+*nothing* on Amazon, and would miss every one of Walmart's six spec sections. A recipe format
+that assumes one of these shapes is a recipe format for one retailer.
 
 ---
 
@@ -253,6 +259,31 @@ A `null` here is honest — "this page said something we have not seen before" �
 `{"kind": "not_empty"}` turns it into a `suspect` field rather than a confident lie.
 
 ---
+
+### 6.3 When there is no JSON at all
+
+Amazon is the control case: 0 JSON-LD scripts, no `__NEXT_DATA__`, no hydration globals, and 5
+meta tags of which none are commercial. Everything must come from the DOM. Two consequences for
+the contract, both borne out by
+[`examples/recipes/amazon-product.v2.json`](examples/recipes/amazon-product.v2.json):
+
+- **XPath stops being optional.** The spec rows are `<tr><th>Key</th><td>Value</td></tr>` inside
+  seven identically-classed, id-less tables. Selecting *the `td` whose sibling `th` says
+  "Item Weight"* is the one thing CSS genuinely cannot express, and it is the natural shape of
+  every spec table on the web. This is the concrete justification for the driver-side
+  `document.evaluate` work.
+- **`to_object` carries the same weight it does for JSON.** Whether the pairs arrive as
+  `[{name, value}]` from `idml.specifications` or as `th`/`td` text from a table, the caller
+  wants `{name: value}`. One transform serves both, which is what keeps the two extraction paths
+  from diverging into two dialects.
+
+The mirror-image lesson to §1: on Walmart, six sections *look* like clicks and are really JSON.
+On Amazon, four sections (*Features & Specs*, *Style*, *Measurements*, *Additional details*)
+*look* like clicks and are really **already-present DOM** — collapsed, not absent, and readable
+through `textContent` without expanding anything. See
+[`recipe-contract-v2.md`](recipe-contract-v2.md) §2, "text vs visible_text".
+
+Three pages, three different right answers, and in none of them is the obvious one correct.
 
 ## 7. Summary of changes this document requires
 

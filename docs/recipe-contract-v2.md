@@ -93,7 +93,7 @@ Locator
   selector:  str
   index:     int | None          # nth match, 0-based; null means first
   all:       bool                # return every match (feeds list-typed fields)
-  attribute: str                 # "text" | "html" | "value" | "href" | any DOM attribute
+  attribute: str                 # "text" | "visible_text" | "html" | "value" | "href" | any DOM attribute
 
   # ax_role
   role:          str
@@ -124,6 +124,31 @@ Locator
 | `json_ld` | `ExtractAction(format="structured_data")` → `json_ld` | the value at `path` |
 | `hydration` | same → `hydration` (`__NEXT_DATA__`, Nuxt state, and a live JS-eval probe for client-only SPA state) | the value at `path` |
 | `meta` | same → `metadata` (OpenGraph, Twitter, Dublin Core) | the value at `path` |
+
+### `text` vs `visible_text` — a distinction worth a click
+
+`attribute: "text"` reads **`textContent`**. `attribute: "visible_text"` reads **`innerText`**.
+They differ in exactly one way that matters: `textContent` returns the text of elements that are
+in the DOM but not rendered; `innerText` does not.
+
+That difference decides whether a reveal step is necessary at all. Measured on an Amazon product
+page, its four collapsed accordion sections — *Features & Specs*, *Style*, *Measurements*,
+*Additional details* — are `aria-expanded="false"` and contribute nothing to `document.body.innerText`
+(expanding them grew it by +303, +73, +97 and +22 characters respectively). Yet all of their rows
+are already in the DOM and are readable through `textContent` **without any click at all**.
+
+So:
+
+- Use `text` (the default) to read data that is present but collapsed. It is faster, it cannot
+  race, and it does not mutate the page.
+- Use `visible_text` when you specifically mean "what a user can actually see" — and pair it with
+  a reveal step, because that is now a real precondition.
+- A `wait_for_selector` with `state: "visible"` on a collapsed section will time out even though
+  the data is right there. That is not a bug; it is the two meanings of "present" diverging.
+
+The general rule this produces mirrors the one for JSON in §6: **if the data is already in the
+DOM, do not click for it.** Clicking is for content that does not exist yet, not for content that
+merely is not painted.
 
 Three deliberate changes from v1:
 
@@ -456,6 +481,10 @@ Transform = one of:
   {op: "json_parse"}
   {op: "json_path",      path, path_lang = "simple"}
   {op: "strip_html"}                               # HTML fragment -> plain text
+  {op: "html_select",    selector, attribute = "text", all = false}
+                                                   # parse an HTML *string*, select from it
+  {op: "to_object",      key, value}               # [{name,value}, …] -> {name: value}
+  {op: "to_pairs",       key = "key", value = "value"}   # the inverse
   {op: "cast",           to: ValueType}
   {op: "default",        value}                    # substituted when the value is empty
   {op: "lua",            source}                   # §7.1
@@ -468,6 +497,38 @@ default and a bad constraint: it cannot express "cast, then default" or "split, 
 part". v2 makes the order explicit. The migration of v1 semantics is mechanical — every v1
 `FieldNormalization` maps to exactly this list, in this order — and the studio offers it as the
 starting pipeline for a new field.
+
+### Shaping ops: `to_object`, `html_select`
+
+Three of the ops above exist because real pages forced them, and each replaces what would
+otherwise be a Lua snippet — which matters, because a declarative op is reviewable, diffable, and
+safe by construction where a script is none of those things.
+
+**`to_object`** turns the near-universal `[{name, value}, …]` specification shape into the map a
+caller actually asked for:
+
+```json
+"transform": [{"op": "to_object", "key": "name", "value": "value"}]
+```
+```
+[{"name": "Scent", "value": "Strawberry Cookie"}, {"name": "Form", "value": "Liquid"}, …]
+  ->  {"Scent": "Strawberry Cookie", "Form": "Liquid", …}
+```
+
+Pair it with `type: {kind: "object", properties: {}}` — an open map whose keys are the page's,
+not the schema's. `to_pairs` is the inverse, for callers who want rows.
+
+**`html_select`** parses an HTML *string* — one that arrived as a JSON value, not as the page —
+and selects from it. Commerce JSON is full of these: Walmart's `idml.longDescription` is a JSON
+string containing `<ul><li>…</li></ul>`, and the caller wants the bullets as a list:
+
+```json
+"transform": [{"op": "html_select", "selector": "li", "attribute": "text", "all": true},
+              {"op": "filter_empty"}]
+```
+
+Without it, the only options are a regex over markup (fragile) or Lua (overkill). It uses `lxml`,
+already a `crawlpilot` dependency.
 
 ### List semantics
 

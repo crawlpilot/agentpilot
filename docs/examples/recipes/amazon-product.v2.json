@@ -1,0 +1,599 @@
+{
+  "_readme": [
+    "WORKED EXAMPLE — Amazon product page. The pure-HTML case.",
+    "Target: /Disney-Cars-Radiator-Die-Cast-Vehicles/dp/B08J4FJ63D",
+    "Read off the live page with real Chrome on 2026-09-02. Counts and values are observed.",
+    "",
+    "WHY THIS PAGE COMPLETES THE SET:",
+    "  Zara    — JSON-LD ProductGroup, everything in one standard blob.",
+    "  Walmart — no Product JSON-LD at all; a 352 KB __NEXT_DATA__ carries everything.",
+    "  Amazon  — MEASURED: 0 JSON-LD scripts, no __NEXT_DATA__, no hydration globals.",
+    "            Only 5 meta tags, none of them commercial (title, description,",
+    "            encrypted-slate-token, bidi-endpoint, flow-closure-id).",
+    "            There is NO structured data. Every field here is CSS or XPath, by necessity.",
+    "  Together these three are why candidate ordering is per-field and per-page rather than a",
+    "  global policy: 'prefer JSON-LD' is excellent advice that would collect nothing here.",
+    "",
+    "WHAT MAKES THE SPECS HARD (all observed):",
+    "",
+    "1. NO STABLE IDS. The documented Amazon ids — #productDetails_techSpec_section_1,",
+    "   #detailBullets_feature_div, #productOverview_feature_div — are ALL ABSENT on this page.",
+    "   Instead there are 7 anonymous <table class='a-keyvalue prodDetTable'>, 5 of which have",
+    "   rows: 22, 8, 4, 4 and 1 — 39 spec rows in total.",
+    "",
+    "2. THE ROWS ARE SPLIT ACROSS TWO CONTAINERS, and a complete spec map needs both:",
+    "     #productDetails_expanderTables_depthLeftSections   -> 1 table,  22 rows",
+    "     #productDetails_expanderTables_depthRightSections  -> 4 tables, 17 rows",
+    "   Both sit under #productDetails_expanderSectionTables, which is the join point the",
+    "   recipe uses.",
+    "",
+    "3. HEADING-PROXIMITY LOCATORS DO NOT WORK HERE. While probing, a 'nearest preceding",
+    "   heading' heuristic labelled four different spec tables 'Warranty & Support' — the",
+    "   heading of an unrelated empty table earlier in the DOM. This is worth stating because",
+    "   'find the table under the heading that says X' is the first thing both a human and an",
+    "   LLM reach for, and on this page it silently mislabels most of the data.",
+    "",
+    "4. THE VALUES ARE DIRTY. Observed verbatim in the 22-row table:",
+    "     'Customer Reviews' = '4.9 4.9 out of 5 stars (13,222) var dpAcrHasRegisteredArcLink…'",
+    "   That tail is INLINE JAVASCRIPT leaking into innerText. 'Best Sellers Rank' similarly",
+    "   carries '(See Top 100 in Toys & Games)' navigation chrome. A spec map built by blindly",
+    "   pairing th/td ships both. The recipe filters them explicitly rather than pretending",
+    "   textContent is clean.",
+    "",
+    "5. PRICE WAS EMPTY. '.a-price .a-offscreen' resolved to '' and #availability read",
+    "   'This item cannot be shipped to your selected delivery location.' The page rendered",
+    "   fine — it was geo-gated by delivery address. This is exactly the built_under /",
+    "   proxy_region concern in recipe-operations.md D6: the same URL, fetched from a different",
+    "   place, legitimately has no price. price is therefore NOT marked required, and carries a",
+    "   not_empty assertion so a missing price surfaces as 'suspect' rather than as a silent",
+    "   null or a failed run."
+  ],
+
+  "name": "amazon-product",
+  "status": "draft",
+  "version": 1,
+
+  "target": {
+    "match": [{ "kind": "regex", "pattern": "^https://www\\.amazon\\.[a-z.]+/(.+/)?dp/[A-Z0-9]{10}" }]
+  },
+
+  "sample_urls": [
+    "https://www.amazon.com/Disney-Cars-Radiator-Die-Cast-Vehicles/dp/B08J4FJ63D"
+  ],
+  "_sample_urls_note": "One URL verified live. Amazon's detail-page layout varies enormously by category (books, electronics and apparel each use different spec containers), so this recipe needs sample URLs from several categories before leaving draft — more than the usual three.",
+
+  "built_under": { "tier": "stealth", "proxy_region": "us" },
+  "has_script": true,
+
+  "defaults": {
+    "step_timeout_ms": 10000,
+    "navigate_timeout_ms": 45000,
+    "max_repeat_iterations": 60,
+    "lua_timeout_ms": 250
+  },
+
+  "variants": [
+    {
+      "variant_id": "expander_tables",
+      "priority": 10,
+      "label": "Spec tables under #productDetails_expanderSectionTables (observed on this page)",
+      "detect": [{ "kind": "selector_present", "selector": "#productDetails_expanderSectionTables table.a-keyvalue" }]
+    },
+    {
+      "variant_id": "tech_spec_sections",
+      "priority": 20,
+      "label": "Classic #productDetails_techSpec_section_1 layout",
+      "detect": [{ "kind": "selector_present", "selector": "#productDetails_techSpec_section_1" }]
+    },
+    {
+      "variant_id": "detail_bullets",
+      "priority": 30,
+      "label": "Books/media layout: #detailBullets_feature_div list instead of a table",
+      "detect": [{ "kind": "selector_present", "selector": "#detailBullets_feature_div" }]
+    }
+  ],
+
+  "global_setup": [
+    {
+      "op": "wait_for_selector",
+      "label": "The title is the page's liveness signal — if this never appears we were served something else",
+      "args": { "state": "visible" },
+      "target": { "kind": "css", "selector": "#productTitle" },
+      "timeout_ms": 20000
+    },
+    {
+      "op": "scroll",
+      "label": "Amazon lazy-renders the detail tables well below the fold",
+      "args": { "direction": "down", "pages": 8 },
+      "on_error": "continue"
+    },
+    {
+      "op": "wait_for_selector",
+      "args": { "state": "attached" },
+      "target": { "kind": "css", "selector": "#productDetails_expanderSectionTables, #productDetails_techSpec_section_1, #detailBullets_feature_div" },
+      "timeout_ms": 12000,
+      "on_error": "continue"
+    }
+  ],
+
+  "fields": {
+    "name": {
+      "description": "Product title",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "required": true,
+      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }],
+      "assertions": [{ "kind": "length", "min": 5, "max": 500 }]
+    },
+    "asin": {
+      "description": "Amazon Standard Identification Number",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "required": true,
+      "assertions": [{ "kind": "matches", "regex": "^[A-Z0-9]{10}$" }]
+    },
+    "brand": {
+      "description": "Brand or manufacturer",
+      "type": { "kind": "scalar", "value_type": "string" }
+    },
+    "price": {
+      "_comment": "NOT required: observed empty on a geo-gated load where the page itself rendered correctly.",
+      "description": "Current price as a number. May be absent when the item cannot ship to the fetching location.",
+      "type": { "kind": "scalar", "value_type": "price" },
+      "required": false,
+      "emit_raw": true,
+      "assertions": [
+        { "kind": "not_empty" },
+        { "kind": "range", "min": 0.01, "max": 100000 }
+      ]
+    },
+    "availability_text": {
+      "description": "Raw availability message, kept verbatim so a geo-gate is distinguishable from out-of-stock",
+      "type": { "kind": "scalar", "value_type": "string" },
+      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }]
+    },
+    "average_rating": {
+      "description": "Mean customer rating out of 5",
+      "type": { "kind": "scalar", "value_type": "float" },
+      "assertions": [{ "kind": "range", "min": 0, "max": 5 }]
+    },
+    "review_count": {
+      "description": "Number of customer ratings",
+      "type": { "kind": "scalar", "value_type": "integer" },
+      "assertions": [{ "kind": "range", "min": 0, "max": 100000000 }]
+    },
+    "feature_bullets": {
+      "description": "The 'About this item' bullets, as a list",
+      "type": { "kind": "list", "items": { "kind": "scalar", "value_type": "string" } },
+      "assertions": [{ "kind": "length", "min": 1, "max": 30 }]
+    },
+    "specifications": {
+      "_comment": "REQUESTED AS A KEY->VALUE MAP. Built from th/td pairs across BOTH expander containers, then cleaned. Open map: the keys are the page's, and they differ per product category.",
+      "description": "All product specifications as a key -> value map, merged across every section",
+      "type": { "kind": "object", "properties": {} },
+      "assertions": [{ "kind": "not_empty" }]
+    },
+    "features_and_specs": {
+      "description": "The 'Features & Specs' collapsed section, as a key -> value map",
+      "type": { "kind": "object", "properties": {} }
+    },
+    "style": {
+      "description": "The 'Style' collapsed section, as a key -> value map",
+      "type": { "kind": "object", "properties": {} }
+    },
+    "measurements": {
+      "description": "The 'Measurements' collapsed section, as a key -> value map",
+      "type": { "kind": "object", "properties": {} }
+    },
+    "additional_details": {
+      "description": "The 'Additional details' collapsed section, as a key -> value map",
+      "type": { "kind": "object", "properties": {} }
+    },
+    "item_details": {
+      "description": "The 'Item details' collapsed section, as a key -> value map",
+      "type": { "kind": "object", "properties": {} }
+    },
+    "dimensions": {
+      "_comment": "A genuine Lua case: '3.15 x 3.54 x 1.18 inches' -> four typed fields. Three numbers and a unit cannot be produced by an ordered list of scalar ops without inventing a dozen of them.",
+      "description": "Item dimensions parsed into components",
+      "type": {
+        "kind": "object",
+        "properties": {
+          "length": { "kind": "scalar", "value_type": "float" },
+          "width": { "kind": "scalar", "value_type": "float" },
+          "height": { "kind": "scalar", "value_type": "float" },
+          "unit": { "kind": "scalar", "value_type": "string" }
+        }
+      }
+    },
+    "weight": {
+      "description": "Item weight parsed into value and unit",
+      "type": {
+        "kind": "object",
+        "properties": {
+          "value": { "kind": "scalar", "value_type": "float" },
+          "unit": { "kind": "scalar", "value_type": "string" }
+        }
+      }
+    }
+  },
+
+  "field_groups": [
+    {
+      "group_id": "core",
+      "field_names": ["name", "asin", "brand", "price", "availability_text", "average_rating", "review_count", "feature_bullets"],
+      "steps": [],
+      "bindings": {
+        "name": [
+          { "priority": 10, "locator": { "kind": "css", "selector": "#productTitle", "attribute": "text" }, "verified_on": 1 },
+          {
+            "priority": 20,
+            "_comment": "The <title> tag carries the same string wrapped in 'Amazon.com: … : Category'.",
+            "locator": { "kind": "meta", "path": "title" },
+            "transform": [{ "op": "regex_extract", "pattern": "^Amazon\\.com:\\s*(.+?)\\s*:", "group": 1 }],
+            "verified_on": 1
+          }
+        ],
+        "asin": [
+          {
+            "priority": 10,
+            "_comment": "The URL is the most stable source on the entire page.",
+            "locator": { "kind": "css", "selector": "link[rel='canonical']", "attribute": "href" },
+            "transform": [{ "op": "regex_extract", "pattern": "/dp/([A-Z0-9]{10})", "group": 1 }],
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "_comment": "Also present as a spec row: 'ASIN' = 'B08J4FJ63D'. XPath earns its place here — selecting a <td> by its sibling <th>'s text is the one thing CSS cannot express.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//table[contains(@class,'a-keyvalue')]//tr[th[normalize-space()='ASIN']]/td",
+              "attribute": "text"
+            },
+            "transform": [{ "op": "trim" }],
+            "verified_on": 1
+          }
+        ],
+        "brand": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "xpath",
+              "selector": "//table[contains(@class,'a-keyvalue')]//tr[th[normalize-space()='Brand Name']]/td",
+              "attribute": "text"
+            },
+            "transform": [{ "op": "trim" }],
+            "verified_on": 1,
+            "note": "Observed 'Mattel'."
+          },
+          {
+            "priority": 20,
+            "locator": { "kind": "css", "selector": "#bylineInfo", "attribute": "text" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "Visit the (.+?) Store", "group": 1 },
+              { "op": "trim" }
+            ],
+            "verified_on": 1,
+            "note": "Observed 'Visit the Mattel Store' -> 'Mattel'."
+          }
+        ],
+        "price": [
+          {
+            "priority": 10,
+            "_comment": ".a-offscreen is the accessible full price string. Observed EMPTY on a geo-gated load — the candidate is correct, the page had no price to give.",
+            "locator": { "kind": "css", "selector": "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen", "attribute": "text" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "([\\d.,]+)" },
+              { "op": "regex_replace", "pattern": ",", "repl": "" },
+              { "op": "cast", "to": "float" }
+            ],
+            "verified_on": 0
+          },
+          {
+            "priority": 20,
+            "locator": { "kind": "css", "selector": ".a-price .a-offscreen", "attribute": "text" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "([\\d.,]+)" },
+              { "op": "regex_replace", "pattern": ",", "repl": "" },
+              { "op": "cast", "to": "float" }
+            ],
+            "verified_on": 0
+          }
+        ],
+        "availability_text": [
+          {
+            "priority": 10,
+            "locator": { "kind": "css", "selector": "#availability", "attribute": "text" },
+            "verified_on": 1,
+            "note": "Observed 'This item cannot be shipped to your selected delivery location.' — a geo-gate, not an out-of-stock. Keeping the raw text is what makes the two distinguishable downstream."
+          }
+        ],
+        "average_rating": [
+          {
+            "priority": 10,
+            "_comment": "The title ATTRIBUTE is clean ('4.9 out of 5 stars'); the element's innerText is '4.9 \\n4.9 out of 5 stars' — the same number twice. Reading the attribute avoids a de-duplication problem entirely.",
+            "locator": { "kind": "css", "selector": "#acrPopover", "attribute": "title" },
+            "transform": [
+              { "op": "regex_extract", "pattern": "^([\\d.]+)", "group": 1 },
+              { "op": "cast", "to": "float" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "review_count": [
+          {
+            "priority": 10,
+            "locator": { "kind": "css", "selector": "#acrCustomerReviewText", "attribute": "text" },
+            "transform": [
+              { "op": "regex_replace", "pattern": "[^0-9]", "repl": "" },
+              { "op": "cast", "to": "integer" }
+            ],
+            "verified_on": 1,
+            "note": "Observed '(13,222)' -> 13222."
+          }
+        ],
+        "feature_bullets": [
+          {
+            "priority": 10,
+            "_comment": "Observed 5 bullets. Amazon pads them with zero-width marks (\\u200e/\\u200f), which strip_control removes.",
+            "locator": { "kind": "css", "selector": "#feature-bullets li span.a-list-item", "attribute": "text", "all": true },
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "collapse_ws" },
+              { "op": "trim" },
+              { "op": "filter_empty" }
+            ],
+            "verified_on": 1
+          }
+        ]
+      }
+    },
+
+    {
+      "group_id": "collapsed_sections",
+      "_comment": [
+        "THE FOUR CLICK-TO-EXPAND SECTIONS, plus 'Item details'. All five are:",
+        "  a.a-expander-header.a-expander-section-header[data-action='a-expander-toggle']",
+        "  role='button', aria-expanded='false', inside #productDetails_expanderTables_depthRightSections",
+        "",
+        "MEASURED: clicking them grew document.body.innerText by +303 / +73 / +97 / +22 chars",
+        "for Features & Specs / Style / Measurements / Additional details.",
+        "",
+        "AND YET no click is needed to READ them. Their rows are already in the DOM, merely",
+        "collapsed, so attribute='text' (textContent) returns them intact while attribute=",
+        "'visible_text' (innerText) would return nothing. See recipe-contract-v2.md section 2,",
+        "'text vs visible_text'. That is why this group has NO steps: five clicks were removed",
+        "after measuring that they changed the extracted values not at all.",
+        "",
+        "The expand steps are retained below in _steps_if_visible_text_needed, commented out of",
+        "the live recipe, so the reasoning survives for whoever revisits this."
+      ],
+      "_steps_if_visible_text_needed": [
+        {
+          "op": "click",
+          "label": "Expand one section — only necessary when reading visible_text",
+          "target": {
+            "kind": "xpath",
+            "selector": "//a[contains(@class,'a-expander-header')][normalize-space()='Features & Specs']"
+          },
+          "when": [{ "kind": "selector_present", "selector": "a.a-expander-header[aria-expanded='false']" }],
+          "on_error": "continue",
+          "timeout_ms": 6000
+        }
+      ],
+      "field_names": ["features_and_specs", "style", "measurements", "additional_details", "item_details"],
+      "steps": [],
+      "bindings": {
+        "features_and_specs": [
+          {
+            "priority": 10,
+            "_comment": "8 rows observed: Power Source, Additional Features, Operation Mode, Scale, Battery Description, Number of Batteries, Educational Objective, Number of Players. The xpath anchors on the expander header's own text and walks to the sibling content — the only reliable way to tell these five identically-classed tables apart. A 'nearest preceding heading' heuristic mislabels four of them 'Warranty & Support'.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//a[contains(@class,'a-expander-header')][normalize-space()='Features & Specs']/following::table[contains(@class,'a-keyvalue')][1]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^%s*([^\\n]-)%s*\\n%s*(.-)%s*$')\nif not k or k == '' or val == '' then return nil end\nreturn { name = k, value = (val:gsub('%s+', ' ')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "style": [
+          {
+            "priority": 10,
+            "_comment": "4 rows observed: Toy Vehicle Form=Car, Color=Multicolor, Theme=Movie, Subject Character=Cars.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//a[contains(@class,'a-expander-header')][normalize-space()='Style']/following::table[contains(@class,'a-keyvalue')][1]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^%s*([^\\n]-)%s*\\n%s*(.-)%s*$')\nif not k or k == '' or val == '' then return nil end\nreturn { name = k, value = (val:gsub('%s+', ' ')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "measurements": [
+          {
+            "priority": 10,
+            "_comment": "4 rows observed: Item Weight=6.88 ounces, Size=3-Pack, Item Dimensions=3.15 x 3.54 x 1.18 inches, Unit Count=1 Count.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//a[contains(@class,'a-expander-header')][normalize-space()='Measurements']/following::table[contains(@class,'a-keyvalue')][1]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^%s*([^\\n]-)%s*\\n%s*(.-)%s*$')\nif not k or k == '' or val == '' then return nil end\nreturn { name = k, value = (val:gsub('%s+', ' ')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "additional_details": [
+          {
+            "priority": 10,
+            "_comment": "1 row observed: Material Type=Plastic. The smallest section, and the one whose click produced the smallest delta (+22 chars) — a useful reminder that 'the click did almost nothing' is not evidence the click was needed.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//a[contains(@class,'a-expander-header')][normalize-space()='Additional details']/following::table[contains(@class,'a-keyvalue')][1]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^%s*([^\\n]-)%s*\\n%s*(.-)%s*$')\nif not k or k == '' or val == '' then return nil end\nreturn { name = k, value = (val:gsub('%s+', ' ')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          }
+        ],
+        "item_details": [
+          {
+            "priority": 10,
+            "_comment": "The 22-row left-hand table (Brand Name, Model Number, UPC, ASIN, Manufacturer, …). Its expander is labelled 'Item details' and it lives in the depthLeft container, unlike the other four.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//div[@id='productDetails_expanderTables_depthLeftSections']//table[contains(@class,'a-keyvalue')]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              {
+                "op": "lua",
+                "_comment": "Drops the two rows observed to be polluted: 'Customer Reviews' carries inline JS ('var dpAcrHasRegisteredArcLinkClickAction') and 'Best Sellers Rank' carries '(See Top 100 in …)' navigation chrome.",
+                "source": "local k, val = v:match('^%s*([^\\n]-)%s*\\n%s*(.-)%s*$')\nif not k or k == '' then return nil end\nif k == 'Customer Reviews' or k == 'Best Sellers Rank' then return nil end\nval = val:gsub('%s*var%s+dpAcr.*$', ''):gsub('%s+', ' ')\nval = val:gsub('^%s*(.-)%s*$', '%1')\nif val == '' then return nil end\nreturn { name = k, value = val }"
+              },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          }
+        ]
+      }
+    },
+
+    {
+      "group_id": "specs",
+      "_comment": "The merged view: 39 rows across 5 tables in 2 containers, as ONE key->value map. Same data as the five per-section fields above, flattened for callers who want a single spec sheet rather than the page's sectioning.",
+      "field_names": ["specifications", "dimensions", "weight"],
+      "steps": [],
+      "bindings": {
+        "specifications": [
+          {
+            "priority": 10,
+            "_comment": "repeat-free approach: one candidate returning all rows as {name,value} pairs, then to_object. The xpath selects tr elements that actually have BOTH th and td, which skips the header/spacer rows that would otherwise become empty keys.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//div[@id='productDetails_expanderSectionTables']//table[contains(@class,'a-keyvalue')]//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "expander_tables",
+            "transform": [
+              { "op": "strip_control" },
+              {
+                "op": "lua",
+                "_comment": "A row's innerText is 'Key\\nValue'. Split on the first newline, then drop the two rows observed to be polluted: 'Customer Reviews' carries inline JS ('var dpAcrHasRegisteredArcLinkClickAction'), 'Best Sellers Rank' carries navigation chrome. Returning nil drops the row.",
+                "source": "local k, val = v:match('^([^\\n]+)\\n(.*)$')\nif not k then return nil end\nk = k:gsub('^%s*(.-)%s*:?%s*$', '%1')\nif k == 'Customer Reviews' or k == 'Best Sellers Rank' then return nil end\nval = val:gsub('%s*var%s+dpAcr.*$', '')\nval = val:gsub('%s+', ' '):gsub('^%s*(.-)%s*$', '%1')\nif val == '' then return nil end\nreturn { name = k, value = val }"
+              },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "_comment": "Classic layout fallback, for categories that still use the documented ids.",
+            "locator": {
+              "kind": "xpath",
+              "selector": "//table[@id='productDetails_techSpec_section_1']//tr[th and td]",
+              "attribute": "text",
+              "all": true
+            },
+            "variant_id": "tech_spec_sections",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^([^\\n]+)\\n(.*)$')\nif not k then return nil end\nreturn { name = (k:gsub('^%s*(.-)%s*:?%s*$', '%1')), value = (val:gsub('%s+', ' '):gsub('^%s*(.-)%s*$', '%1')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "_variant_note": "unverified on this page — this variant was not the one served",
+            "verified_on": 0
+          },
+          {
+            "priority": 30,
+            "_comment": "Books/media layout: a <ul> where each <li> holds label and value in sibling spans.",
+            "locator": { "kind": "css", "selector": "#detailBullets_feature_div li span.a-list-item", "attribute": "text", "all": true },
+            "variant_id": "detail_bullets",
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "lua", "source": "local k, val = v:match('^([^:]+):%s*(.*)$')\nif not k or val == '' then return nil end\nreturn { name = (k:gsub('^%s*(.-)%s*$', '%1')), value = (val:gsub('%s+', ' '):gsub('^%s*(.-)%s*$', '%1')) }" },
+              { "op": "filter_empty" },
+              { "op": "to_object", "key": "name", "value": "value" }
+            ],
+            "verified_on": 0
+          }
+        ],
+
+        "dimensions": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "xpath",
+              "selector": "//table[contains(@class,'a-keyvalue')]//tr[th[contains(normalize-space(),'Item Dimensions')]]/td",
+              "attribute": "text"
+            },
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "collapse_ws" },
+              {
+                "op": "lua",
+                "source": "local l, w, h, u = v:match('([%d%.]+)%s*x%s*([%d%.]+)%s*x%s*([%d%.]+)%s*(%a+)')\nif not l then return nil end\nreturn { length = tonumber(l), width = tonumber(w), height = tonumber(h), unit = u }"
+              }
+            ],
+            "verified_on": 1,
+            "note": "Observed '3.15 x 3.54 x 1.18 inches' -> {length:3.15, width:3.54, height:1.18, unit:'inches'}."
+          }
+        ],
+
+        "weight": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "xpath",
+              "selector": "//table[contains(@class,'a-keyvalue')]//tr[th[contains(normalize-space(),'Item Weight')]]/td",
+              "attribute": "text"
+            },
+            "transform": [
+              { "op": "strip_control" },
+              { "op": "collapse_ws" },
+              {
+                "op": "lua",
+                "source": "local n, u = v:match('([%d%.]+)%s*(%a+)')\nif not n then return nil end\nreturn { value = tonumber(n), unit = u }"
+              }
+            ],
+            "verified_on": 1,
+            "note": "Observed '6.88 ounces' -> {value:6.88, unit:'ounces'}."
+          }
+        ]
+      }
+    }
+  ]
+}
