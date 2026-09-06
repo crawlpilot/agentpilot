@@ -27,6 +27,7 @@ import { filterPersistableChain } from '@/lib/picker/vendor/shared/selectors/sta
 import type { HighlightField, PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
 import type { PreviewField, PreviewLocator, PreviewRowsField } from '@/lib/picker/preview'
 import { SOURCE_PRIORITY } from './document'
+import { hitToLocator, type PathHit } from './probe'
 import type {
   Candidate,
   FieldGroup,
@@ -295,10 +296,9 @@ export function listPickToDrafts(payload: PickPayload): {
  * -- it is not a guess, and the lint's "never verified" warning has to keep
  * meaning something for the candidates that are.
  */
-export function jsonHitToDraft(
-  hit: { kind: 'json_ld' | 'hydration' | 'meta'; path: string; value: string },
-  taken: Iterable<string> = [],
-): FieldDraft {
+export function jsonHitToDraft(hit: PathHit, taken: Iterable<string> = []): FieldDraft {
+  // The leaf of the path is the best name available -- `offers.price` wants to
+  // be called `price`, not `offers_price`. The author renames it if not.
   const leaf = hit.path.split(/[.[\]]/).filter(Boolean).pop() ?? 'field'
   return {
     name: toFieldName(leaf, taken),
@@ -306,7 +306,9 @@ export function jsonHitToDraft(
     candidates: [
       {
         priority: SOURCE_PRIORITY[hit.kind],
-        locator: { kind: hit.kind, path: hit.path, path_lang: 'simple' },
+        // `hitToLocator` is the studio's existing probe -> locator conversion;
+        // duplicating it here is how the two would come to disagree.
+        locator: hitToLocator(hit),
         verified_on: 1,
         confidence: null,
         note: `read from ${hit.kind}`,

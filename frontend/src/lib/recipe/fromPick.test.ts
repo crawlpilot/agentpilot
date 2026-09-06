@@ -9,6 +9,7 @@ import {
   toPreviewRowsFields,
   detailPickToDraft,
   itemsToRecipe,
+  jsonHitToDraft,
   listPickToDrafts,
   toFieldName,
   withJsonAlternatives,
@@ -446,5 +447,26 @@ describe('list extraction, end to end', () => {
     for (const mark of marks) {
       expect(document.querySelector(mark.selectors[0].value), mark.name).not.toBeNull()
     }
+  })
+})
+
+describe('jsonHitToDraft', () => {
+  it('names the field after the path leaf and outranks CSS', () => {
+    const draft = jsonHitToDraft({ kind: 'json_ld', path: 'offers.price', value: '29.99' })
+    expect(draft.name).toBe('price')
+    expect(draft.preview).toBe('29.99')
+    expect(draft.candidates[0].locator.kind).toBe('json_ld')
+    // The whole reason to offer this route: a JSON path survives a redesign
+    // that breaks every selector on the page, and priority has to say so.
+    expect(draft.candidates[0].priority!).toBeLessThan(SOURCE_PRIORITY.css)
+    // Read out of this page a moment ago -- not a guess, so the lint's
+    // "never verified" warning stays meaningful for the ones that are.
+    expect(draft.candidates[0].verified_on).toBe(1)
+  })
+
+  it('avoids colliding with a name already taken', () => {
+    const a = jsonHitToDraft({ kind: 'meta', path: 'og:title', value: 'x' })
+    const b = jsonHitToDraft({ kind: 'hydration', path: 'product.title', value: 'y' }, [a.name])
+    expect(b.name).not.toBe(a.name)
   })
 })
