@@ -190,6 +190,95 @@ export function runPreview(fields: PreviewField[]): PreviewResult[] {
   })
 }
 
+/** A table field's rows, read row-wise. Mirrors `dom_rows` replay. */
+export interface PreviewRowsField {
+  name: string
+  rows: { kind: 'css' | 'xpath'; selector: string; within?: { kind: 'css' | 'xpath'; selector: string } }
+  /** Column name -> its ordered candidates, each relative to a row. */
+  columns: Record<string, PreviewLocator[]>
+  maxRows: number
+}
+
+export interface PreviewRowsResult {
+  name: string
+  status: PreviewStatus
+  rows: Record<string, string | string[] | null>[]
+  /** True when the page had more rows than `maxRows`. */
+  truncated: boolean
+  /** Column -> which candidate index (1-based) answered, for the first row. */
+  candidates: Record<string, number | null>
+  error?: string
+}
+
+/**
+ * Read N rows and resolve every column *relative to its own row*.
+ *
+ * A faithful port of `recipe/v2/evaluate.py::_READ_ROWS_JS` plus the fallback
+ * walk in `replay.py::_rows_from_dom_rows`, for the same reason the scalar
+ * reader mirrors `_READ_JS`: a preview that reads rows differently from replay
+ * would show green for a recipe that returns something else in production.
+ *
+ * Rows stay aligned by construction. A column that matches nothing in a given
+ * row yields null *for that row* -- it cannot shift the values below it, which
+ * is the failure the old column-wise workaround could not avoid.
+ */
+export function runPreviewRows(fields: PreviewRowsField[]): PreviewRowsResult[] {
+  return fields.map((field) => {
+    let root: Document | Element = document
+    if (field.rows.within) {
+      const containers = pick(document, field.rows.within.selector, field.rows.within.kind === 'xpath')
+      if (containers === null) {
+        return { name: field.name, status: 'error', rows: [], truncated: false, candidates: {}, error: 'invalid within selector' }
+      }
+      if (!containers.length) {
+        return { name: field.name, status: 'empty', rows: [], truncated: false, candidates: {} }
+      }
+      root = containers[0]
+    }
+
+    const rowEls = pick(root, field.rows.selector, field.rows.kind === 'xpath')
+    if (rowEls === null) {
+      return { name: field.name, status: 'error', rows: [], truncated: false, candidates: {}, error: 'invalid rows selector' }
+    }
+
+    const truncated = rowEls.length > field.maxRows
+    const candidates: Record<string, number | null> = {}
+    const rows = rowEls.slice(0, field.maxRows).map((rowEl, rowIndex) => {
+      const row: Record<string, string | string[] | null> = {}
+      for (const [column, chain] of Object.entries(field.columns)) {
+        let value: string | string[] | null = null
+        let won: number | null = null
+        for (let i = 0; i < chain.length; i++) {
+          const opts = chain[i]
+          const nodes = pick(rowEl, opts.selector, opts.kind === 'xpath')
+          if (nodes === null || !nodes.length) continue
+          const read = opts.all
+            ? nodes.map((n) => readValue(n, opts.attribute)).filter((v): v is string => v !== null)
+            : readValue(
+                (opts.index ?? 0) < 0 ? nodes[nodes.length + (opts.index ?? 0)] : nodes[opts.index ?? 0],
+                opts.attribute,
+              )
+          if (isEmpty(read)) continue
+          value = read
+          won = i + 1
+          break
+        }
+        row[column] = value
+        if (rowIndex === 0) candidates[column] = won
+      }
+      return row
+    })
+
+    return {
+      name: field.name,
+      status: rows.length === 0 ? 'empty' : truncated ? 'fallback' : 'resolved',
+      rows,
+      truncated,
+      candidates,
+    }
+  })
+}
+
 /** A reveal step, flattened to what the in-page runner needs. */
 export interface PreviewStep {
   op: string

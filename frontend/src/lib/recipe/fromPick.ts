@@ -205,34 +205,39 @@ export function toFieldName(raw: string, taken: Iterable<string> = []): string {
 export interface FieldDraft {
   name: string
   spec: FieldSpec
+  /** Scalar and list fields. Empty for a table, which binds by column. */
   candidates: Candidate[]
   /** What the picker read here, shown in the editor so a name can be chosen. */
   preview?: string
+
+  // --- table fields only ---
+  /**
+   * Column name -> its ordered candidates, each resolved *relative to a row*.
+   * A table's bindings are keyed by column, not by the field name (contract
+   * S8, and the shape the Zara and Walmart examples use).
+   */
+  columns?: Record<string, Candidate[]>
+  /** How the rows are produced. `dom_rows` for a picked list. */
+  repeat?: RepeatSpec
+  /** First-row values per column, so the author can recognise what to name. */
+  columnPreviews?: Record<string, string>
 }
 
 /**
- * A repeating list becomes one `list`-typed field per column.
+ * A repeating list becomes ONE `table` field, with a `dom_rows` repeat.
  *
- * This is not the shape you might expect, and the reason is a real limit in the
- * replay engine rather than a preference. A `table` field's rows come only from
- * `RepeatSpec`, and `RepeatSpec` has exactly two kinds
- * (`recipe/v2/replay.py::_replay_repeat`): `json`, which iterates an array
- * already in the page's structured data, and `dom`, which *clicks through an
- * option set* and re-reads the page after each click. Neither describes "N
- * cards already rendered on a search page" -- and modelling that as a `dom`
- * repeat would click every card, navigating away from the page on the first
- * one.
+ * This is what contract v2.1's `dom_rows` kind exists for, and it replaces a
+ * genuinely bad workaround. Until it existed, `RepeatSpec` had only `json`
+ * (the data must already be an array) and `dom` (which *clicks*, and on a
+ * results page navigates away on the first row) -- so a picked list had to be
+ * emitted as one `all: true` list field per column, with the caller zipping by
+ * index. That silently shifted every value below any row that happened to lack
+ * a cell, and nothing in the output said it had happened.
  *
- * What the engine does execute today is a column-wise read: a locator with
- * `all: true` returns every match as a list, in document order. So each picked
- * column becomes `list<T>` bound to `"<row> <column>"`, and the caller gets
- * parallel arrays that zip into rows by index.
- *
- * The honest cost: nothing enforces that the arrays stay aligned. A card
- * missing a price yields a shorter price list and silently shifts every value
- * after it. A `dom_rows` repeat kind -- `rows_locator` over DOM nodes, columns
- * resolved per row, exactly `_rows_from_json` but against elements -- is the
- * fix, and it is a backend change deliberately outside this port's scope.
+ * Row-wise, the columns keep their *row-relative* selectors exactly as the
+ * picker derived them: no composing `li.card` onto `.title`, no `all: true`,
+ * no container `within` on each column. The row is the scope, supplied by the
+ * iteration. Simpler to produce, and correct by construction.
  */
 export function listPickToDrafts(payload: PickPayload): {
   drafts: FieldDraft[]
@@ -240,38 +245,61 @@ export function listPickToDrafts(payload: PickPayload): {
 } {
   const columns = payload.data?.columns ?? []
   const firstRow = payload.data?.items?.[0]
+  const count = payload.count ?? 0
+
+  if (!payload.itemSelector || columns.length === 0) return { drafts: [], count }
+
+  const rowsLocator: Locator = {
+    kind: isXPath(payload.itemSelector) ? 'xpath' : 'css',
+    selector: payload.itemSelector,
+  }
+  // The container is what makes a loose item selector safe -- `.card` alone
+  // would collect the page's other cards too.
   const within = containerScope(payload)
-  const itemSelector = payload.itemSelector
+  if (within) rowsLocator.within = within
+
+  const bindings: Record<string, Candidate[]> = {}
+  const typeColumns: Record<string, TypeSpec> = {}
+  const columnPreviews: Record<string, string> = {}
   const names: string[] = []
 
-  const drafts = columns.map((col) => {
+  for (const col of columns) {
     const name = toFieldName(col.name, names)
     names.push(name)
     const mapped = COLUMN_VALUE_TYPE[col.type] ?? COLUMN_VALUE_TYPE.text
 
-    const spec: FieldSpec = {
-      type: { kind: 'list', items: { kind: 'scalar', value_type: mapped.value_type } },
-      description: '',
+    const chain: PickSelector[] = [...(col.locators ?? [])]
+    if (col.xpath && !chain.some((c) => c.selector === col.xpath)) {
+      chain.push({ selector: col.xpath, strategy: 'XPath' })
     }
-    if (mapped.transform) spec.transform = mapped.transform
+    const candidates = chainToCandidates(chain, { attribute: col.attribute })
+    if (candidates.length === 0) continue
 
-    // Compose each row-relative column selector against the row selector, so
-    // one read collects that column across every row.
-    const chain: PickSelector[] = []
-    for (const entry of col.locators ?? []) {
-      const composed = itemSelector ? composeColumnSelector(itemSelector, entry.selector) : null
-      if (composed) chain.push({ selector: composed, strategy: entry.strategy })
-    }
+    bindings[name] = candidates
+    typeColumns[name] = { kind: 'scalar', value_type: mapped.value_type }
+    if (firstRow) columnPreviews[name] = String(firstRow[col.id] ?? '')
+  }
 
-    return {
-      name,
-      spec,
-      candidates: chainToCandidates(chain, { within, attribute: col.attribute, all: true }),
-      preview: firstRow ? String(firstRow[col.id] ?? '') : undefined,
-    }
-  })
+  if (Object.keys(bindings).length === 0) return { drafts: [], count }
 
-  return { drafts, count: payload.count ?? 0 }
+  const draft: FieldDraft = {
+    name: 'items',
+    spec: { type: { kind: 'table', columns: typeColumns }, description: '' },
+    candidates: [],
+    columns: bindings,
+    columnPreviews,
+    repeat: {
+      kind: 'dom_rows',
+      rows_locator: rowsLocator,
+      row_field: 'items',
+      // Generous but bounded: a results page is tens of rows, and a runaway
+      // selector matching thousands should be reported as truncated rather
+      // than read in full.
+      max_iterations: Math.max(count * 2, 100),
+    },
+  }
+
+  return { drafts: [draft], count }
 }
 
 /** A detail pick becomes one field draft. */
