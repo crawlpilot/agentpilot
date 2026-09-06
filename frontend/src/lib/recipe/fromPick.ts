@@ -653,7 +653,38 @@ function waitStepFor(draft: FieldDraft): Step | null {
  *    (`_readme`: "two drawers that conflict so they need separate groups"). A
  *    `reset` clears the accumulation and starts a genuinely independent group.
  */
-export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
+/**
+ * One group, as the ordered list implies it.
+ *
+ * `itemIndices` is what lets the wizard draw the boundaries it is otherwise
+ * silent about. Groups are never authored directly -- they fall out of where
+ * the actions sit -- and that was invisible in a UI where each group costs a
+ * full page load at replay.
+ */
+export interface PlannedGroup {
+  steps: Step[]
+  drafts: FieldDraft[]
+  /** Indices into the original `items`, so the UI can mark where this starts. */
+  itemIndices: number[]
+}
+
+export interface GroupPlan {
+  /** Items before this index compile into `global_setup`. */
+  leadingEnd: number
+  globalSetup: Step[]
+  groups: PlannedGroup[]
+}
+
+/**
+ * Work out the groups the ordered list implies, without building a document.
+ *
+ * Exported because the wizard needs the same answer `itemsToRecipe` computes
+ * and must not compute it a second way: a divider drawn from a re-derivation
+ * that drifted would tell an author their recipe is shaped one way while the
+ * saved document is shaped another. `itemsToRecipe` is a thin wrapper over
+ * this for exactly that reason.
+ */
+export function planGroups(items: WorkItem[]): GroupPlan {
   const firstFieldAt = items.findIndex((i) => i.kind === 'field')
   const firstResetAt = items.findIndex((i) => i.kind === 'reset')
 
@@ -681,20 +712,18 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
     if (wait) globalSetup.push(wait)
   }
 
-  interface Pending {
-    steps: Step[]
-    drafts: FieldDraft[]
-  }
-  const groups: Pending[] = []
+  const groups: PlannedGroup[] = []
   let accumulated: Step[] = []
-  let current: Pending | null = null
+  let current: PlannedGroup | null = null
   // Whether the last action was one whose effect the page renders later.
   let revealed = false
 
-  for (const item of items.slice(leadingEnd)) {
+  for (let index = leadingEnd; index < items.length; index++) {
+    const item = items[index]
     if (item.kind === 'reset') {
       accumulated = []
       current = null
+      revealed = false
       continue
     }
     if (item.kind === 'action') {
@@ -715,11 +744,18 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
         if (wait) accumulated = [...accumulated, wait]
         revealed = false
       }
-      current = { steps: accumulated, drafts: [] }
+      current = { steps: accumulated, drafts: [], itemIndices: [] }
       groups.push(current)
     }
     current.drafts.push(item.draft)
+    current.itemIndices.push(index)
   }
+
+  return { leadingEnd, globalSetup, groups }
+}
+
+export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
+  const { globalSetup, groups } = planGroups(items)
 
   let next: Recipe = {
     ...recipe,

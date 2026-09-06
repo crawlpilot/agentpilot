@@ -11,6 +11,7 @@ import {
   detailPickToDraft,
   itemsToRecipe,
   jsonHitToDraft,
+  planGroups,
   listPickToDrafts,
   toFieldName,
   withJsonAlternatives,
@@ -599,6 +600,24 @@ describe('itemsToRecipe', () => {
     const r = itemsToRecipe(emptyRecipe('r'), [field('title'), action('a', '#more'), jsonField])
     expect(actionsOf(r.field_groups[1].steps)).toEqual(['#more'])
     expect((r.field_groups[1].steps ?? []).some((s) => s.op === 'wait_for_selector')).toBe(false)
+  })
+
+  it('plans the same groups the wizard draws', () => {
+    // The wizard reads `planGroups` instead of re-deriving the boundaries, so
+    // a divider it draws can never disagree with the saved document. This
+    // pins the two together.
+    const items = [field('a'), action('1', '#one'), field('b'), field('c')]
+    const plan = planGroups(items)
+    const r = itemsToRecipe(emptyRecipe('r'), items)
+
+    expect(plan.groups).toHaveLength(r.field_groups.length)
+    expect(plan.groups.map((g) => g.drafts.map((d) => d.name))).toEqual(
+      r.field_groups.map((g) => g.field_names),
+    )
+    // The indices are what position the dividers: group 2 opens at item 2.
+    expect(plan.groups.map((g) => g.itemIndices[0])).toEqual([0, 2])
+    // Consecutive fields share a group, so `c` opens nothing.
+    expect(plan.groups[1].itemIndices).toEqual([2, 3])
   })
 
   it('keeps consecutive fields in one group', () => {

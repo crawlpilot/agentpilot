@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -23,7 +23,7 @@ import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
 import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
-import { readAttribute, setKeyValue, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
+import { planGroups, readAttribute, setKeyValue, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
 import type { PathHit } from '@/lib/recipe/probe'
@@ -143,24 +143,29 @@ export function StepExtract({
     items.filter((i) => i.kind === 'field').findIndex((i) => i.id === id)
 
   /**
-   * Where global setup ends.
+   * The groups this list compiles to, from the compiler itself.
    *
-   * Actions before the first field compile into `global_setup`, which replay
-   * runs **once per group, after navigation** -- the consent wall, the region
-   * interstitial, the login that decides which layout the page renders in.
-   * That is a materially different guarantee from a group step (which runs for
-   * its own group only), and an author cannot reason about it if the boundary
-   * is invisible. See `itemsToRecipe`.
+   * Groups are never authored directly -- they fall out of where the actions
+   * sit, because a field after an action needs that action and the fields
+   * before it did not. That was entirely invisible here, which matters more
+   * than it looks: replay **re-navigates at the start of every group**, so an
+   * action dropped in the middle of a list silently doubles the page loads
+   * every URL costs.
+   *
+   * Read from `planGroups` rather than re-derived, so a boundary drawn here
+   * can never disagree with the document that gets saved.
    */
-  const firstFieldAt = items.findIndex((i) => i.kind === 'field')
-  const firstResetAt = items.findIndex((i) => i.kind === 'reset')
-  const globalEnd =
-    firstFieldAt === -1
-      ? items.length
-      : firstResetAt !== -1 && firstResetAt < firstFieldAt
-        ? firstResetAt
-        : firstFieldAt
-  const hasGlobal = items.slice(0, globalEnd).some((i) => i.kind === 'action')
+  const plan = useMemo(() => planGroups(items), [items])
+  const globalEnd = plan.leadingEnd
+  const hasGlobal = plan.globalSetup.length > 0
+  /** Item index -> the 1-based group it opens, for the dividers below. */
+  const groupStarts = useMemo(() => {
+    const starts = new Map<number, number>()
+    plan.groups.forEach((g, i) => {
+      if (g.itemIndices.length > 0) starts.set(g.itemIndices[0], i + 1)
+    })
+    return starts
+  }, [plan])
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -240,13 +245,23 @@ export function StepExtract({
           Nothing yet. Pick a field to read, or add a reveal action if what you want is behind a
           click. Order matters: an action applies to every field below it, and anything added
           <strong> before the first field</strong> becomes global setup &mdash; run once per group,
-          after navigation, for consent walls and region prompts.
+          after navigation, for consent walls and region prompts. Each action also starts a new
+          group, and every group is a fresh page load &mdash; so group what you can, and keep
+          fields that need the same reveal together.
         </p>
       ) : (
         <>
           <div className="flex items-center gap-1.5">
             <Badge variant="outline">{fieldCount} fields</Badge>
             {actionCount > 0 && <Badge variant="outline">{actionCount} actions</Badge>}
+            {plan.groups.length > 1 && (
+              <Badge
+                variant="outline"
+                title="Replay re-navigates before every group, so each one is a fresh page load per URL. Groups come from where the actions sit — consecutive fields share one."
+              >
+                {plan.groups.length} page loads
+              </Badge>
+            )}
             <Button
               size="sm"
               variant="ghost"
@@ -277,6 +292,20 @@ export function StepExtract({
                   <p className="border-t border-dashed border-border pt-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                     Per group &mdash; runs only for the fields below it
                   </p>
+                )}
+                {/* Only worth drawing once there is more than one group: a
+                    single-group recipe has no boundary to reason about, and a
+                    divider over every list would be furniture. */}
+                {plan.groups.length > 1 && groupStarts.has(index) && (
+                  <div className="flex items-center gap-1.5 pt-1.5">
+                    <span className="text-[10px] uppercase tracking-wide text-accent">
+                      Group {groupStarts.get(index)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      fresh page load, then the actions above it
+                    </span>
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
                 )}
               <Reorderable
                 key={item.id}
