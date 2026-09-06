@@ -45,7 +45,7 @@ from agentpilot.recipe.v2.resolve import (
 )
 from agentpilot.recipe.v2.schema import FieldSpec
 from agentpilot.recipe.v2.steps import StepContext, run_steps
-from agentpilot.recipe.v2.transform import TransformContext
+from agentpilot.recipe.v2.transform import TransformContext, TransformError, apply_transforms
 from agentpilot.recipe.v2.urlmatch import target_accepts
 from crawlpilot.session.interactive import InteractiveSession, execute_on_session
 from crawlpilot.session.registry import RegistryProtocol
@@ -232,8 +232,32 @@ async def _replay_repeat(
         result.field_status[field_name] = "failed" if (spec and spec.required) else "empty"
         return
 
-    result.data[field_name] = rows
-    result.field_status[field_name] = "suspect" if truncated else "resolved"
+    # The field's own transforms, over the whole row set.
+    #
+    # Columns are transformed individually inside `_resolve_columns`; this is
+    # the pipeline declared on the *repeat field*, and it had no effect at all
+    # until now -- `result.data[field_name] = rows` went straight out. The
+    # omission was invisible for the row-shaped cases and wrong for exactly one
+    # thing the contract names: `to_object`, whose entire purpose is collapsing
+    # `[{name, value}, ...]` into the `{name: value}` map a specification table
+    # actually means. A recipe could declare it, the studio could show it, and
+    # replay would silently return rows.
+    #
+    # A transform that cannot be applied leaves the rows as they are and marks
+    # the field suspect: the data was read correctly and only the reshaping
+    # failed, so discarding it would lose more than it protects.
+    value: Any = rows
+    reshape_failed = False
+    if spec is not None and spec.transform:
+        try:
+            value = apply_transforms(rows, spec.transform, tctx)
+        except TransformError:
+            reshape_failed = True
+
+    result.data[field_name] = value
+    result.field_status[field_name] = (
+        "suspect" if (truncated or reshape_failed) else "resolved"
+    )
     result.provenance[field_name] = {
         "candidate": 0,
         "source": "json" if repeat.kind == "json" else "dom",

@@ -20,14 +20,32 @@
  *    with `DataExtractor` and matches columns by that key, so it never needs
  *    one. A v2 binding must address the value directly, relative to its row.
  *
+ * 3. **A detail pick that lands on a repeating container has no row
+ *    selector.** `DetailSelectionStrategy` runs the container detector too, and
+ *    on a hit it classifies the pick `list`/`table` and extracts every row into
+ *    `data` -- but the selectors it emits address the *container* and the
+ *    *clicked element*, never the rows. The extension does not need one: at
+ *    extraction time it re-runs `DataExtractor` over the container's children
+ *    in the page (`ElementProcessor::extractContainerRows`). A v2 recipe has no
+ *    such second visit; `dom_rows` needs a `rows_locator` written down now.
+ *
  * The second is solved by matching values rather than replaying the walk: take
  * what the extractor read for a column, find the descendant of the first row
  * that actually holds it, and generate a row-relative selector for that
  * element. This is the same tactic the studio's existing JSON probe uses to
  * answer "where does this value live?" (`lib/recipe/probe.ts`), and it is
  * robust to the extractor's internal pathing changing.
+ *
+ * The third is solved by re-running the *same* detector over the container the
+ * strategy already found, which hands back the same row elements it extracted
+ * from, and deriving a row selector from them with `CommonSelectorGenerator` --
+ * exactly what `ListSelectionStrategy` does for a list-mode pick. The result is
+ * that a detail-mode container pick reaches `fromPick.ts` in the same shape as
+ * a list-mode one, and one code path serves both.
  */
 import { generateRobustSelectors, generateXPath } from './vendor/content/services/dom/domUtils'
+import { ContainerDetector } from './vendor/content/features/picker/ContainerDetector'
+import { CommonSelectorGenerator } from './vendor/content/services/dom/selectors/CommonSelectorGenerator'
 import { isStableAttributeValue } from './vendor/shared/selectors/stability'
 import type { PickMessage, PickPayload, PickColumn, PickSelector } from './protocol'
 
@@ -114,26 +132,64 @@ function toPickSelectors(results: { selector: string; strategy: string }[]): Pic
   return out
 }
 
-/** Resolve the first row the pick refers to, so columns can be located in it. */
-function firstRow(payload: PickPayload): Element | null {
+/** Resolve the rows the pick refers to, so columns can be located inside one. */
+function rowsOf(payload: PickPayload): Element[] {
   const { containerSelector, itemSelector } = payload
-  if (!itemSelector) return null
+  if (!itemSelector) return []
   try {
     const container = containerSelector ? document.querySelector(containerSelector) : document
-    if (!container) return null
-    return container.querySelector(itemSelector)
+    if (!container) return []
+    return Array.from(container.querySelectorAll(itemSelector))
+  } catch {
+    return []
+  }
+}
+
+function queryOne(selector: string | undefined): HTMLElement | null {
+  if (!selector) return null
+  try {
+    return document.querySelector<HTMLElement>(selector)
   } catch {
     return null
   }
 }
 
-function enrichList(payload: PickPayload): PickPayload {
+/**
+ * Is this a specification table -- rows of *label -> value* rather than rows of
+ * comparable records?
+ *
+ * The distinction decides the output shape, and it is not one the column
+ * inference can make: both come back as a 2-column table, and both are
+ * perfectly good tables. The difference is what a caller wants at the end --
+ * `{"Brand": "Nike", "Colour": "Red"}` for one, a list of row objects for the
+ * other -- and getting it wrong produces a technically-correct result nobody
+ * asked for.
+ *
+ * So this only claims the cases where the *markup itself* says "label": a `th`
+ * or a `dt` leading the row. Those two elements mean exactly this and nothing
+ * else, which makes them the only evidence worth acting on without asking.
+ * Every other spec table -- and there are many, all `td` -- is offered as a
+ * toggle in the wizard instead of guessed at.
+ */
+function looksKeyValue(rows: Element[]): boolean {
+  if (rows.length < 2) return false
+  const labelled = rows.filter((row) => {
+    const cells = Array.from(row.children).filter((c) => c.tagName !== 'BR' && c.tagName !== 'HR')
+    return cells.length === 2 && (cells[0].tagName === 'TH' || cells[0].tagName === 'DT')
+  })
+  return labelled.length >= rows.length * 0.8
+}
+
+function enrichColumns(payload: PickPayload): PickPayload {
   const columns = payload.data?.columns
   const firstItem = payload.data?.items?.[0]
   if (!columns?.length || !firstItem) return payload
 
-  const row = firstRow(payload)
+  const rows = rowsOf(payload)
+  const row = rows[0]
   if (!row) return payload
+
+  const keyValue = columns.length === 2 && looksKeyValue(rows)
 
   const enriched = columns.map((col) => {
     const attribute = ATTRIBUTE_FOR_TYPE[col.type]
@@ -171,21 +227,82 @@ function enrichList(payload: PickPayload): PickPayload {
     }
   })
 
-  return { ...payload, data: { ...payload.data!, columns: enriched } }
+  return { ...payload, keyValue, data: { ...payload.data!, columns: enriched } }
+}
+
+/** The detail classifications that mean "a repeating set", not "one value". */
+const CONTAINER_TYPES = new Set(['list', 'table'])
+
+/**
+ * A detail pick that landed on a repeating container is a list pick that came
+ * through a different door.
+ *
+ * `DetailSelectionStrategy` already ran the container detector, already
+ * classified the pick `list`/`table`, and already extracted every row into
+ * `data`. What it did not do is write down how to *reach* a row: it emits the
+ * container and the clicked element, because the extension re-derives the rows
+ * in the page at extraction time and never needs a selector for them.
+ *
+ * A v2 recipe does. Without one there is no `rows_locator`, so no `dom_rows`
+ * repeat, so the whole table collapses to a single scalar read of the
+ * container -- one blob of concatenated cell text where a caller asked for
+ * rows. Re-running the detector over the container the strategy found returns
+ * the same row elements it extracted from, and `CommonSelectorGenerator` turns
+ * those into the same ranked, majority-validated chain a list-mode pick gets.
+ */
+function enrichDetailContainer(payload: PickPayload): PickPayload {
+  const clicked = queryOne(payload.containerSelector)
+  if (!clicked) return payload
+
+  // The same detector call the strategy made, over the container it settled
+  // on -- so the rows here are the rows `data` was extracted from, not a
+  // second opinion about what the rows are.
+  const info = new ContainerDetector().findInternalContainer(clicked)
+  if (!info.isContainer || !info.container || info.siblings.length === 0) return payload
+
+  const rows = toPickSelectors(
+    new CommonSelectorGenerator()
+      .deriveCommonSelector(info.siblings, info.container, info.siblings[0])
+      .map((d) => ({ selector: d.selector, strategy: `Deductive ${d.type}` })),
+  )
+  if (rows.length === 0) return payload
+
+  let next: PickPayload = {
+    ...payload,
+    // Row selectors are derived relative to the container, so both have to
+    // move together if the detector settled somewhere other than the clicked
+    // element -- a container/row pair from two different scopes resolves to
+    // nothing.
+    ...(info.container === clicked
+      ? {}
+      : {
+          containerSelector: generateRobustSelectors(info.container)[0]?.selector ?? payload.containerSelector,
+          containerSelectors: toPickSelectors(generateRobustSelectors(info.container)),
+        }),
+    itemSelector: rows[0].selector,
+    itemSelectors: rows,
+    itemXPath: generateXPath(info.siblings[0]),
+    patternFound: true,
+    count: payload.count || info.siblings.length,
+  }
+  next = enrichColumns(next)
+  return next
 }
 
 function enrichDetail(payload: PickPayload): PickPayload {
+  const withChain = withDetailChain(payload)
+  return CONTAINER_TYPES.has(withChain.extractionType ?? '')
+    ? enrichDetailContainer(withChain)
+    : withChain
+}
+
+function withDetailChain(payload: PickPayload): PickPayload {
   if (payload.itemSelectors?.length) return payload
 
-  let el: Element | null = null
-  try {
-    el = payload.containerSelector ? document.querySelector(payload.containerSelector) : null
-  } catch {
-    el = null
-  }
+  const el = queryOne(payload.containerSelector)
   if (!el) return payload
 
-  const chain = toPickSelectors(generateRobustSelectors(el as HTMLElement))
+  const chain = toPickSelectors(generateRobustSelectors(el))
   if (chain.length === 0) return payload
   return { ...payload, itemSelectors: chain, containerSelectors: chain }
 }
@@ -195,7 +312,7 @@ export function enrich(msg: PickMessage): PickMessage {
   if (msg.type !== 'ELEMENT_SELECTED' || !msg.payload) return msg
   try {
     const payload =
-      msg.payload.selectionMode === 'list' ? enrichList(msg.payload) : enrichDetail(msg.payload)
+      msg.payload.selectionMode === 'list' ? enrichColumns(msg.payload) : enrichDetail(msg.payload)
     return { ...msg, payload }
   } catch {
     // Enrichment is an improvement, never a gate. A page that defeats it still

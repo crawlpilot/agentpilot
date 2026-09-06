@@ -69,10 +69,26 @@ const COLUMN_VALUE_TYPE: Record<PickColumn['type'], { value_type: ValueType; tra
   image_array: { value_type: 'url', transform: [{ op: 'url_resolve' }] },
 }
 
-/** What a detail pick's auto-classified kind means as a type + locator read. */
+/**
+ * What a detail pick's auto-classified kind means as a type + locator read.
+ *
+ * Only the *scalar and array* kinds are here. `list` and `table` are not a
+ * value at one selector -- they are a repeating set, and they go through
+ * `containerPickToDraft` instead. Mapping them here was the bug: `table`
+ * produced `{kind: 'table', columns: {}}`, a table with no columns bound to
+ * the container element, which replay reads as one scalar and returns as a
+ * single blob of every cell's text run together.
+ *
+ * The array kinds carry a `member` selector because the picked element is the
+ * *wrapper* -- clicking a gallery selects the gallery, and the values are its
+ * children. `ElementProcessor::performExtractAction` reaches them with exactly
+ * these queries; a locator that reads the wrapper itself with `all: true`
+ * matches one node and yields a one-item list containing every value
+ * concatenated, which is the same failure in a different shape.
+ */
 const EXTRACTION_TYPE: Record<
-  NonNullable<PickPayload['extractionType']>,
-  { type: TypeSpec; attribute?: string; transform?: Transform[] }
+  'text' | 'link' | 'image' | 'text_array' | 'link_array' | 'image_array',
+  { type: TypeSpec; attribute?: string; transform?: Transform[]; member?: string }
 > = {
   text: { type: { kind: 'scalar', value_type: 'string' } },
   link: {
@@ -85,19 +101,26 @@ const EXTRACTION_TYPE: Record<
     attribute: 'src',
     transform: [{ op: 'url_resolve' }],
   },
-  text_array: { type: { kind: 'list', items: { kind: 'scalar', value_type: 'string' } } },
+  text_array: {
+    type: { kind: 'list', items: { kind: 'scalar', value_type: 'string' } },
+    // `:scope > *` is the direct-children read, matching the extension's
+    // `element.children` walk. `filter_empty` drops the separators and empty
+    // wrappers that walk skips by tag and this one cannot.
+    member: ':scope > *',
+    transform: [{ op: 'filter_empty' }],
+  },
   link_array: {
     type: { kind: 'list', items: { kind: 'scalar', value_type: 'url' } },
     attribute: 'href',
+    member: 'a[href]',
     transform: [{ op: 'url_resolve' }],
   },
   image_array: {
     type: { kind: 'list', items: { kind: 'scalar', value_type: 'url' } },
     attribute: 'src',
+    member: 'img',
     transform: [{ op: 'url_resolve' }],
   },
-  list: { type: { kind: 'list', items: { kind: 'scalar', value_type: 'string' } } },
-  table: { type: { kind: 'table', columns: {} } },
 }
 
 interface ChainOptions {
@@ -204,6 +227,67 @@ export interface FieldDraft {
   repeat?: RepeatSpec
   /** First-row values per column, so the author can recognise what to name. */
   columnPreviews?: Record<string, string>
+  /**
+   * The rows collapse to one `{label: value}` map rather than staying a list
+   * of row objects. See `setKeyValue`, which is what actually expresses it in
+   * the document.
+   */
+  keyValue?: boolean
+}
+
+/** The two columns a key-value table reads: the label, and what it labels. */
+export const KEY_COLUMN = 'name'
+export const VALUE_COLUMN = 'value'
+
+/**
+ * Read a 2-column table as a `{label: value}` map, or back as rows.
+ *
+ * A specification table -- `Brand | Nike`, `Colour | Red` -- is a table on the
+ * page and a *map* in the answer. Nobody consuming a product feed wants
+ * `[{name: "Brand", value: "Nike"}, ...]`; they want `{"Brand": "Nike"}`, and
+ * turning one into the other downstream means every caller writes the same
+ * loop.
+ *
+ * `to_object` is the contract's own name for this shape (`transform.py`:
+ * "`[{name, value}, ...] -> {name: value}` -- the near-universal specification
+ * shape"). The type stays `table`: the *read* really is two columns of rows,
+ * the map is what happens to them afterwards, and keeping it a table is also
+ * what lets `validate_document` check both columns are bound.
+ *
+ * Turning it off leaves the columns named `name`/`value`, which is what they
+ * are regardless of whether the map is wanted.
+ */
+export function setKeyValue(draft: FieldDraft, on: boolean): FieldDraft {
+  if (!draft.columns) return draft
+  const names = Object.keys(draft.columns)
+  if (names.length !== 2) return draft
+
+  const rename = <T,>(record: Record<string, T> | undefined): Record<string, T> | undefined => {
+    if (!record) return record
+    const [first, second] = names
+    return Object.fromEntries(
+      Object.entries(record).map(([key, value]) => [
+        key === first ? KEY_COLUMN : key === second ? VALUE_COLUMN : key,
+        value,
+      ]),
+    )
+  }
+
+  const transform = (draft.spec.transform ?? []).filter((t) => t.op !== 'to_object')
+  const spec: FieldSpec = {
+    ...draft.spec,
+    type: { ...draft.spec.type, columns: rename(draft.spec.type.columns) },
+    transform: on ? [...transform, { op: 'to_object' }] : transform,
+  }
+  if (spec.transform?.length === 0) delete spec.transform
+
+  return {
+    ...draft,
+    keyValue: on,
+    spec,
+    columns: rename(draft.columns),
+    columnPreviews: rename(draft.columnPreviews),
+  }
 }
 
 /**
@@ -226,11 +310,31 @@ export function listPickToDrafts(payload: PickPayload): {
   drafts: FieldDraft[]
   count: number
 } {
+  const draft = containerPickToDraft(payload, 'items')
+  return { drafts: draft ? [draft] : [], count: payload.count ?? 0 }
+}
+
+/**
+ * One repeating set -> one `table` field with a `dom_rows` repeat.
+ *
+ * Shared by both doors onto the same thing. A *list-mode* pick arrives here
+ * because that is what list mode is for; a *detail-mode* pick arrives here
+ * when the author clicked something that turned out to be a table or a list,
+ * which `DetailSelectionStrategy` detects and classifies but -- until
+ * `enrich.ts` fills in a row selector -- could not express. Both carry the
+ * same `data.columns` from the same `DataExtractor`, so both build the same
+ * field, and the only difference is what it gets called.
+ */
+export function containerPickToDraft(
+  payload: PickPayload,
+  name: string,
+  taken: Iterable<string> = [],
+): FieldDraft | null {
   const columns = payload.data?.columns ?? []
   const firstRow = payload.data?.items?.[0]
   const count = payload.count ?? 0
 
-  if (!payload.itemSelector || columns.length === 0) return { drafts: [], count }
+  if (!payload.itemSelector || columns.length === 0) return null
 
   const rowsLocator: Locator = {
     kind: isXPath(payload.itemSelector) ? 'xpath' : 'css',
@@ -247,8 +351,8 @@ export function listPickToDrafts(payload: PickPayload): {
   const names: string[] = []
 
   for (const col of columns) {
-    const name = toFieldName(col.name, names)
-    names.push(name)
+    const columnName = toFieldName(col.name, names)
+    names.push(columnName)
     const mapped = COLUMN_VALUE_TYPE[col.type] ?? COLUMN_VALUE_TYPE.text
 
     const chain: PickSelector[] = [...(col.locators ?? [])]
@@ -258,15 +362,16 @@ export function listPickToDrafts(payload: PickPayload): {
     const candidates = chainToCandidates(chain, { attribute: col.attribute })
     if (candidates.length === 0) continue
 
-    bindings[name] = candidates
-    typeColumns[name] = { kind: 'scalar', value_type: mapped.value_type }
-    if (firstRow) columnPreviews[name] = String(firstRow[col.id] ?? '')
+    bindings[columnName] = candidates
+    typeColumns[columnName] = { kind: 'scalar', value_type: mapped.value_type }
+    if (firstRow) columnPreviews[columnName] = String(firstRow[col.id] ?? '')
   }
 
-  if (Object.keys(bindings).length === 0) return { drafts: [], count }
+  if (Object.keys(bindings).length === 0) return null
 
+  const fieldName = toFieldName(name, taken)
   const draft: FieldDraft = {
-    name: 'items',
+    name: fieldName,
     spec: { type: { kind: 'table', columns: typeColumns }, description: '' },
     candidates: [],
     columns: bindings,
@@ -274,7 +379,7 @@ export function listPickToDrafts(payload: PickPayload): {
     repeat: {
       kind: 'dom_rows',
       rows_locator: rowsLocator,
-      row_field: 'items',
+      row_field: fieldName,
       // Generous but bounded: a results page is tens of rows, and a runaway
       // selector matching thousands should be reported as truncated rather
       // than read in full.
@@ -282,7 +387,9 @@ export function listPickToDrafts(payload: PickPayload): {
     },
   }
 
-  return { drafts: [draft], count }
+  // `keyValue` is set by `enrich.ts` only where the markup states it outright.
+  // Every other spec table is a toggle in the wizard, not a guess here.
+  return payload.keyValue ? setKeyValue(draft, true) : draft
 }
 
 /**
@@ -318,9 +425,43 @@ export function jsonHitToDraft(hit: PathHit, taken: Iterable<string> = []): Fiel
   }
 }
 
-/** A detail pick becomes one field draft. */
+/**
+ * A detail pick becomes one field draft.
+ *
+ * Three shapes come through here, and conflating them is what made a picked
+ * table return one long string:
+ *
+ * 1. **A repeating set** (`list` / `table`). The author clicked a table or a
+ *    listing; `DetailSelectionStrategy` detected it and extracted every row.
+ *    That is a `dom_rows` table field, identical to a list-mode pick, so it is
+ *    built by the same function.
+ * 2. **An array** (`text_array` / `link_array` / `image_array`). The clicked
+ *    element is the wrapper; the values are its children, read with `all` and
+ *    a member selector scoped inside it.
+ * 3. **One value** (`text` / `link` / `image`). The original case: a chain of
+ *    candidates for the element itself.
+ */
 export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> = []): FieldDraft {
-  const mapped = EXTRACTION_TYPE[payload.extractionType ?? 'text'] ?? EXTRACTION_TYPE.text
+  const kind = payload.extractionType ?? 'text'
+
+  // Gated on the classification, not on the presence of `data`: `DataExtractor`
+  // fakes `type: 'list'` with pseudo-columns for a *single* element too (see
+  // `extractSingle` -- "[CRITICAL] Fake it as a 'list'"), so a plain text pick
+  // also arrives carrying columns. Only the classifier knows the difference.
+  if (kind === 'list' || kind === 'table') {
+    const container = containerPickToDraft(payload, payload.keyValue ? 'specs' : 'items', taken)
+    if (container) return container
+  }
+
+  // `list`/`table` reach here only when the pick could not be turned into a
+  // repeating read -- no row selector, or no column resolved. Falling back to
+  // the wrapper's own text is what the extension does in the same spot
+  // (`ElementProcessor`: `value = element.innerText`), and it is at least a
+  // value the author can see is wrong, rather than an empty field.
+  const mapped =
+    kind in EXTRACTION_TYPE
+      ? EXTRACTION_TYPE[kind as keyof typeof EXTRACTION_TYPE]
+      : EXTRACTION_TYPE.text
   const spec: FieldSpec = { type: mapped.type, description: '' }
   if (mapped.transform) spec.transform = mapped.transform
 
@@ -337,9 +478,33 @@ export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> 
   return {
     name: toFieldName(payload.tagName ?? 'field', taken),
     spec,
-    candidates: chainToCandidates(chain, { attribute: mapped.attribute }),
+    candidates: mapped.member
+      ? memberCandidates(chain, mapped.member, mapped.attribute)
+      : chainToCandidates(chain, { attribute: mapped.attribute }),
     preview: payload.previewValue,
   }
+}
+
+/**
+ * An array field's candidates: read `member` inside each candidate wrapper.
+ *
+ * The wrapper chain is the fallback chain -- `within` is what carries it, so a
+ * wrapper selector that stops resolving falls through to the next exactly as
+ * it would for a scalar. The `selector` is the same member query every time,
+ * because the values' relationship to their wrapper is the one thing here that
+ * does not vary.
+ */
+function memberCandidates(chain: PickSelector[], member: string, attribute?: string): Candidate[] {
+  return chainToCandidates(chain, { attribute }).map((candidate) => ({
+    ...candidate,
+    locator: {
+      kind: 'css' as const,
+      selector: member,
+      all: true,
+      ...(attribute ? { attribute } : {}),
+      within: candidate.locator,
+    },
+  }))
 }
 
 /**

@@ -65,6 +65,15 @@ export interface PickPayload {
   /** Extracted rows + inferred columns (`DataExtractor` / `SchemaGenerator`). */
   data?: PickData
 
+  /**
+   * Added by `enrich.ts`: the rows read as *label -> value*, not as records.
+   *
+   * Only set when the markup says so -- a `th` or `dt` leading every row. See
+   * `enrich.ts::looksKeyValue`; the wizard offers it as a toggle for the many
+   * spec tables built from plain `td`s.
+   */
+  keyValue?: boolean
+
   // --- detail mode only ---
   /** The auto-classified kind, from `DetailSelectionStrategy.classify`. */
   extractionType?: PickExtractionType
