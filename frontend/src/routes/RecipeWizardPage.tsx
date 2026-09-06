@@ -11,13 +11,16 @@ import { StepExtract } from '@/components/app/wizard/StepExtract'
 import { Step4Pagination, type PaginationChoice } from '@/components/app/wizard/Step4Pagination'
 import { StepPreview } from '@/components/app/wizard/StepPreview'
 import { StepSave } from '@/components/app/wizard/StepSave'
+import { StepValidate } from '@/components/app/wizard/StepValidate'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
 import { useExecuteSession } from '@/hooks/useExecuteSession'
 import { useSaveRecipe } from '@/hooks/useRecipes'
+import { useRecipeValidation } from '@/hooks/useRecipeValidation'
 import { useToast } from '@/components/ui/toast'
 import { emptyRecipe, toExport } from '@/lib/recipe/document'
 import { lintRecipe } from '@/lib/recipe/lint'
+import { buildValidationPlan, structuredOnlyFields } from '@/lib/recipe/validatePlan'
 import {
   detailPickToDraft,
   itemsToRecipe,
@@ -86,6 +89,7 @@ export function RecipeWizardPage() {
   const [previewRows, setPreviewRows] = useState<PreviewRowsResult[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [applyReveal, setApplyReveal] = useState(true)
+  const [validateUrl, setValidateUrl] = useState('')
   const [pageType, setPageType] = useState('')
   const [visibility, setVisibility] = useState<TemplateVisibility>('private')
   // The id the first save returns, so a second save is an update rather than a
@@ -107,6 +111,7 @@ export function RecipeWizardPage() {
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
   const save = useSaveRecipe()
+  const validation = useRecipeValidation(sessionId, picker)
 
   /**
    * Keep the page marked with what has already been taken.
@@ -136,6 +141,12 @@ export function RecipeWizardPage() {
   useEffect(() => {
     setPreview(null)
     setPreviewRows([])
+    // A validation run describes one exact recipe too; leaving a stale green
+    // result on screen after an edit is the one thing here nobody should
+    // trust and everybody would.
+    validation.clear()
+    // `validation.clear` is stable via useCallback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items])
 
   function goTo(next: number) {
@@ -481,6 +492,7 @@ export function RecipeWizardPage() {
             )}
 
             {step === 3 && (
+              <div className="flex flex-col">
               <StepPreview
                 results={preview}
                 rowResults={previewRows}
@@ -491,6 +503,27 @@ export function RecipeWizardPage() {
                 applyReveal={applyReveal}
                 onApplyRevealChange={setApplyReveal}
               />
+              <div className="px-3 pb-3">
+                <StepValidate
+                  sampleUrls={doc.sample_urls ?? []}
+                  url={validateUrl || (doc.sample_urls ?? [])[0] || ''}
+                  onUrlChange={setValidateUrl}
+                  authoredUrl={(doc.sample_urls ?? [])[0] ?? null}
+                  running={validation.running}
+                  progress={validation.progress}
+                  result={validation.result}
+                  error={validation.error}
+                  disabled={!sessionId || drafts.length === 0}
+                  structuredOnly={structuredOnlyFields(built)}
+                  onRun={() =>
+                    void validation.validate(
+                      validateUrl || (doc.sample_urls ?? [])[0] || '',
+                      buildValidationPlan(built),
+                    )
+                  }
+                />
+              </div>
+              </div>
             )}
 
             {step === 4 && (
