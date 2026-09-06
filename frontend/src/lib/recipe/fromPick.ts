@@ -447,6 +447,32 @@ export function toLocator(selector: string): Locator {
  */
 export function toHighlightFields(drafts: FieldDraft[]): HighlightField[] {
   return drafts.flatMap((draft, index) => {
+    // A table binds by column and carries no top-level candidates, so reading
+    // `draft.candidates` here returned nothing and a picked *list* -- the
+    // commonest pick there is -- left the page completely unmarked.
+    if (draft.columns) {
+      const rows = draft.repeat?.rows_locator
+      if (!rows?.selector || rows.kind === 'xpath') return []
+      return Object.entries(draft.columns).flatMap(([column, candidates]) => {
+        const dom = candidates.find(
+          (c) => c.locator.kind === 'css' && c.locator.selector,
+        )
+        if (!dom) return []
+        // Composed to document scope: the marker has to be findable from the
+        // page, and the column selectors are row-relative. This marks the
+        // first row's cells, which is what tells an author their column is
+        // pointing where they think it is.
+        return [
+          {
+            id: `${index}:${draft.name}:${column}`,
+            name: column,
+            action: 'extract' as const,
+            selectors: [{ type: 'css', value: `${rows.selector} ${dom.locator.selector}` }],
+          },
+        ]
+      })
+    }
+
     const dom = draft.candidates.find(
       (c) => (c.locator.kind === 'css' || c.locator.kind === 'xpath') && c.locator.selector,
     )

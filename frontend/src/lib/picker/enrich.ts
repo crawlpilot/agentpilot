@@ -28,6 +28,7 @@
  * robust to the extractor's internal pathing changing.
  */
 import { generateRobustSelectors, generateXPath } from './vendor/content/services/dom/domUtils'
+import { isStableAttributeValue } from './vendor/shared/selectors/stability'
 import type { PickMessage, PickPayload, PickColumn, PickSelector } from './protocol'
 
 /** Attributes worth reading instead of text, keyed by inferred column type. */
@@ -76,6 +77,30 @@ function findValueHolder(row: Element, value: string, attribute?: string): Eleme
     }
   }
   return best
+}
+
+/**
+ * Reject a selector that embeds a value which differs from row to row.
+ *
+ * The generators happily produce things like `[src="/1.jpg"]` -- perfectly
+ * unique, and useless as a *column* selector, because it identifies one row's
+ * image rather than "the image in this row". It resolves for row one and
+ * matches nothing in the rest, so the column would look fine in a preview of
+ * the first row and be empty everywhere below it.
+ *
+ * `isStableAttributeValue` already encodes which attributes are instance
+ * -specific (`src`, `href`, `id`, `data-id`, ...); this applies that judgement
+ * to a generated selector string.
+ */
+function embedsVolatileValue(selector: string): boolean {
+  // [attr="value"] / [attr='value'] / [attr=value]
+  const pattern = /\[\s*([\w-]+)\s*=\s*("([^"]*)"|'([^']*)'|([^\]]*))\s*\]/g
+  for (const match of selector.matchAll(pattern)) {
+    const attr = match[1]
+    const value = match[3] ?? match[4] ?? match[5] ?? ''
+    if (!isStableAttributeValue(attr, value.replace(/\\/g, ''))) return true
+  }
+  return false
 }
 
 function toPickSelectors(results: { selector: string; strategy: string }[]): PickSelector[] {
@@ -131,7 +156,10 @@ function enrichList(payload: PickPayload): PickPayload {
     if (!el) return col
 
     const results = generateRobustSelectors(el as HTMLElement, { root: row as HTMLElement, isList: true })
-    const locators = toPickSelectors(results)
+    // A column selector must address "this cell in any row", so anything
+    // carrying one row's own value is worse than useless here.
+    const usable = toPickSelectors(results).filter((s) => !embedsVolatileValue(s.selector))
+    const locators = usable.length > 0 ? usable : toPickSelectors(results)
     if (locators.length === 0) return col
 
     return {
