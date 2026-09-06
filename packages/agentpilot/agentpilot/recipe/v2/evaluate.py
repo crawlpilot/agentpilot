@@ -34,6 +34,34 @@ from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 from crawlpilot.spi.driver import BrowserDriver
 
+# Resolves once the DOM has been quiet for `quiet` ms, or after `cap` ms
+# regardless. See `PageReader.settle` for why this exists at all.
+#
+# The observer watches `childList`/`subtree`/`attributes`: a drawer opening is
+# usually inserted nodes, but plenty of components render the content up-front
+# and only flip a class or `aria-expanded`, which is an attribute mutation and
+# nothing else. Watching only childList would miss exactly those.
+_SETTLE_JS = """() => new Promise((resolve) => {
+  const quiet = %(quiet)d, cap = %(cap)d;
+  const root = document.documentElement;
+  if (!root) { resolve('no-document'); return; }
+  let quietTimer = null, capTimer = null, settled = false;
+  const finish = (why) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(quietTimer); clearTimeout(capTimer);
+    try { observer.disconnect(); } catch (e) { /* already gone */ }
+    resolve(why);
+  };
+  const observer = new MutationObserver(() => {
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(() => finish('quiet'), quiet);
+  });
+  observer.observe(root, { childList: true, subtree: true, attributes: true });
+  quietTimer = setTimeout(() => finish('quiet'), quiet);
+  capTimer = setTimeout(() => finish('capped'), cap);
+})"""
+
 _SOURCE_TO_CONTAINER = {"json_ld": "json_ld", "hydration": "hydration", "meta": "metadata"}
 
 # One reader for css and xpath. Options are passed as a single JSON object
@@ -234,6 +262,41 @@ class PageReader:
 
         self._structured = None
         self._snapshot = None
+
+    async def settle(self, *, quiet_ms: int = 250, cap_ms: int = 3_000) -> str:
+        """Wait until the DOM stops changing, bounded. Returns why it stopped.
+
+        **This is what makes a reveal step actually reveal anything.** A click
+        that does not navigate returns from the driver the moment the event is
+        dispatched -- `patchright_driver` awaits a new document only when the
+        URL changed. An accordion, a drawer, a "read more" is a re-render, not
+        a navigation, so replay would read the fields behind it in the same
+        breath as the click that opened it. That race is not theoretical: the
+        same recipe returned `items: resolved` on one run and `items: empty` on
+        the next, against an unchanged page.
+
+        A `MutationObserver` in the page rather than a sleep here, for the
+        reason `lint.ts` refuses a bare `wait` where a condition exists: a
+        fixed delay is simultaneously too long for a page that was already
+        still and too short for one that was not. `page.evaluate` awaits the
+        promise, so this costs one round trip and the waiting happens in the
+        browser.
+
+        Bounded twice over -- a quiet period ends it, and `cap_ms` ends it
+        regardless, because a page with a spinner or a polling widget never
+        goes quiet and must not hang the run. Hitting the cap is a normal
+        outcome, not an error: whatever has rendered by then is what gets read,
+        which is strictly better than reading before anything did.
+        """
+
+        script = _SETTLE_JS % {"quiet": max(0, quiet_ms), "cap": max(1, cap_ms)}
+        try:
+            outcome = await self._eval_js(script)
+        except Exception:
+            # A settle that cannot run must never fail the step that already
+            # succeeded -- the click happened either way.
+            return "unavailable"
+        return str(outcome) if outcome else "unknown"
 
     async def structured_data(self) -> dict[str, Any]:
         if self._structured is None:

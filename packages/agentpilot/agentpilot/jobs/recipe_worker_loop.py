@@ -326,10 +326,20 @@ class RecipeWorkerLoop:
             # suspect / empty / failed) and is what the job view colours each
             # URL by -- richer than v1's failures list, and the same shape a
             # caller reading the API needs to judge a partial result.
+            #
+            # `step_trace` is here because without it an empty field behind a
+            # reveal click is unattributable: the selector may be wrong, or the
+            # click may never have run, and the two need opposite fixes. Every
+            # reveal step is `optional: true, on_error: continue` by
+            # construction (see `RecipeWizardPage::pickStepTarget`), so a step
+            # that matched nothing is *silent* -- the run completes, the group
+            # reads an unrevealed page, and every field in it comes back empty
+            # with nothing saying why.
             field_failures={
                 "field_status": result.field_status,
                 "truncated": result.truncated,
                 "outcome": result.outcome,
+                "step_trace": [s.to_dict() for s in result.step_trace],
             },
             error=result.error,
         )

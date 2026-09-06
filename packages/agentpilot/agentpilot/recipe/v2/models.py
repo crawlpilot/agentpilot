@@ -482,6 +482,10 @@ class ExecutionDefaults:
     navigate_timeout_ms: int = 30_000
     max_repeat_iterations: int = 20
     lua_timeout_ms: int = 250
+    settle_ms: int = 250
+    """How long the DOM must be quiet after a page-changing step before the
+    next read. `0` disables the wait entirely, for a recipe whose steps are
+    known not to re-render. See `PageReader.settle`."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -489,6 +493,7 @@ class ExecutionDefaults:
             "navigate_timeout_ms": self.navigate_timeout_ms,
             "max_repeat_iterations": self.max_repeat_iterations,
             "lua_timeout_ms": self.lua_timeout_ms,
+            "settle_ms": self.settle_ms,
         }
 
     @classmethod
@@ -499,6 +504,7 @@ class ExecutionDefaults:
             navigate_timeout_ms=int(d.get("navigate_timeout_ms", 30_000)),
             max_repeat_iterations=int(d.get("max_repeat_iterations", 20)),
             lua_timeout_ms=int(d.get("lua_timeout_ms", 250)),
+            settle_ms=int(d.get("settle_ms", 250)),
         )
 
 

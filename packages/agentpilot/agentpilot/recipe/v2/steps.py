@@ -52,6 +52,7 @@ class StepContext:
     reader: PageReader
     meta: dict[str, Any]
     defaults_timeout_ms: int = 10_000
+    settle_ms: int = 250
 
 
 def _template(value: Any, meta: dict[str, Any]) -> Any:
@@ -244,6 +245,22 @@ async def build_action(step: Step, ctx: StepContext) -> spi_actions.Action:  # n
     raise StepError(f"unknown step op {op!r}")
 
 
+# Ops whose effect the page renders asynchronously, so the next read has to
+# wait for it. A subset of `_MUTATING`: `fill` and `clear` put text in an input
+# and the value is readable the instant the action returns, while a click, a
+# tab switch or a scroll starts work the browser finishes later.
+#
+# `navigate` is absent because the driver already awaits the new document
+# (`patchright_driver`, the `_await_document` call) -- and, tellingly, does so
+# ONLY when the URL changed. A click that opens a drawer is the same problem
+# with no such handling, which is what `PageReader.settle` supplies.
+_REVEALING = frozenset({
+    "click", "double_click", "hover", "press", "send_keys", "select_option",
+    "check", "uncheck", "scroll", "scroll_into_view", "find_text", "drag",
+    "tap", "swipe", "dialog_accept", "dialog_dismiss", "new_tab",
+    "switch_tab", "close_tab",
+})
+
 # Ops that change the page, and therefore invalidate the reader's caches.
 _MUTATING = frozenset({
     "navigate", "click", "double_click", "fill", "clear", "press", "send_keys",
@@ -285,6 +302,14 @@ async def dispatch_step(step: Step, ctx: StepContext, index: int = 0) -> StepOut
                 ctx.session, [action], registry=ctx.registry, driver=ctx.driver
             )
             if step.op in _MUTATING:
+                # Settle BEFORE invalidating, so the caches are dropped once
+                # the page has finished changing rather than part-way through
+                # it. Reversed, a snapshot taken during the re-render would be
+                # cached as though it were the settled page.
+                if ctx.settle_ms > 0 and step.op in _REVEALING:
+                    await ctx.reader.settle(
+                        quiet_ms=ctx.settle_ms, cap_ms=ctx.defaults_timeout_ms
+                    )
                 ctx.reader.invalidate()
             return _done("recovered" if attempt else "ok")
         except Exception as exc:  # noqa: BLE001 - a failed step is data, see docstring
