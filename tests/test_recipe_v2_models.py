@@ -12,6 +12,7 @@ they disagree here first.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,41 @@ def test_uses_lua_is_computed_not_trusted() -> None:
     wal = Recipe.from_dict(_strip_annotations(json.loads(walmart.read_text(encoding="utf-8"))))
     assert wal.uses_lua() is False
     assert wal.has_script is False
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.stem)
+def test_hydration_paths_are_rooted_at_a_container_key(path: Path) -> None:
+    """A hydration path starts at the script id, not inside the payload.
+
+    `evaluate.py` hands `structured["hydration"]` to `resolve_path`, and
+    `crawlpilot.extraction.structured_data.extract_hydration_state` keys that
+    dict by script id (`__NEXT_DATA__`) or by the assigned global. A path
+    beginning `props.pageProps…` therefore resolves to `None` -- silently, and
+    on every field at once, because a missing key is an empty field rather
+    than an error. Cheap to write, invisible until a real run, so it is pinned
+    here where the resolver and the examples meet.
+    """
+
+    roots = {"__NEXT_DATA__", "__NUXT_DATA__", "__NUXT__", "__INITIAL_STATE__",
+             "__APOLLO_STATE__", "__REDUX_STATE__"}
+    raw = _strip_annotations(json.loads(path.read_text(encoding="utf-8")))
+
+    def walk(node: object) -> list[str]:
+        found: list[str] = []
+        if isinstance(node, dict):
+            if node.get("kind") == "hydration" or node.get("source") == "hydration":
+                if node.get("path"):
+                    found.append(str(node["path"]))
+            for value in node.values():
+                found += walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                found += walk(value)
+        return found
+
+    for hydration_path in walk(raw):
+        head = re.split(r"[.\[]", hydration_path, maxsplit=1)[0]
+        assert head in roots, f"{hydration_path!r} is not rooted at a hydration container"
 
 
 # --- individual shapes ------------------------------------------------------

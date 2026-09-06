@@ -8,11 +8,11 @@ own docstring flagged as an accepted false-positive risk).
 
 from __future__ import annotations
 
-from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
 from fusion_fixtures import fnode
 
 from agentpilot.recipe.v2.models import Locator
 from agentpilot.recipe.v2.tree import find_nodes, node_attribute, node_text
+from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
 
 
 def with_attrs(node: EnhancedDOMTreeNode, **attrs: str) -> EnhancedDOMTreeNode:

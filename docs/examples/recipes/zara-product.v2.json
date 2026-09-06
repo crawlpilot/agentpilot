@@ -32,39 +32,46 @@
     "",
     "5. The consent banner was not visible on the profile used, so the dismiss step is genuinely",
     "   optional. It is kept with on_error=continue — which is the correct shape for a step that is",
-    "   present for some visitors and absent for others."
+    "   present for some visitors and absent for others.",
+    "",
+    "CORRECTIONS FROM RUNNING ALL FOUR GROUPS AGAINST THE LIVE PAGE. An earlier draft was only ever exercised on the two zero-interaction groups. Running the click groups found two defects: (1) global_setup waited for networkidle, which this page never reaches -- it timed out at 15s on every group while the h1 it actually needs is visible in 0.1s; (2) the measurements repeat used a css option locator with a per-iteration index, which the driver's actions cannot express, so it would have clicked the first size five times and returned five identical rows. Both are fixed above. With the fixes, detail_drawer yields origin='Morocco' and measurements yields 5 distinct per-size rows in 8 clicks total."
   ],
-
   "name": "zara-product",
   "status": "draft",
   "version": 1,
-
   "target": {
-    "match": [{ "kind": "glob", "pattern": "https://www.zara.com/*/*-p*.html" }]
+    "match": [
+      {
+        "kind": "glob",
+        "pattern": "https://www.zara.com/*/*-p*.html"
+      }
+    ]
   },
-
   "sample_urls": [
     "https://www.zara.com/in/en/limited-edition-printed-midi-dress-p08004856.html"
   ],
   "_sample_urls_note": "Only one URL was verified live while authoring. recipe-operations.md D4.1 requires >= 3 same-type pages before this leaves draft: a candidate that resolves on one page is an overfit guess, not an induced wrapper. verified_on below reflects the truth (1), not an aspiration.",
-
-  "built_under": { "tier": "stealth", "proxy_region": "in" },
+  "built_under": {
+    "tier": "stealth",
+    "proxy_region": "in"
+  },
   "has_script": true,
-
   "defaults": {
     "step_timeout_ms": 10000,
     "navigate_timeout_ms": 30000,
     "max_repeat_iterations": 20,
     "lua_timeout_ms": 250
   },
-
   "variants": [
     {
       "variant_id": "with_size_guide",
       "priority": 10,
       "label": "Garment with an interactive body-measurements guide",
       "detect": [
-        { "kind": "selector_present", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" }
+        {
+          "kind": "selector_present",
+          "selector": "button[data-qa-action='open-interactive-size-guide-accordion']"
+        }
       ]
     },
     {
@@ -72,82 +79,201 @@
       "priority": 20,
       "label": "Accessory / perfume / anything without a size guide",
       "detect": [
-        { "kind": "selector_absent", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" }
+        {
+          "kind": "selector_absent",
+          "selector": "button[data-qa-action='open-interactive-size-guide-accordion']"
+        }
       ]
     }
   ],
-
   "global_setup": [
     {
       "op": "click",
       "label": "Accept cookies if the OneTrust banner is showing",
-      "target": { "kind": "css", "selector": "#onetrust-banner-sdk #onetrust-accept-btn-handler" },
-      "when": [{ "kind": "visible", "selector": "#onetrust-banner-sdk" }],
+      "target": {
+        "kind": "css",
+        "selector": "#onetrust-banner-sdk #onetrust-accept-btn-handler"
+      },
+      "when": [
+        {
+          "kind": "visible",
+          "selector": "#onetrust-banner-sdk"
+        }
+      ],
       "on_error": "continue",
       "timeout_ms": 3000
     },
     {
-      "op": "wait_for_load",
-      "label": "Let the SPA settle before anything reads the DOM",
-      "args": { "state": "networkidle" },
+      "op": "wait_for_selector",
+      "label": "Wait for a real readiness signal, not networkidle",
+      "_comment": "MEASURED on the live page: this h1 is visible 0.1-0.2s after domcontentloaded, while wait_for_load networkidle NEVER settles (gave up at 30s). The previous step timed out on every group, costing ~15s x 4 groups per run and achieving nothing. A page with persistent analytics connections never reaches network idle, so the condition has to be something the page actually signals.",
+      "args": {
+        "state": "visible"
+      },
+      "target": {
+        "kind": "css",
+        "selector": "h1.product-detail-info__header-name"
+      },
       "timeout_ms": 15000,
       "on_error": "continue"
     }
   ],
-
   "fields": {
     "name": {
       "description": "Product display name",
-      "type": { "kind": "scalar", "value_type": "string" },
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
       "required": true,
-      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }],
-      "assertions": [{ "kind": "length", "min": 2, "max": 200 }]
+      "transform": [
+        {
+          "op": "collapse_ws"
+        },
+        {
+          "op": "trim"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "length",
+          "min": 2,
+          "max": 200
+        }
+      ]
     },
     "description": {
       "description": "Marketing description paragraph",
-      "type": { "kind": "scalar", "value_type": "string" },
-      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }]
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
+      "transform": [
+        {
+          "op": "collapse_ws"
+        },
+        {
+          "op": "trim"
+        }
+      ]
     },
     "product_id": {
       "description": "Zara product group id, e.g. 08004856",
-      "type": { "kind": "scalar", "value_type": "string" },
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
       "required": true,
-      "assertions": [{ "kind": "matches", "regex": "^[0-9]{6,10}$" }]
+      "assertions": [
+        {
+          "kind": "matches",
+          "regex": "^[0-9]{6,10}$"
+        }
+      ]
     },
     "price": {
       "description": "Current selling price of the product group, as a number",
-      "type": { "kind": "scalar", "value_type": "price" },
+      "type": {
+        "kind": "scalar",
+        "value_type": "price"
+      },
       "required": true,
       "emit_raw": true,
       "assertions": [
-        { "kind": "range", "min": 0.01, "max": 1000000 },
-        { "kind": "cross_source_agrees", "tolerance": 0.01 }
+        {
+          "kind": "range",
+          "min": 0.01,
+          "max": 1000000
+        },
+        {
+          "kind": "cross_source_agrees",
+          "tolerance": 0.01
+        }
       ]
     },
     "currency": {
       "description": "ISO-4217 currency code for the price",
-      "type": { "kind": "scalar", "value_type": "string" },
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
       "required": true,
-      "transform": [{ "op": "case", "mode": "upper" }],
-      "assertions": [{ "kind": "in_set", "values": ["INR", "EUR", "USD", "GBP", "AED", "JPY", "CNY"] }]
+      "transform": [
+        {
+          "op": "case",
+          "mode": "upper"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "in_set",
+          "values": [
+            "INR",
+            "EUR",
+            "USD",
+            "GBP",
+            "AED",
+            "JPY",
+            "CNY"
+          ]
+        }
+      ]
     },
     "images": {
       "description": "All product image URLs, absolute",
-      "type": { "kind": "list", "items": { "kind": "scalar", "value_type": "url" } },
-      "transform": [{ "op": "filter_empty" }, { "op": "unique" }],
-      "assertions": [{ "kind": "length", "min": 1, "max": 60 }]
+      "type": {
+        "kind": "list",
+        "items": {
+          "kind": "scalar",
+          "value_type": "url"
+        }
+      },
+      "transform": [
+        {
+          "op": "filter_empty"
+        },
+        {
+          "op": "unique"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "length",
+          "min": 1,
+          "max": 60
+        }
+      ]
     },
     "composition": {
       "description": "Fabric composition, e.g. '100% viscose'",
-      "type": { "kind": "scalar", "value_type": "string" },
-      "transform": [{ "op": "collapse_ws" }, { "op": "trim" }]
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
+      "transform": [
+        {
+          "op": "collapse_ws"
+        },
+        {
+          "op": "trim"
+        }
+      ]
     },
     "origin": {
       "description": "Country of manufacture, e.g. 'Morocco'. Only present in the detail drawer.",
-      "type": { "kind": "scalar", "value_type": "string" },
+      "type": {
+        "kind": "scalar",
+        "value_type": "string"
+      },
       "transform": [
-        { "op": "regex_extract", "pattern": "Made in\\s+(.+?)\\s*$", "group": 1 },
-        { "op": "trim" }
+        {
+          "op": "regex_extract",
+          "pattern": "Made in\\s+(.+?)\\s*$",
+          "group": 1
+        },
+        {
+          "op": "trim"
+        }
       ]
     },
     "variants": {
@@ -155,11 +281,26 @@
       "type": {
         "kind": "table",
         "columns": {
-          "size": { "kind": "scalar", "value_type": "string" },
-          "sku": { "kind": "scalar", "value_type": "string" },
-          "color": { "kind": "scalar", "value_type": "string" },
-          "price": { "kind": "scalar", "value_type": "float" },
-          "available": { "kind": "scalar", "value_type": "boolean" }
+          "size": {
+            "kind": "scalar",
+            "value_type": "string"
+          },
+          "sku": {
+            "kind": "scalar",
+            "value_type": "string"
+          },
+          "color": {
+            "kind": "scalar",
+            "value_type": "string"
+          },
+          "price": {
+            "kind": "scalar",
+            "value_type": "float"
+          },
+          "available": {
+            "kind": "scalar",
+            "value_type": "boolean"
+          }
         }
       },
       "required": true
@@ -169,40 +310,104 @@
       "type": {
         "kind": "table",
         "columns": {
-          "size": { "kind": "scalar", "value_type": "string" },
-          "values_cm": { "kind": "list", "items": { "kind": "scalar", "value_type": "float" } }
+          "size": {
+            "kind": "scalar",
+            "value_type": "string"
+          },
+          "values_cm": {
+            "kind": "list",
+            "items": {
+              "kind": "scalar",
+              "value_type": "float"
+            }
+          }
         }
       }
     }
   },
-
   "field_groups": [
     {
       "group_id": "core_structured",
       "_comment": "Everything obtainable with zero interaction. JSON-LD first, meta second, DOM last — the ordering that survives a redesign. On this page all three tiers actually exist for name, which is why it has three candidates.",
-      "field_names": ["name", "description", "product_id", "price", "currency", "images", "composition"],
+      "field_names": [
+        "name",
+        "description",
+        "product_id",
+        "price",
+        "currency",
+        "images",
+        "composition"
+      ],
       "steps": [],
       "bindings": {
         "name": [
-          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].name" }, "verified_on": 1 },
-          { "priority": 20, "locator": { "kind": "meta", "path": "og:title" }, "verified_on": 1 },
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].name"
+            },
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "locator": {
+              "kind": "meta",
+              "path": "og:title"
+            },
+            "verified_on": 1
+          },
           {
             "priority": 30,
-            "locator": { "kind": "css", "selector": "h1.product-detail-info__header-name", "attribute": "text" },
+            "locator": {
+              "kind": "css",
+              "selector": "h1.product-detail-info__header-name",
+              "attribute": "text"
+            },
             "verified_on": 1
           }
         ],
         "description": [
-          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].description" }, "verified_on": 1 },
-          { "priority": 20, "locator": { "kind": "meta", "path": "og:description" }, "verified_on": 1 }
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].description"
+            },
+            "verified_on": 1
+          },
+          {
+            "priority": 20,
+            "locator": {
+              "kind": "meta",
+              "path": "og:description"
+            },
+            "verified_on": 1
+          }
         ],
         "product_id": [
-          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].productGroupID" }, "verified_on": 1 },
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].productGroupID"
+            },
+            "verified_on": 1
+          },
           {
             "priority": 20,
             "_comment": "The canonical URL ends in -p<id>.html — a stable fallback that survives any DOM change.",
-            "locator": { "kind": "meta", "path": "og:url" },
-            "transform": [{ "op": "regex_extract", "pattern": "-p(\\d+)\\.html", "group": 1 }],
+            "locator": {
+              "kind": "meta",
+              "path": "og:url"
+            },
+            "transform": [
+              {
+                "op": "regex_extract",
+                "pattern": "-p(\\d+)\\.html",
+                "group": 1
+              }
+            ],
             "verified_on": 1
           }
         ],
@@ -210,31 +415,77 @@
           {
             "priority": 10,
             "_comment": "JSON-LD gives '9550' — a clean integer string. A cast is all it needs.",
-            "locator": { "kind": "json_ld", "path": "[0].hasVariant[0].offers.price" },
-            "transform": [{ "op": "cast", "to": "float" }],
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].hasVariant[0].offers.price"
+            },
+            "transform": [
+              {
+                "op": "cast",
+                "to": "float"
+              }
+            ],
             "verified_on": 1
           },
           {
             "priority": 20,
             "_comment": "The DOM gives '₹ 9,550.00'. Same field, different source, different cleanup — this is precisely why per-candidate transforms exist. With cross_source_agrees on the field, both are read and compared, so a selector that drifts onto the 'compare at' price is caught the day it drifts.",
-            "locator": { "kind": "css", "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main", "attribute": "text" },
+            "locator": {
+              "kind": "css",
+              "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main",
+              "attribute": "text"
+            },
             "transform": [
-              { "op": "regex_extract", "pattern": "([\\d.,]+)" },
-              { "op": "regex_replace", "pattern": ",", "repl": "" },
-              { "op": "cast", "to": "float" }
+              {
+                "op": "regex_extract",
+                "pattern": "([\\d.,]+)"
+              },
+              {
+                "op": "regex_replace",
+                "pattern": ",",
+                "repl": ""
+              },
+              {
+                "op": "cast",
+                "to": "float"
+              }
             ],
             "verified_on": 1
           }
         ],
         "currency": [
-          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].hasVariant[0].offers.priceCurrency" }, "verified_on": 1 },
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].hasVariant[0].offers.priceCurrency"
+            },
+            "verified_on": 1
+          },
           {
             "priority": 20,
             "_comment": "No og:price:currency on this page — the symbol in the price node is the only DOM signal.",
-            "locator": { "kind": "css", "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main", "attribute": "text" },
+            "locator": {
+              "kind": "css",
+              "selector": "[data-qa-qualifier='price-amount-current'] .money-amount__main",
+              "attribute": "text"
+            },
             "transform": [
-              { "op": "regex_extract", "pattern": "^([^\\d\\s]+)", "group": 1 },
-              { "op": "map_lookup", "table": { "₹": "INR", "€": "EUR", "$": "USD", "£": "GBP" }, "default": null }
+              {
+                "op": "regex_extract",
+                "pattern": "^([^\\d\\s]+)",
+                "group": 1
+              },
+              {
+                "op": "map_lookup",
+                "table": {
+                  "₹": "INR",
+                  "€": "EUR",
+                  "$": "USD",
+                  "£": "GBP"
+                },
+                "default": null
+              }
             ],
             "verified_on": 1
           }
@@ -243,50 +494,114 @@
           {
             "priority": 10,
             "_comment": "Nine full-resolution URLs, already absolute.",
-            "locator": { "kind": "json_ld", "path": "[0].image" },
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].image"
+            },
             "verified_on": 1
           },
           {
             "priority": 20,
             "_comment": "all=true is the v2 addition that reads a list field without the repeat machinery.",
-            "locator": { "kind": "css", "selector": "img.media-image__image", "attribute": "src", "all": true },
-            "transform": [{ "op": "url_resolve" }],
+            "locator": {
+              "kind": "css",
+              "selector": "img.media-image__image",
+              "attribute": "src",
+              "all": true
+            },
+            "transform": [
+              {
+                "op": "url_resolve"
+              }
+            ],
             "verified_on": 1
           }
         ],
         "composition": [
-          { "priority": 10, "locator": { "kind": "json_ld", "path": "[0].material" }, "verified_on": 1 },
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].material"
+            },
+            "verified_on": 1
+          },
           {
             "priority": 20,
-            "locator": { "kind": "json_ld", "path": "[0].additionalProperty[0].value" },
+            "locator": {
+              "kind": "json_ld",
+              "path": "[0].additionalProperty[0].value"
+            },
             "verified_on": 1,
             "note": "additionalProperty[0] is {propertyID: 'Composition', name: 'OUTER SHELL', value: '100% viscose'}"
           }
         ]
       }
     },
-
     {
       "group_id": "size_table",
       "_comment": "The whole size/price/stock table, from one structured-data read. Five sizes with individual SKUs and stock status, and not a single click. Modelling this as a DOM repeat would cost five clicks, five settles and a re-render race to reproduce data the page already published.",
-      "field_names": ["variants"],
-      "expect": { "min_rows": 1, "max_rows": 20 },
+      "field_names": [
+        "variants"
+      ],
+      "expect": {
+        "min_rows": 1,
+        "max_rows": 20
+      },
       "steps": [],
       "repeat": {
         "kind": "json",
-        "rows_locator": { "kind": "json_ld", "path": "[0].hasVariant" },
+        "rows_locator": {
+          "kind": "json_ld",
+          "path": "[0].hasVariant"
+        },
         "max_iterations": 20,
         "row_field": "variants"
       },
       "bindings": {
-        "size": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "size" }, "verified_on": 1 }],
-        "sku": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "sku" }, "verified_on": 1 }],
-        "color": [{ "priority": 10, "locator": { "kind": "json_ld", "path": "color" }, "verified_on": 1 }],
+        "size": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "size"
+            },
+            "verified_on": 1
+          }
+        ],
+        "sku": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "sku"
+            },
+            "verified_on": 1
+          }
+        ],
+        "color": [
+          {
+            "priority": 10,
+            "locator": {
+              "kind": "json_ld",
+              "path": "color"
+            },
+            "verified_on": 1
+          }
+        ],
         "price": [
           {
             "priority": 10,
-            "locator": { "kind": "json_ld", "path": "offers.price" },
-            "transform": [{ "op": "cast", "to": "float" }],
+            "locator": {
+              "kind": "json_ld",
+              "path": "offers.price"
+            },
+            "transform": [
+              {
+                "op": "cast",
+                "to": "float"
+              }
+            ],
             "verified_on": 1
           }
         ],
@@ -294,14 +609,25 @@
           {
             "priority": 10,
             "_comment": "schema.org availability is a URL: https://schema.org/InStock | .../OutOfStock. map_lookup turns that vocabulary into a boolean with no regex and no script.",
-            "locator": { "kind": "json_ld", "path": "offers.availability" },
+            "locator": {
+              "kind": "json_ld",
+              "path": "offers.availability"
+            },
             "transform": [
-              { "op": "regex_extract", "pattern": "([^/]+)$", "group": 1 },
+              {
+                "op": "regex_extract",
+                "pattern": "([^/]+)$",
+                "group": 1
+              },
               {
                 "op": "map_lookup",
                 "table": {
-                  "InStock": true, "LimitedAvailability": true, "PreOrder": true,
-                  "OutOfStock": false, "SoldOut": false, "Discontinued": false
+                  "InStock": true,
+                  "LimitedAvailability": true,
+                  "PreOrder": true,
+                  "OutOfStock": false,
+                  "SoldOut": false,
+                  "Discontinued": false
                 },
                 "default": false
               }
@@ -311,25 +637,37 @@
         ]
       }
     },
-
     {
       "group_id": "detail_drawer",
       "_comment": "Origin and care live ONLY in this drawer — no JSON-LD, no meta. This is what a reveal step is actually for. It is its own group because the two drawers on this page occlude each other; see the readme.",
-      "field_names": ["origin"],
+      "field_names": [
+        "origin"
+      ],
       "steps": [
         {
           "op": "click",
           "label": "Open COMPOSITION, CARE & ORIGIN",
-          "target": { "kind": "css", "selector": "button[data-qa-action='show-extra-detail']" },
+          "target": {
+            "kind": "css",
+            "selector": "button[data-qa-action='show-extra-detail']"
+          },
           "on_error": "skip_group",
           "timeout_ms": 10000,
-          "retry": { "attempts": 2, "backoff_ms": 500 }
+          "retry": {
+            "attempts": 2,
+            "backoff_ms": 500
+          }
         },
         {
           "op": "wait_for_selector",
           "label": "Wait for the drawer to render, not merely for the click to land",
-          "args": { "state": "visible" },
-          "target": { "kind": "css", "selector": ".product-detail-actions-extra-detail-modal" },
+          "args": {
+            "state": "visible"
+          },
+          "target": {
+            "kind": "css",
+            "selector": ".product-detail-actions-extra-detail-modal"
+          },
           "timeout_ms": 10000,
           "on_error": "skip_group"
         }
@@ -339,31 +677,53 @@
           {
             "priority": 10,
             "_comment": "The drawer's text ends with 'ORIGIN\\nMade in Morocco'. The field's regex_extract pulls the country out.",
-            "locator": { "kind": "css", "selector": ".product-detail-actions-extra-detail-modal", "attribute": "text" },
-            "transform": [{ "op": "regex_extract", "pattern": "Made in\\s+([^\\n]+)", "group": 1 }],
+            "locator": {
+              "kind": "css",
+              "selector": ".product-detail-actions-extra-detail-modal",
+              "attribute": "text"
+            },
+            "transform": [
+              {
+                "op": "regex_extract",
+                "pattern": "Made in\\s+([^\\n]+)",
+                "group": 1
+              }
+            ],
             "verified_on": 1
           }
         ]
       }
     },
-
     {
       "group_id": "measurements",
       "_comment": "The genuine DOM repeat: the drawer shows measurements for ONE size at a time, so each size is clicked inside the drawer and the callouts re-read. Scoped to the with_size_guide variant, because plenty of Zara products have no size guide at all.",
-      "field_names": ["body_measurements"],
-      "expect": { "min_rows": 1, "max_rows": 12 },
+      "field_names": [
+        "body_measurements"
+      ],
+      "expect": {
+        "min_rows": 1,
+        "max_rows": 12
+      },
       "steps": [
         {
           "op": "click",
           "label": "Open PRODUCT MEASUREMENTS",
-          "target": { "kind": "css", "selector": "button[data-qa-action='open-interactive-size-guide-accordion']" },
+          "target": {
+            "kind": "css",
+            "selector": "button[data-qa-action='open-interactive-size-guide-accordion']"
+          },
           "on_error": "skip_group",
           "timeout_ms": 10000
         },
         {
           "op": "wait_for_selector",
-          "args": { "state": "visible" },
-          "target": { "kind": "css", "selector": ".interactive-size-guide__drawer" },
+          "args": {
+            "state": "visible"
+          },
+          "target": {
+            "kind": "css",
+            "selector": ".interactive-size-guide__drawer"
+          },
           "timeout_ms": 10000,
           "on_error": "skip_group"
         },
@@ -381,20 +741,31 @@
       ],
       "repeat": {
         "kind": "dom",
-        "_comment": "within-scoping matters here: 'XS'/'S'/'M' are common strings and a whole-tree match would collide with the page's own size selector outside the drawer. This is the false-positive risk v1 documented and could not fix.",
+        "_comment": "Genuine DOM repeat: the drawer shows measurements for ONE size at a time. Verified end to end on the live page -- 5 clicks produce 5 distinct rows (XS [62,90,82] through XL [82,110,102]).",
         "option_locator": {
-          "kind": "css",
-          "selector": "button.zds-nav-row__list-item-wrapper",
-          "within": { "kind": "css", "selector": ".zrc-size-guide-size-selector" },
-          "all": true
+          "kind": "ax_role",
+          "role": "button",
+          "name_in": [
+            "XS",
+            "S",
+            "M",
+            "L",
+            "XL"
+          ],
+          "_comment": "VERIFIED against the live accessibility tree with the drawer open: exactly 5 nodes have role=button with these names. The other 10 nodes carrying the same names are StaticText/InlineTextBox children, which role matching excludes. An ax_role locator resolves through the fused tree to a ref and DOES support index; a css locator cannot, because the driver's actions take a selector or a ref and CSS has no general nth-match. The previous css+within+index option locator would have clicked the first size five times and produced five identical rows."
         },
         "action": "click",
         "max_iterations": 12,
         "row_field": "body_measurements",
         "settle": {
           "op": "wait_for_selector",
-          "args": { "state": "visible" },
-          "target": { "kind": "css", "selector": ".zds-nav-row__list-item--active" },
+          "args": {
+            "state": "visible"
+          },
+          "target": {
+            "kind": "css",
+            "selector": ".zds-nav-row__list-item--active"
+          },
           "timeout_ms": 3000,
           "on_error": "continue"
         }
@@ -424,7 +795,9 @@
             },
             "variant_id": "with_size_guide",
             "transform": [
-              { "op": "filter_empty" },
+              {
+                "op": "filter_empty"
+              },
               {
                 "op": "lua",
                 "source": "local n = v:match('([%d%.]+)')\nreturn n and tonumber(n) or nil"

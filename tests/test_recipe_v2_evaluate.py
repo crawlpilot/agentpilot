@@ -198,6 +198,27 @@ async def test_options_carry_index_all_attribute_and_within(reader) -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_reads_exclude_script_and_style_subtrees(reader) -> None:
+    """Raw textContent includes the SOURCE of any inline <script> inside the
+    element. Verified against the live page: Amazon's #availability contains a
+    P.when(...) block, and its 'Customer Reviews' spec row carries an inline
+    click handler -- both were returned as the field's value before this.
+
+    innerText excludes them for free but also excludes collapsed content, which
+    is exactly what `text` exists to reach, so the reader walks the subtree
+    itself. The behaviour is asserted structurally here and end-to-end against
+    the real page.
+    """
+
+    r, fake = reader(js={"querySelectorAll": {"value": "x"}})
+    await r.read(Locator(kind="css", selector="#availability"))
+    script = fake.scripts[0]
+    assert "SCRIPT: 1" in script and "STYLE: 1" in script
+    assert "textOf(el)" in script
+    assert "el.textContent" not in script
+
+
+@pytest.mark.asyncio
 async def test_an_invalid_selector_is_reported_as_a_locator_error(reader) -> None:
     r, _ = reader(js={"querySelectorAll": {"error": "invalid selector"}})
     with pytest.raises(LocatorError, match="invalid selector"):

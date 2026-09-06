@@ -19,6 +19,7 @@ limitation rather than adding capability for its own sake:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 from agentpilot.recipe.v2.models import Locator
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, NodeType
@@ -32,7 +33,7 @@ def _is_element(node: EnhancedDOMTreeNode) -> bool:
     return node.node_type == NodeType.ELEMENT_NODE
 
 
-def _iter_elements(node: EnhancedDOMTreeNode):
+def _iter_elements(node: EnhancedDOMTreeNode) -> Iterator[EnhancedDOMTreeNode]:
     if _is_element(node):
         yield node
     for child in node.children_and_shadow_roots:

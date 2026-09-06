@@ -127,9 +127,18 @@ Locator
 
 ### `text` vs `visible_text` — a distinction worth a click
 
-`attribute: "text"` reads **`textContent`**. `attribute: "visible_text"` reads **`innerText`**.
-They differ in exactly one way that matters: `textContent` returns the text of elements that are
-in the DOM but not rendered; `innerText` does not.
+`attribute: "text"` reads **`textContent`, minus `<script>` / `<style>` / `<noscript>` /
+`<template>` subtrees**. `attribute: "visible_text"` reads **`innerText`**. They differ in exactly
+one way that matters: `text` returns the content of elements that are in the DOM but not rendered;
+`innerText` does not.
+
+The script exclusion is not fastidiousness. Raw `textContent` includes the *source* of any inline
+script inside the element, and on real pages that is routine rather than exotic: Amazon's
+`#availability` contains a `P.when(...)` block, and its *Customer Reviews* specification row
+carries an inline click handler. Reading either raw returns a well-formed, plausible, entirely
+useless value — failure class 4 in [`recipe-operations.md`](recipe-operations.md) §D1, arriving
+by accident. `innerText` excludes them for free but also excludes collapsed content, which is the
+one thing `text` exists to reach, so the reader walks the subtree itself.
 
 That difference decides whether a reveal step is necessary at all. Measured on an Amazon product
 page, its four collapsed accordion sections — *Features & Specs*, *Style*, *Measurements*,

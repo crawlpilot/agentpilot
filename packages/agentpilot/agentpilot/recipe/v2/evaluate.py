@@ -52,10 +52,29 @@ _READ_JS = """() => {
       return Array.from(root.querySelectorAll(sel));
     } catch (e) { return null; }
   };
+  // `text` is textContent MINUS script/style/template subtrees. Raw
+  // textContent includes the source of any <script> inside the element, which
+  // on real pages is not an edge case: Amazon's #availability contains an
+  // inline P.when(...) block, and its "Customer Reviews" spec row carries a
+  // dpAcrHasRegisteredArcLinkClickAction handler. Both would otherwise be
+  // returned as the field's value -- well-formed, plausible, and garbage.
+  // innerText excludes them for free but also excludes collapsed content,
+  // which is precisely what `text` exists to reach.
+  const SKIP = {SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1};
+  const textOf = (el) => {
+    let out = '';
+    const walk = (n) => {
+      if (n.nodeType === 3) { out += n.nodeValue; return; }
+      if (n.nodeType !== 1 || SKIP[n.tagName]) return;
+      for (let c = n.firstChild; c; c = c.nextSibling) walk(c);
+    };
+    walk(el);
+    return out;
+  };
   const read = (el) => {
     if (!el) return null;
     const a = opts.attribute || 'text';
-    if (a === 'text') return el.textContent == null ? null : el.textContent.trim();
+    if (a === 'text') { const t = textOf(el); return t == null ? null : t.trim(); }
     if (a === 'visible_text') return el.innerText == null ? null : el.innerText.trim();
     if (a === 'html') return el.outerHTML == null ? null : el.outerHTML;
     if (a === 'value') {
