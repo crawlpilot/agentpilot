@@ -154,6 +154,51 @@ export function RecipeWizardPage() {
     setPaging((p) => ({ ...p, selector }))
   }
 
+  /**
+   * Pick the element a reveal step acts on.
+   *
+   * `single` mode rather than `detail`: this is pointing at a control, not
+   * reading a value, so the pagination-grade selector generator is the right
+   * one -- it insists on uniqueness and rejects selectors with a page number
+   * baked into them.
+   */
+  async function pickStepTarget(op: StepOp) {
+    const payload = await picker.pick('single')
+    if (!payload) return
+    const selector = payload.itemSelectors?.[0]?.selector ?? payload.containerSelector
+    if (!selector) return
+    setReveal((current) => [
+      ...current,
+      {
+        op,
+        target: { kind: 'css', selector },
+        // A reveal step is usually optional by nature -- the cookie banner
+        // that is not always there, the accordion already open. Failing the
+        // whole run because one did not apply is the wrong default.
+        on_error: 'continue',
+        optional: true,
+        args: {},
+      },
+    ])
+  }
+
+  /** Run the bindings against the live page and show what comes back. */
+  async function runPreview() {
+    if (!sessionId || drafts.length === 0) return
+    setPreviewing(true)
+    try {
+      setPreview(await picker.preview(toPreviewFields(drafts)))
+    } catch (err) {
+      toast({
+        title: 'Preview failed',
+        description: err instanceof Error ? err.message : 'Could not reach the page',
+        variant: 'destructive',
+      })
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   /** Offer a structured-data path above a picked CSS candidate. */
   function findInJson(draft: FieldDraft, index: number) {
     if (!draft.preview || !hits?.length) return
@@ -179,7 +224,9 @@ export function RecipeWizardPage() {
   /** Fold the wizard's state into the document. */
   const built = useMemo(() => {
     let recipe = applyDrafts(doc, drafts, { groupId: 'core' })
-    const setup: Step[] = []
+    // Reveal steps first, then pagination: the page has to be in the state the
+    // fields expect before anything asks for the next page of it.
+    const setup: Step[] = [...reveal]
     if (paging.mode === 'next' && paging.selector) {
       setup.push({
         op: 'click',
@@ -194,7 +241,7 @@ export function RecipeWizardPage() {
     }
     if (setup.length > 0) recipe = { ...recipe, global_setup: [...(recipe.global_setup ?? []), ...setup] }
     return recipe
-  }, [doc, drafts, paging])
+  }, [doc, drafts, paging, reveal])
 
   const issues = useMemo(() => lintRecipe(built), [built])
   const errors = issues.filter((i) => i.severity === 'error').length
@@ -208,7 +255,7 @@ export function RecipeWizardPage() {
     (step === 0 && !!sessionId && doc.name.trim().length > 0) ||
     (step === 1 && drafts.length > 0) ||
     (step === 2 && drafts.length > 0) ||
-    step === 3
+    step >= 3
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -289,6 +336,17 @@ export function RecipeWizardPage() {
             )}
 
             {step === 3 && (
+              <StepActions
+                steps={reveal}
+                onChange={setReveal}
+                status={picker.status}
+                onPickTarget={(op) => void pickStepTarget(op)}
+                onCancel={picker.cancel}
+                onRefine={picker.refine}
+              />
+            )}
+
+            {step === 4 && (
               <Step4Pagination
                 value={paging}
                 onChange={setPaging}
@@ -299,7 +357,16 @@ export function RecipeWizardPage() {
               />
             )}
 
-            {step === 4 && (
+            {step === 5 && (
+              <StepPreview
+                results={preview}
+                running={previewing}
+                disabled={!sessionId || drafts.length === 0}
+                onRun={() => void runPreview()}
+              />
+            )}
+
+            {step === 6 && (
               <div className="flex flex-col gap-3 p-3">
                 <div className="rounded-md border border-border">
                   <LintPanel issues={issues} onJump={() => setStep(2)} />

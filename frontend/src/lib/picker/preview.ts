@@ -150,6 +150,88 @@ export const PREVIEW_JS = `(fields) => {
   });
 }`
 
+/** A reveal step, flattened to what the in-page runner needs. */
+export interface PreviewStep {
+  op: string
+  selector?: string
+  kind?: 'css' | 'xpath'
+  text?: string
+  ms?: number
+}
+
+export interface StepOutcome {
+  op: string
+  status: 'ok' | 'skipped' | 'failed'
+  detail?: string
+}
+
+/**
+ * Apply the reveal steps in the page, so the preview reads the state the
+ * fields actually expect.
+ *
+ * **This is a rehearsal, not the real thing, and the UI says so.** Replay
+ * dispatches a *trusted* CDP click (`Input.dispatchMouseEvent`, via the
+ * driver's `_human_click`); this calls `element.click()` from page script.
+ * The two are identical to most handlers and different to a few -- anything
+ * gated on `event.isTrusted`, and anything that needs real pointer movement
+ * first. So a step that works here is not proof it works at replay, though a
+ * step that fails here is a genuine problem worth seeing now.
+ *
+ * The alternative was to leave reveal steps unapplied and let every field
+ * behind an accordion preview as `empty`, which teaches the author nothing.
+ */
+export const APPLY_STEPS_JS = `async (steps) => {
+  const pickOne = (sel, isXpath) => {
+    try {
+      if (isXpath) {
+        const r = document.evaluate(sel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        return r.singleNodeValue;
+      }
+      return document.querySelector(sel);
+    } catch (e) { return null; }
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const out = [];
+
+  for (const step of steps) {
+    try {
+      if (step.op === 'wait') {
+        await sleep(Math.min(step.ms || 0, 10000));
+        out.push({op: step.op, status: 'ok'});
+        continue;
+      }
+
+      const el = step.selector ? pickOne(step.selector, step.kind === 'xpath') : null;
+      if (!el) { out.push({op: step.op, status: 'skipped', detail: 'no match'}); continue; }
+
+      if (step.op === 'click') {
+        el.click();
+        // Give a re-render a moment to land before the next step reads the
+        // page. Replay has settle/timeout machinery for this; here a short
+        // fixed pause is the honest approximation.
+        await sleep(250);
+      } else if (step.op === 'scroll_into_view') {
+        el.scrollIntoView({behavior: 'auto', block: 'center'});
+        await sleep(250);
+      } else if (step.op === 'fill') {
+        el.focus();
+        el.value = step.text == null ? '' : step.text;
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+      } else if (step.op === 'wait_for_selector') {
+        // Already resolved above, so it is present.
+      } else {
+        out.push({op: step.op, status: 'skipped', detail: 'not simulated'});
+        continue;
+      }
+      out.push({op: step.op, status: 'ok'});
+    } catch (e) {
+      out.push({op: step.op, status: 'failed', detail: String(e && e.message || e)});
+    }
+  }
+  return out;
+}`
+
 /**
  * Zip list-valued results into rows, the way a caller would read them.
  *

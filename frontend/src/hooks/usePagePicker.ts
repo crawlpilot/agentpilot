@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeSession } from '@/lib/api/sessions'
 import { useAuth } from '@/lib/auth/AuthContext'
 import pickerBundle from '@/lib/picker/generated/picker.iife.js?raw'
-import type { PreviewField, PreviewResult } from '@/lib/picker/preview'
+import type { PreviewField, PreviewResult, PreviewStep, StepOutcome } from '@/lib/picker/preview'
 import {
   PICKER_GLOBAL,
   PICKER_VERSION,
@@ -83,6 +83,8 @@ export interface UsePagePicker {
   testSelector: (selector: string) => Promise<number>
   /** Resolve fields against the live page, exactly as replay would. */
   preview: (fields: PreviewField[]) => Promise<PreviewResult[]>
+  /** Apply reveal steps in the page before previewing. A rehearsal, not replay. */
+  applySteps: (steps: PreviewStep[]) => Promise<StepOutcome[]>
 }
 
 export function usePagePicker(sessionId: string | null): UsePagePicker {
@@ -148,6 +150,16 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
+  const applySteps = useCallback(
+    async (steps: PreviewStep[]): Promise<StepOutcome[]> => {
+      // `applySteps` is async in the page, and `page.evaluate` awaits a
+      // returned promise -- so the outcomes come back resolved.
+      const out = await run(`window.${PICKER_GLOBAL}.applySteps(${JSON.stringify(steps)})`)
+      return Array.isArray(out) ? (out as StepOutcome[]) : []
+    },
+    [run],
+  )
+
   const pick = useCallback(
     async (mode: PickerMode): Promise<PickPayload | null> => {
       setError(null)
@@ -202,5 +214,5 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
-  return { status, error, pick, cancel, refine, testSelector, preview }
+  return { status, error, pick, cancel, refine, testSelector, preview, applySteps }
 }

@@ -34,7 +34,7 @@ import {
 } from './vendor/content/utils/highlight-tokens'
 import { PICKER_GLOBAL, PICKER_VERSION, type PickerApi, type PickerMode, type PickMessage } from './protocol'
 import { enrich } from './enrich'
-import { PREVIEW_JS } from './preview'
+import { APPLY_STEPS_JS, PREVIEW_JS } from './preview'
 
 const TEST_HIGHLIGHT_CLASS = 'crawlpilot-test-highlight'
 
@@ -208,6 +208,7 @@ function testSelector(selector: string): number {
  * than being re-sent and re-parsed on every preview.
  */
 const runPreview = new Function(`return (${PREVIEW_JS})`)() as (fields: unknown[]) => unknown[]
+const runSteps = new Function(`return (${APPLY_STEPS_JS})`)() as (steps: unknown[]) => Promise<unknown[]>
 
 const api: PickerApi = {
   version: PICKER_VERSION,
@@ -220,6 +221,7 @@ const api: PickerApi = {
   clearHighlights,
   testSelector,
   preview: (fields) => runPreview(fields),
+  applySteps: (steps) => runSteps(steps),
 }
 
 /**
