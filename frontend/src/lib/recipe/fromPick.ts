@@ -24,7 +24,7 @@
  *    just happened and worthless tomorrow.
  */
 import { filterPersistableChain } from '@/lib/picker/vendor/shared/selectors/stability'
-import type { PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
+import type { HighlightField, PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
 import type { PreviewField } from '@/lib/picker/preview'
 import { SOURCE_PRIORITY } from './document'
 import type {
@@ -394,6 +394,46 @@ export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
             : undefined,
       })),
   }))
+}
+
+/**
+ * Field drafts as on-page markers, so the page shows what has been taken.
+ *
+ * Only DOM candidates can be marked -- a `json_ld` path has no element to draw
+ * a box around -- and only the *winning* one, since the marker should show
+ * where the value will actually come from rather than every place it might.
+ */
+export function toHighlightFields(drafts: FieldDraft[]): HighlightField[] {
+  return drafts.flatMap((draft, index) => {
+    const dom = draft.candidates.find(
+      (c) => (c.locator.kind === 'css' || c.locator.kind === 'xpath') && c.locator.selector,
+    )
+    if (!dom) return []
+    return [
+      {
+        id: `${index}:${draft.name}`,
+        name: draft.name,
+        action: 'extract' as const,
+        selectors: [{ type: dom.locator.kind === 'xpath' ? 'xpath' : 'css', value: dom.locator.selector! }],
+      },
+    ]
+  })
+}
+
+/** Reveal steps as on-page markers, in the amber "this gets clicked" colour. */
+export function stepsToHighlightFields(steps: { op: string; target?: Locator }[]): HighlightField[] {
+  return steps.flatMap((step, index) => {
+    const selector = step.target?.selector
+    if (!selector) return []
+    return [
+      {
+        id: `step:${index}`,
+        name: `${index + 1}. ${step.op}`,
+        action: 'click' as const,
+        selectors: [{ type: step.target?.kind === 'xpath' ? 'xpath' : 'css', value: selector }],
+      },
+    ]
+  })
 }
 
 /**

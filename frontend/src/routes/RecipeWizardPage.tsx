@@ -24,6 +24,8 @@ import {
   applyDrafts,
   detailPickToDraft,
   listPickToDrafts,
+  stepsToHighlightFields,
+  toHighlightFields,
   toPreviewFields,
   withJsonAlternatives,
   type FieldDraft,
@@ -82,6 +84,27 @@ export function RecipeWizardPage() {
 
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
+
+  /**
+   * Keep the page marked with what has already been taken.
+   *
+   * This is the feedback that makes picking feel like picking: without it the
+   * page looks identical before and after every click, and an author working
+   * through a twelve-column table has no way to tell which cells they already
+   * have. Reveal-step targets are marked too, in a different colour, because
+   * "what gets clicked" and "what gets read" are different claims about the
+   * same page.
+   *
+   * Skipped while a pick is in flight -- the picker draws its own overlay, and
+   * two decoration systems fighting over the same element is worse than one.
+   */
+  useEffect(() => {
+    if (!sessionId || picker.status !== 'idle') return
+    picker.showHighlights([...toHighlightFields(drafts), ...stepsToHighlightFields(reveal)])
+    // `picker.showHighlights` is stable via useCallback; listing the whole
+    // picker object would re-fire this on every status change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, drafts, reveal, picker.status, picker.showHighlights])
 
   // A preview describes one exact recipe. The moment a field is renamed, a
   // candidate reordered or a reveal step added, the table on screen is about a
