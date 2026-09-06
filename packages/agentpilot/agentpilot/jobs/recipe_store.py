@@ -180,6 +180,106 @@ class PostgresRecipeStore:
             updated_at=now,
         )
 
+    async def save_document(
+        self,
+        *,
+        tenant: str,
+        document: dict[str, Any],
+        recipe_id: str | None = None,
+        schedule_interval_seconds: float | None = None,
+    ) -> tuple[str, int]:
+        """Persist a hand-authored v2 document, as a new recipe or a new version.
+
+        Returns `(recipe_id, version)`.
+
+        Two things this deliberately does NOT do:
+
+        - **It does not queue a run.** `create_recipe` exists to start an agent
+          *build*; a document that arrived here was authored and previewed
+          against a live page by a person, and kicking off a build would
+          overwrite their work with the agent's answer.
+        - **It does not touch `health_status`.** Health is a statement about
+          runs, and this document has had none. A new recipe starts `degraded`
+          -- unverified, which is true -- and an edit leaves the existing value
+          alone rather than laundering a broken recipe healthy.
+
+        The v1 columns stay authoritative for every existing reader (worker,
+        scheduler, `RecipeOut`); `document` carries what v1 has no room for --
+        variants, defaults, sample_urls, a multi-matcher target. Writing both
+        in one transaction is what keeps them from disagreeing.
+        """
+
+        from psycopg.rows import dict_row
+        from psycopg.types.json import Jsonb
+
+        now = datetime.now(UTC)
+        # Derived v1 projections. `target.match` is a list in v2 and one column
+        # here, so the first matcher is what legacy readers see -- lossy by
+        # nature, which is exactly why `document` exists alongside it.
+        matchers = (document.get("target") or {}).get("match") or []
+        url_pattern = str(matchers[0].get("pattern", "")) if matchers else ""
+        name = str(document.get("name") or "")
+        field_schema = document.get("fields") or {}
+        global_setup = document.get("global_setup") or []
+        field_groups = document.get("field_groups") or []
+
+        async with self._pool.connection() as conn, conn.transaction():
+            if recipe_id is None:
+                new_id = str(uuid.uuid4())
+                version = 1
+                await conn.execute(
+                    """
+                    INSERT INTO recipes (
+                        recipe_id, tenant, name, url_pattern, field_schema, version,
+                        global_setup, field_groups, document, health_status,
+                        schedule_interval_seconds, next_due_at, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'degraded', %s, %s, %s, %s)
+                    """,
+                    (
+                        new_id, tenant, name, url_pattern, Jsonb(field_schema), version,
+                        Jsonb(global_setup), Jsonb(field_groups), Jsonb(document),
+                        schedule_interval_seconds,
+                        _next_due_at(now, schedule_interval_seconds), now, now,
+                    ),
+                )
+                recipe_id = new_id
+            else:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(
+                        "SELECT version FROM recipes "
+                        "WHERE recipe_id = %s AND tenant = %s FOR UPDATE",
+                        (recipe_id, tenant),
+                    )
+                    row = await cur.fetchone()
+                if row is None:
+                    raise KeyError(recipe_id)
+                version = int(row["version"]) + 1
+                await conn.execute(
+                    "UPDATE recipes SET name = %s, url_pattern = %s, field_schema = %s, "
+                    "version = %s, global_setup = %s, field_groups = %s, document = %s, "
+                    "updated_at = %s WHERE recipe_id = %s AND tenant = %s",
+                    (
+                        name, url_pattern, Jsonb(field_schema), version,
+                        Jsonb(global_setup), Jsonb(field_groups), Jsonb(document),
+                        now, recipe_id, tenant,
+                    ),
+                )
+
+            # `recipe_versions` is append-only, so every save is recoverable --
+            # the same guarantee build and heal already rely on for rollback.
+            await conn.execute(
+                "INSERT INTO recipe_versions "
+                "(recipe_id, version, global_setup, field_groups, document, diff_summary) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    recipe_id, version, Jsonb(global_setup), Jsonb(field_groups),
+                    Jsonb(document), "authored in the studio",
+                ),
+            )
+
+        return recipe_id, version
+
     async def get_recipe(self, recipe_id: str, tenant: str) -> RecipeOut | None:
         from psycopg.rows import dict_row
 

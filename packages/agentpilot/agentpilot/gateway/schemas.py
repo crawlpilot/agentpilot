@@ -445,6 +445,31 @@ class RecipeCreateRequest(BaseModel):
     `replay` run automatically every N seconds via `RecipeSchedulerLoop`."""
 
 
+class RecipeSaveRequest(BaseModel):
+    """A v2 recipe document, authored by hand rather than by an agent.
+
+    Deliberately NOT `RecipeCreateRequest`: that one takes a name, a URL and a
+    field schema and *starts an agent build*. This carries a finished document
+    that a person already previewed against a live page, and saving it must not
+    overwrite it with the agent's answer.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    recipe: dict[str, Any]
+    """The full v2 document -- see `docs/schemas/recipe-v2.schema.json`."""
+    schedule_interval_seconds: float | None = None
+
+
+class RecipeSaveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipe_id: str
+    version: int
+    warnings: list[str] = []
+    """Lint findings that did not block the save, so the studio and the server
+    cannot drift on what counts as merely questionable."""
+
+
 class RecipeCreateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool

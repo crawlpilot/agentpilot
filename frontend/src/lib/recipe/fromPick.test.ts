@@ -2,8 +2,11 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { PICKER_GLOBAL, type PickerApi, type PickPayload } from '@/lib/picker/protocol'
+import type { PreviewRowsResult } from '@/lib/picker/preview'
 import {
   chainToCandidates,
+  toHighlightFields,
+  toPreviewRowsFields,
   detailPickToDraft,
   itemsToRecipe,
   listPickToDrafts,
@@ -47,6 +50,14 @@ function layoutStub() {
     configurable: true,
     get() { return this.textContent },
     set(v) { this.textContent = v },
+  })
+  // jsdom never implements `offsetParent`, and `DataExtractor` skips any
+  // element with a null one and no direct text -- which is every `<a>` that
+  // wraps an image. Without this the url and image columns silently vanish and
+  // these tests would be blind to exactly the types most likely to break.
+  Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+    configurable: true,
+    get() { return this.parentElement },
   })
   Element.prototype.scrollIntoView = () => {}
 }
@@ -364,5 +375,76 @@ describe('itemsToRecipe', () => {
     const r = itemsToRecipe(emptyRecipe('r'), [])
     expect(r.field_groups).toHaveLength(1)
     expect(r.field_groups[0].field_names).toEqual([])
+  })
+})
+
+
+describe('list extraction, end to end', () => {
+  it('captures url and image columns, not only text', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const types = draft.spec.type.columns!
+
+    // Every `<a href>` and `<img src>` in a row is data. Losing them leaves an
+    // author with a "list extraction that does not work" for exactly the two
+    // types they most often want.
+    const valueTypes = Object.values(types).map((t) => t.value_type)
+    expect(valueTypes.filter((v) => v === 'url').length).toBeGreaterThanOrEqual(2)
+
+    for (const [name, candidates] of Object.entries(draft.columns!)) {
+      if (types[name].value_type !== 'url') continue
+      // A url column must READ an attribute -- a link's text is its label.
+      expect(['href', 'src'], name).toContain(candidates[0].locator.attribute)
+    }
+  })
+
+  it('never binds a column to one row\'s own value', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+
+    // `[src="/1.jpg"]` is unique, and useless: it addresses row one's image
+    // rather than "the image in this row", so it resolves for the first row
+    // and matches nothing below it.
+    for (const [name, candidates] of Object.entries(draft.columns!)) {
+      for (const c of candidates) {
+        const selector = c.locator.selector ?? ''
+        expect(selector, `${name}: ${selector}`).not.toMatch(/\[\s*(src|href|id|data-id)\s*=/)
+      }
+    }
+  })
+
+  it('resolves every column in every row, aligned', async () => {
+    document.body.innerHTML = LIST_HTML
+    const payload = await pick('list', 'li.card')
+    const draft = listPickToDrafts(payload).drafts[0]
+
+    const api = install()
+    const [table] = api.previewRows(toPreviewRowsFields([draft]) as never[]) as PreviewRowsResult[]
+
+    expect(table.rows).toHaveLength(3)
+    for (const row of table.rows) {
+      for (const column of Object.keys(draft.columns!)) {
+        expect(row[column], `${column} present in every row`).not.toBeNull()
+      }
+    }
+    // Row-wise means the values stay with their own row.
+    const textColumn = Object.entries(draft.spec.type.columns!)
+      .find(([, t]) => t.value_type === 'string')?.[0]
+    if (textColumn) {
+      expect(table.rows.map((r) => r[textColumn])).toEqual(['Alpha', 'Beta', 'Gamma'])
+    }
+  })
+
+  it('marks every column of a picked list on the page', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const marks = toHighlightFields([draft])
+
+    // A table carries no top-level candidates, so reading `draft.candidates`
+    // here returned nothing and a picked list left the page unmarked.
+    expect(marks).toHaveLength(Object.keys(draft.columns!).length)
+    for (const mark of marks) {
+      expect(document.querySelector(mark.selectors[0].value), mark.name).not.toBeNull()
+    }
   })
 })
