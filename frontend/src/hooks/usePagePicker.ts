@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeSession } from '@/lib/api/sessions'
 import { useAuth } from '@/lib/auth/AuthContext'
 import pickerBundle from '@/lib/picker/generated/picker.iife.js?raw'
-import type { PreviewField, PreviewResult, PreviewStep, StepOutcome } from '@/lib/picker/preview'
+import type {
+  PreviewField,
+  PreviewResult,
+  PreviewRowsField,
+  PreviewRowsResult,
+  PreviewStep,
+  StepOutcome,
+} from '@/lib/picker/preview'
 import {
   PICKER_GLOBAL,
   PICKER_VERSION,
@@ -90,6 +97,8 @@ export interface UsePagePicker {
   testSelector: (selector: string) => Promise<number>
   /** Resolve fields against the live page, exactly as replay would. */
   preview: (fields: PreviewField[]) => Promise<PreviewResult[]>
+  /** Read a `dom_rows` table row-wise, exactly as replay would. */
+  previewRows: (fields: PreviewRowsField[]) => Promise<PreviewRowsResult[]>
   /** Apply reveal steps in the page before previewing. A rehearsal, not replay. */
   applySteps: (steps: PreviewStep[]) => Promise<StepOutcome[]>
   /** Mark everything already picked, persistently, on the page. */
@@ -155,6 +164,14 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
       // rather than syntax -- the same discipline `evaluate.py` uses.
       const out = await run(`window.${PICKER_GLOBAL}.preview(${JSON.stringify(fields)})`)
       return Array.isArray(out) ? (out as PreviewResult[]) : []
+    },
+    [run],
+  )
+
+  const previewRows = useCallback(
+    async (fields: PreviewRowsField[]): Promise<PreviewRowsResult[]> => {
+      const out = await run(`window.${PICKER_GLOBAL}.previewRows(${JSON.stringify(fields)})`)
+      return Array.isArray(out) ? (out as PreviewRowsResult[]) : []
     },
     [run],
   )
@@ -237,5 +254,5 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
-  return { status, error, pick, cancel, refine, testSelector, preview, applySteps, showHighlights }
+  return { status, error, pick, cancel, refine, testSelector, preview, previewRows, applySteps, showHighlights }
 }

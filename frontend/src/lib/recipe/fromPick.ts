@@ -25,7 +25,7 @@
  */
 import { filterPersistableChain } from '@/lib/picker/vendor/shared/selectors/stability'
 import type { HighlightField, PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
-import type { PreviewField } from '@/lib/picker/preview'
+import type { PreviewField, PreviewLocator, PreviewRowsField } from '@/lib/picker/preview'
 import { SOURCE_PRIORITY } from './document'
 import type {
   Candidate,
@@ -34,6 +34,7 @@ import type {
   FieldSpec,
   Locator,
   Recipe,
+  RepeatSpec,
   Transform,
   TypeSpec,
   ValueType,
@@ -165,25 +166,6 @@ function containerScope(payload: PickPayload): Locator | undefined {
     kind: isXPath(payload.containerSelector) ? 'xpath' : 'css',
     selector: payload.containerSelector,
   }
-}
-
-/**
- * Compose a document-level selector for a column of a repeating list.
- *
- * The picker gives a row selector and a row-*relative* column selector; a
- * single `all: true` read needs them as one descendant expression, because
- * `within` cannot be the row (see `containerScope`). `li.card` + `.t` becomes
- * `li.card .t`, which matches one node per row, in row order.
- *
- * `:scope >` is a relative-selector form that only means anything inside a
- * `querySelectorAll` on the row itself; rewritten to a plain child combinator
- * it carries the same meaning in the composed expression.
- */
-function composeColumnSelector(itemSelector: string, columnSelector: string): string | null {
-  if (isXPath(itemSelector) || isXPath(columnSelector)) return null
-  const relative = columnSelector.trim().replace(/^:scope\s*/, '')
-  if (!relative) return null
-  return relative.startsWith('>') ? `${itemSelector} ${relative}` : `${itemSelector} ${relative}`
 }
 
 /** A column name the recipe document can key on. */
@@ -327,105 +309,6 @@ export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> 
 }
 
 /**
- * Write drafts into a recipe as a new group, with its `repeat` when the pick
- * was a repeating list.
- *
- * Goes through the document's own helpers rather than assembling the object
- * directly: a field name is a key in `fields`, in `field_groups[].field_names`
- * *and* in `field_groups[].bindings`, and `document.ts` exists to keep those
- * three from drifting.
- */
-export function applyDrafts(
-  recipe: Recipe,
-  drafts: FieldDraft[],
-  options: { groupId?: string } = {},
-): Recipe {
-  const groupId = options.groupId ?? recipe.field_groups[0]?.group_id ?? 'core'
-  let next = recipe
-
-  if (!next.field_groups.some((g) => g.group_id === groupId)) {
-    const group: FieldGroup = { group_id: groupId, field_names: [], bindings: {}, steps: [] }
-    next = { ...next, field_groups: [...next.field_groups, group] }
-  }
-
-  for (const draft of drafts) {
-    if (next.fields[draft.name]) continue
-    next = {
-      ...next,
-      fields: { ...next.fields, [draft.name]: draft.spec },
-      field_groups: next.field_groups.map((g) =>
-        g.group_id === groupId
-          ? {
-              ...g,
-              field_names: [...g.field_names, draft.name],
-              bindings: { ...g.bindings, [draft.name]: draft.candidates },
-            }
-          : g,
-      ),
-    }
-  }
-
-  return next
-}
-
-/**
- * The attribute a field reads, as one answer rather than per-candidate.
- *
- * Every candidate for a field reads the same thing -- they are alternative
- * routes to one value, not different values -- so the editor treats it as a
- * property of the field. `null` means the candidates disagree, which only
- * happens after hand-editing and is worth showing rather than silently
- * normalising away.
- */
-export function readAttribute(candidates: Candidate[]): string | null {
-  if (candidates.length === 0) return 'text'
-  const first = candidates[0].locator.attribute ?? 'text'
-  return candidates.every((c) => (c.locator.attribute ?? 'text') === first) ? first : null
-}
-
-/** Set the attribute every candidate of a field reads. */
-export function setReadAttribute(candidates: Candidate[], attribute: string): Candidate[] {
-  return candidates.map((candidate) => ({
-    ...candidate,
-    locator: {
-      ...candidate.locator,
-      // `text` is the reader's default; storing it explicitly is noise in the
-      // exported document, and the structured kinds have no attribute at all.
-      attribute: attribute === 'text' ? undefined : attribute,
-    },
-  }))
-}
-
-/**
- * Field drafts as the preview evaluator wants them.
- *
- * Structured candidates (`json_ld`, `hydration`, `meta`) are dropped rather
- * than faked: the preview reads the DOM, and a JSON path resolves against
- * data the reader here does not hold. Silently skipping them keeps the
- * preview honest -- a field bound only to a JSON path reports `empty` here and
- * the UI says why, which is better than inventing a value for it.
- */
-export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
-  return drafts.map((draft) => ({
-    name: draft.name,
-    required: draft.spec.required,
-    candidates: draft.candidates
-      .filter((c) => c.locator.kind === 'css' || c.locator.kind === 'xpath')
-      .map((c) => ({
-        kind: c.locator.kind as 'css' | 'xpath',
-        selector: c.locator.selector ?? '',
-        attribute: c.locator.attribute,
-        all: c.locator.all,
-        index: c.locator.index,
-        within:
-          c.locator.within && (c.locator.within.kind === 'css' || c.locator.within.kind === 'xpath')
-            ? { kind: c.locator.within.kind as 'css' | 'xpath', selector: c.locator.within.selector ?? '' }
-            : undefined,
-      })),
-  }))
-}
-
-/**
  * One entry in the authoring list: a field to read, an action to perform, or a
  * marker that the page must be reloaded first.
  *
@@ -527,14 +410,23 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
     const groupId = groups.length === 1 ? 'core' : `group_${index + 1}`
     const bindings: Record<string, Candidate[]> = {}
     const fieldNames: string[] = []
+    let repeat: RepeatSpec | undefined
     for (const draft of group.drafts) {
       if (next.fields[draft.name]) continue
       next = { ...next, fields: { ...next.fields, [draft.name]: draft.spec } }
       fieldNames.push(draft.name)
-      bindings[draft.name] = draft.candidates
+      if (draft.columns) {
+        // A table binds by COLUMN, not by the field name -- the field itself
+        // appears only in `field_names`. See `FieldDraft.columns`.
+        Object.assign(bindings, draft.columns)
+        if (draft.repeat) repeat = draft.repeat
+      } else {
+        bindings[draft.name] = draft.candidates
+      }
     }
     const fieldGroup: FieldGroup = { group_id: groupId, field_names: fieldNames, bindings }
     if (group.steps.length > 0) fieldGroup.steps = group.steps
+    if (repeat) fieldGroup.repeat = repeat
     next = { ...next, field_groups: [...next.field_groups, fieldGroup] }
   })
 
@@ -581,6 +473,91 @@ export function stepsToHighlightFields(steps: { op: string; target?: Locator }[]
         name: `${index + 1}. ${step.op}`,
         action: 'click' as const,
         selectors: [{ type: step.target?.kind === 'xpath' ? 'xpath' : 'css', value: selector }],
+      },
+    ]
+  })
+}
+
+/**
+ * The attribute a field reads, as one answer rather than per-candidate.
+ *
+ * Every candidate for a field reads the same thing -- they are alternative
+ * routes to one value, not different values -- so the editor treats it as a
+ * property of the field. `null` means the candidates disagree, which only
+ * happens after hand-editing and is worth showing rather than silently
+ * normalising away.
+ */
+export function readAttribute(candidates: Candidate[]): string | null {
+  if (candidates.length === 0) return 'text'
+  const first = candidates[0].locator.attribute ?? 'text'
+  return candidates.every((c) => (c.locator.attribute ?? 'text') === first) ? first : null
+}
+
+/** Set the attribute every candidate of a field reads. */
+export function setReadAttribute(candidates: Candidate[], attribute: string): Candidate[] {
+  return candidates.map((candidate) => ({
+    ...candidate,
+    locator: {
+      ...candidate.locator,
+      // `text` is the reader's default; storing it explicitly is noise in the
+      // exported document, and the structured kinds have no attribute at all.
+      attribute: attribute === 'text' ? undefined : attribute,
+    },
+  }))
+}
+
+/**
+ * Scalar field drafts as the preview evaluator wants them.
+ *
+ * Structured candidates (`json_ld`, `hydration`, `meta`) are dropped rather
+ * than faked: the preview reads the DOM, and a JSON path resolves against data
+ * the reader here does not hold. A field bound only to a JSON path reports
+ * `empty` and the UI says why, which beats inventing a value for it.
+ */
+export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
+  // Table drafts read row-wise instead -- see `toPreviewRowsFields`.
+  return drafts
+    .filter((d) => !d.columns)
+    .map((draft) => ({
+      name: draft.name,
+      required: draft.spec.required,
+      candidates: toPreviewLocators(draft.candidates),
+    }))
+}
+
+function toPreviewLocators(candidates: Candidate[]): PreviewLocator[] {
+  return candidates
+    .filter((c) => c.locator.kind === 'css' || c.locator.kind === 'xpath')
+    .map((c) => ({
+      kind: c.locator.kind as 'css' | 'xpath',
+      selector: c.locator.selector ?? '',
+      attribute: c.locator.attribute,
+      all: c.locator.all,
+      index: c.locator.index,
+    }))
+}
+
+/** Table drafts as row-wise preview requests. Scalar drafts are ignored. */
+export function toPreviewRowsFields(drafts: FieldDraft[]): PreviewRowsField[] {
+  return drafts.flatMap((draft) => {
+    const rows = draft.repeat?.rows_locator
+    if (!draft.columns || !rows?.selector) return []
+    if (rows.kind !== 'css' && rows.kind !== 'xpath') return []
+    return [
+      {
+        name: draft.name,
+        rows: {
+          kind: rows.kind,
+          selector: rows.selector,
+          within:
+            rows.within && (rows.within.kind === 'css' || rows.within.kind === 'xpath')
+              ? { kind: rows.within.kind, selector: rows.within.selector ?? '' }
+              : undefined,
+        },
+        columns: Object.fromEntries(
+          Object.entries(draft.columns).map(([name, cands]) => [name, toPreviewLocators(cands)]),
+        ),
+        maxRows: draft.repeat?.max_iterations ?? 100,
       },
     ]
   })

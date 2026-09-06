@@ -258,7 +258,13 @@ export interface Candidate {
 }
 
 export interface RepeatSpec {
-  kind: 'dom' | 'json'
+  /**
+   * `json`     -- iterate an array already in the page's structured data.
+   * `dom_rows` -- N row elements already rendered; columns resolve relative
+   *               to their own row (contract v2.1, `replay.py::_rows_from_dom_rows`).
+   * `dom`      -- click through an option set, re-reading after each click.
+   */
+  kind: 'dom' | 'dom_rows' | 'json'
   option_locator?: Locator
   action?: StepOp
   settle?: Step

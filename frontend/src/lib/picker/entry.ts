@@ -41,7 +41,7 @@ import {
   type PickMessage,
 } from './protocol'
 import { enrich } from './enrich'
-import { runPreview, runSteps } from './preview'
+import { runPreview, runPreviewRows, runSteps } from './preview'
 
 const TEST_HIGHLIGHT_CLASS = 'crawlpilot-test-highlight'
 
@@ -226,6 +226,7 @@ const api: PickerApi = {
   clearHighlights,
   testSelector,
   preview: (fields) => runPreview(fields as Parameters<typeof runPreview>[0]),
+  previewRows: (fields) => runPreviewRows(fields as Parameters<typeof runPreviewRows>[0]),
   applySteps: (steps) => runSteps(steps as Parameters<typeof runSteps>[0]),
 }
 

@@ -156,6 +156,8 @@ export interface PickerApi {
    * See `preview.ts` -- values are pre-transform.
    */
   preview(fields: unknown[]): unknown[]
+  /** Row-wise read for a `dom_rows` table. See `preview.ts`. */
+  previewRows(fields: unknown[]): unknown[]
   /**
    * Apply reveal steps in the page before a preview. A rehearsal, not replay
    * -- see `preview.ts::APPLY_STEPS_JS`.
