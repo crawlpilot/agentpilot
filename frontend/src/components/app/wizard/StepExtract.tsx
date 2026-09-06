@@ -19,12 +19,13 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Reorderable } from '@/components/ui/reorderable'
 import { CandidateChain } from './CandidateChain'
+import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
 import { readAttribute, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
-import type { Candidate, OnError, Step, StepOp, ValueType } from '@/lib/recipe/types'
+import type { Candidate, OnError, Step, StepOp, TypeSpec, ValueType } from '@/lib/recipe/types'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -401,54 +402,226 @@ function FieldRow({
 
       {open && (
         <div className="flex flex-col gap-2 pl-5 pt-2">
-          <div className="flex items-center gap-1.5">
-            <Select value={attribute} onValueChange={(v) => setCandidates(setReadAttribute(draft.candidates, v))}>
-              <SelectTrigger className="h-7 flex-1 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {READ_ATTRIBUTES.map((a) => (
-                  <SelectItem key={a.value} value={a.value}>reads: {a.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={inner?.value_type ?? 'string'} onValueChange={(v) => setValueType(v as ValueType)}>
-              <SelectTrigger className="h-7 w-24 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {VALUE_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <p className="text-[10px] leading-snug text-muted-foreground">
-            {READ_ATTRIBUTES.find((a) => a.value === attribute)?.hint}
-          </p>
+          {draft.columns ? (
+            <ColumnList draft={draft} onPatch={onPatch} onTestSelector={onTestSelector} group={group} />
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5">
+                <Select value={attribute} onValueChange={(v) => setCandidates(setReadAttribute(draft.candidates, v))}>
+                  <SelectTrigger className="h-7 flex-1 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {READ_ATTRIBUTES.map((a) => (
+                      <SelectItem key={a.value} value={a.value}>reads: {a.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={inner?.value_type ?? 'string'} onValueChange={(v) => setValueType(v as ValueType)}>
+                  <SelectTrigger className="h-7 w-24 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {VALUE_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                {READ_ATTRIBUTES.find((a) => a.value === attribute)?.hint}
+              </p>
 
-          {!structured && jsonProbeReady && onFindInJson && (
-            <Button size="sm" variant="outline" className={cn('h-6 w-fit px-1.5 text-[11px]')}
-              title="Look for this value in the page's JSON-LD, hydration state or meta tags"
-              onClick={onFindInJson}>
-              <Sparkles className="size-3" />
-              Find in page JSON
-            </Button>
+              {!structured && jsonProbeReady && onFindInJson && (
+                <Button size="sm" variant="outline" className={cn('h-6 w-fit px-1.5 text-[11px]')}
+                  title="Look for this value in the page's JSON-LD, hydration state or meta tags"
+                  onClick={onFindInJson}>
+                  <Sparkles className="size-3" />
+                  Find in page JSON
+                </Button>
+              )}
+
+              <CleanupEditor
+                group={`clean:${group}`}
+                transforms={draft.spec.transform ?? []}
+                sample={draft.preview}
+                onChange={(transform) => onPatch({ spec: { ...draft.spec, transform } })}
+              />
+
+              <div>
+                <p className="pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Fallback chain &mdash; tried in order until one resolves
+                </p>
+                <CandidateChain
+                  group={group}
+                  candidates={draft.candidates}
+                  onChange={setCandidates}
+                  onTest={onTestSelector}
+                />
+              </div>
+            </>
           )}
-
-          <div>
-            <p className="pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-              Fallback chain &mdash; tried in order until one resolves
-            </p>
-            <CandidateChain
-              group={group}
-              candidates={draft.candidates}
-              onChange={setCandidates}
-              onTest={onTestSelector}
-            />
-          </div>
         </div>
       )}
+    </div>
+  )
+}
+
+
+/**
+ * The columns of a `dom_rows` table.
+ *
+ * A picked list is now one table field rather than a field per column, so
+ * without this there is nowhere to rename a column, fix its type, or clean its
+ * value -- and `SchemaGenerator`'s inferred names ("Span", "H3") are exactly
+ * the ones that need renaming.
+ *
+ * A column's cleanup lives on its *candidate*, not on a field spec: the table's
+ * `spec.transform` would apply to the whole row. That is the shape the Zara
+ * example uses for its `variants` columns too.
+ */
+function ColumnList({
+  draft,
+  onPatch,
+  onTestSelector,
+  group,
+}: {
+  draft: FieldDraft
+  onPatch: (next: Partial<FieldDraft>) => void
+  onTestSelector?: (selector: string) => Promise<number>
+  group: string
+}) {
+  const [open, setOpen] = useState<string | null>(null)
+  const columns = draft.columns ?? {}
+  const typeColumns = draft.spec.type.columns ?? {}
+
+  function rename(from: string, to: string) {
+    if (!to || to === from || columns[to]) return
+    const nextCols: Record<string, Candidate[]> = {}
+    const nextTypes: Record<string, TypeSpec> = {}
+    for (const key of Object.keys(columns)) {
+      nextCols[key === from ? to : key] = columns[key]
+      nextTypes[key === from ? to : key] = typeColumns[key]
+    }
+    const previews = { ...(draft.columnPreviews ?? {}) }
+    if (previews[from] !== undefined) {
+      previews[to] = previews[from]
+      delete previews[from]
+    }
+    onPatch({
+      columns: nextCols,
+      columnPreviews: previews,
+      spec: { ...draft.spec, type: { ...draft.spec.type, columns: nextTypes } },
+    })
+  }
+
+  function setColumn(name: string, candidates: Candidate[]) {
+    onPatch({ columns: { ...columns, [name]: candidates } })
+  }
+
+  function setColumnType(name: string, value_type: ValueType) {
+    onPatch({
+      spec: {
+        ...draft.spec,
+        type: {
+          ...draft.spec.type,
+          columns: { ...typeColumns, [name]: { kind: 'scalar', value_type } },
+        },
+      },
+    })
+  }
+
+  function removeColumn(name: string) {
+    const nextCols = { ...columns }
+    const nextTypes = { ...typeColumns }
+    delete nextCols[name]
+    delete nextTypes[name]
+    onPatch({
+      columns: nextCols,
+      spec: { ...draft.spec, type: { ...draft.spec.type, columns: nextTypes } },
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        Columns &mdash; each read relative to its own row
+      </p>
+      {Object.entries(columns).map(([name, candidates]) => {
+        const expanded = open === name
+        const attribute = readAttribute(candidates) ?? 'text'
+        const preview = draft.columnPreviews?.[name]
+        return (
+          <div key={name} className="rounded border border-border">
+            <div className="flex min-w-0 items-center gap-1.5 p-1.5">
+              <button type="button" className="shrink-0 text-muted-foreground"
+                onClick={() => setOpen(expanded ? null : name)}
+                aria-label={expanded ? 'Collapse' : 'Expand'}>
+                {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+              </button>
+              <Input
+                defaultValue={name}
+                onBlur={(e) => rename(name, e.target.value.trim())}
+                className="h-6 w-28 shrink-0 font-mono text-[11px]"
+                aria-label={`Output attribute name for ${name}`}
+                title="The output attribute name — the key this column appears under"
+              />
+              <Select
+                value={typeColumns[name]?.value_type ?? 'string'}
+                onValueChange={(v) => setColumnType(name, v as ValueType)}
+              >
+                <SelectTrigger className="h-6 w-20 shrink-0 text-[11px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {VALUE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {preview && (
+                <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title={preview}>
+                  {preview}
+                </span>
+              )}
+              <Button size="sm" variant="ghost" className="h-5 shrink-0 px-1"
+                aria-label={`Remove column ${name}`} onClick={() => removeColumn(name)}>
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+
+            {expanded && (
+              <div className="flex flex-col gap-2 border-t border-border p-1.5">
+                <Select value={attribute} onValueChange={(v) => setColumn(name, setReadAttribute(candidates, v))}>
+                  <SelectTrigger className="h-6 text-[11px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {READ_ATTRIBUTES.map((a) => (
+                      <SelectItem key={a.value} value={a.value}>reads: {a.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <CleanupEditor
+                  group={`clean:${group}:${name}`}
+                  transforms={candidates[0]?.transform ?? []}
+                  sample={preview}
+                  onChange={(transform) =>
+                    setColumn(
+                      name,
+                      candidates.map((c, i) =>
+                        i === 0 ? { ...c, transform: transform.length ? transform : null } : c,
+                      ),
+                    )
+                  }
+                />
+
+                <CandidateChain
+                  group={`${group}:${name}`}
+                  candidates={candidates}
+                  onChange={(next) => setColumn(name, next)}
+                  onTest={onTestSelector}
+                />
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
