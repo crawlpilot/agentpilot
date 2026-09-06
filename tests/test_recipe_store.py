@@ -319,3 +319,128 @@ async def test_due_recipes_excludes_on_demand_only_recipes(store: PostgresRecipe
     )
     due = await store.due_recipes(50)
     assert recipe.recipe_id not in {d[0] for d in due}
+
+
+# --- extraction jobs: a catalogue recipe applied to submitted urls ----------
+
+
+async def test_create_job_queues_one_run_per_url(store: PostgresRecipeStore) -> None:
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    urls = ["https://x.test/1", "https://x.test/2", "https://x.test/3"]
+    job_id, run_ids = await store.create_job(
+        recipe_id=recipe.recipe_id, tenant=tenant, recipe_version=1, urls=urls,
+    )
+    assert len(run_ids) == 3
+
+    job = await store.get_job(job_id, tenant)
+    assert job is not None
+    assert job.total == 3
+    assert job.queued == 3
+    assert job.status == "running"
+    assert job.finished_at is None
+    # The name is joined from the recipe rather than copied at submit time, so
+    # a renamed recipe does not leave old jobs pointing at a name nobody uses.
+    assert job.recipe_name == "n"
+
+    runs = await store.list_job_runs(job_id, tenant)
+    # Submission order, and stable across polls -- the runs share a timestamp
+    # to the microsecond, so `created_at` alone is not a total order.
+    assert [r.url for r in runs] == sorted(urls)
+    assert all(r.kind == "replay" and r.job_id == job_id for r in runs)
+
+
+async def test_a_job_run_carries_its_url_through_the_claim(store: PostgresRecipeStore) -> None:
+    """The worker branches on `job_id`/`url`, so both have to survive claiming.
+
+    Without them the run is indistinguishable from a scheduled replay, and
+    would be executed against the recipe's own url_pattern by the v1 engine.
+    """
+
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    job_id, _ = await store.create_job(
+        recipe_id=recipe.recipe_id, tenant=tenant, recipe_version=1,
+        urls=["https://x.test/only"],
+    )
+
+    claimed = [c for c in await store.claim_runs_batch(10) if c.job_id == job_id]
+    assert len(claimed) == 1
+    assert claimed[0].url == "https://x.test/only"
+    assert claimed[0].kind == "replay"
+
+
+async def test_job_rollup_counts_and_finishes(store: PostgresRecipeStore) -> None:
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    job_id, _ = await store.create_job(
+        recipe_id=recipe.recipe_id, tenant=tenant, recipe_version=1,
+        urls=["https://x.test/1", "https://x.test/2"],
+    )
+    claimed = [c for c in await store.claim_runs_batch(50) if c.job_id == job_id]
+    assert len(claimed) == 2
+
+    await store.complete_run(
+        claimed[0].run_id, claimed[0].lock, data={"price": "10"}, field_failures=None,
+    )
+    mid = await store.get_job(job_id, tenant)
+    assert mid is not None
+    # One done, one still running: not finished, and not yet a verdict.
+    assert (mid.completed, mid.running) == (1, 1)
+    assert mid.status == "running"
+    assert mid.finished_at is None
+
+    await store.fail_run(claimed[1].run_id, claimed[1].lock, "boom", max_attempts=0)
+    done = await store.get_job(job_id, tenant)
+    assert done is not None
+    assert (done.completed, done.failed) == (1, 1)
+    # Some yielded and some did not, which is a usable result -- not a failure.
+    assert done.status == "partial"
+    assert done.finished_at is not None
+
+
+async def test_jobs_are_scoped_to_their_tenant(store: PostgresRecipeStore) -> None:
+    tenant = _tenant()
+    other = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    job_id, _ = await store.create_job(
+        recipe_id=recipe.recipe_id, tenant=tenant, recipe_version=1,
+        urls=["https://x.test/1"],
+    )
+    assert await store.get_job(job_id, other) is None
+    assert await store.list_job_runs(job_id, other) == []
+    assert await store.list_jobs(tenant=other) == []
+    assert [j.job_id for j in await store.list_jobs(tenant=tenant)] == [job_id]
+
+
+async def test_the_v2_document_reaches_the_worker(store: PostgresRecipeStore) -> None:
+    """A job runs the v2 engine, which needs the document -- so `RecipeOut` has
+    to carry it. It did not, and the v1 columns alone cannot express a
+    `dom_rows` repeat or a field transform."""
+
+    tenant = _tenant()
+    document = {
+        "name": "n",
+        "target": {"match": []},
+        "fields": {"price": {"type": {"kind": "scalar", "value_type": "price"}}},
+        "field_groups": [{"group_id": "core", "field_names": ["price"], "bindings": {}}],
+        "sample_urls": [],
+    }
+    recipe_id, _ = await store.save_document(tenant=tenant, document=document)
+
+    fetched = await store.get_recipe(recipe_id, tenant)
+    assert fetched is not None
+    assert fetched.document is not None
+    assert fetched.document["fields"]["price"]["type"]["value_type"] == "price"
