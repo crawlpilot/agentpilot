@@ -8,6 +8,9 @@ import { LiveViewPanel } from '@/components/app/LiveViewPanel'
 import { EmptyState } from '@/components/app/EmptyState'
 import { useSessionsList } from '@/hooks/useSessionsList'
 import { useExecuteSession } from '@/hooks/useExecuteSession'
+import { usePagePicker } from '@/hooks/usePagePicker'
+import { PickerControls } from '@/components/app/wizard/PickerControls'
+import { detailPickToDraft } from '@/lib/recipe/fromPick'
 import { useToast } from '@/components/ui/toast'
 import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { Locator } from '@/lib/recipe/types'
@@ -18,19 +21,45 @@ interface Props {
 }
 
 /**
- * The centre pane: the page itself, and what is already in its JSON.
+ * The centre pane: the page itself, what is already in its JSON, and a
+ * click-to-pick for everything that is not.
  *
- * The picker here is inverted on purpose. A conventional element picker asks
- * "what selector reaches this element?" and answers in CSS, which is the
- * least durable of the seven locator kinds. This asks "where does this value
- * already live?", and on a page carrying JSON-LD or hydration state the
- * answer is usually a path that outlives the next redesign.
+ * The JSON probe below is inverted on purpose and stays that way. A
+ * conventional element picker asks "what selector reaches this element?" and
+ * answers in CSS, which is the least durable of the seven locator kinds; the
+ * probe asks "where does this value already live?", and on a page carrying
+ * JSON-LD or hydration state the answer is usually a path that outlives the
+ * next redesign.
+ *
+ * But that only helps on pages that ship structured data, and
+ * `docs/examples/recipes/amazon-product.v2.json` -- 971 lines, zero of it --
+ * is the standing proof that plenty do not. So the two sit side by side: pick
+ * visually when the value is only in the DOM, probe when it might not be. They
+ * answer different questions and neither subsumes the other.
  */
 export function PagePane({ selectedField, onAddCandidate }: Props) {
   const { data } = useSessionsList()
   const [sessionId, setSessionId] = useState<string | null>(null)
   const sessions = (data?.sessions ?? []).filter((s) => s.state === 'active')
   const active = sessionId ?? sessions[0]?.session_id ?? null
+  const picker = usePagePicker(active)
+  const { toast } = useToast()
+
+  async function pickElement() {
+    if (!selectedField) return
+    const payload = await picker.pick('detail')
+    if (!payload) return
+    const draft = detailPickToDraft(payload)
+    if (draft.candidates.length === 0) {
+      toast({ title: 'No usable selector for that element' })
+      return
+    }
+    for (const candidate of draft.candidates) onAddCandidate(candidate.locator)
+    toast({
+      title: `${draft.candidates.length} candidates added to ${selectedField}`,
+      description: draft.preview ? `Reads "${draft.preview}"` : undefined,
+    })
+  }
 
   if (sessions.length === 0) {
     return (
@@ -50,9 +79,9 @@ export function PagePane({ selectedField, onAddCandidate }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
         <Select value={active ?? ''} onValueChange={setSessionId}>
-          <SelectTrigger className="h-7 w-64 text-xs">
+          <SelectTrigger className="h-7 w-56 text-xs">
             <SelectValue placeholder="pick a session" />
           </SelectTrigger>
           <SelectContent>
@@ -63,9 +92,16 @@ export function PagePane({ selectedField, onAddCandidate }: Props) {
             ))}
           </SelectContent>
         </Select>
-        <span className="text-[11px] text-muted-foreground">
-          navigate to a sample URL, then read its JSON below
-        </span>
+        <div className="ml-auto">
+          <PickerControls
+            status={picker.status}
+            label={selectedField ? `Pick for ${selectedField}` : 'Pick element'}
+            disabled={!selectedField}
+            onStart={() => void pickElement()}
+            onCancel={picker.cancel}
+            onRefine={picker.refine}
+          />
+        </div>
       </div>
 
       <div className="min-h-0 flex-1">{active && <LiveViewPanel sessionId={active} />}</div>

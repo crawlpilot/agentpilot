@@ -51,6 +51,9 @@ function layoutStub() {
 }
 
 function install(): PickerApi {
+  // oxlint-disable-next-line no-eval -- evaluating the built bundle is the
+  // point: this test exists to prove the artefact installs itself under the
+  // function scope `page.evaluate` imposes. Nothing here is user input.
   eval(`(function(){ ${fs.readFileSync(BUNDLE, 'utf8')} })()`)
   return (window as unknown as Record<string, PickerApi>)[PICKER_GLOBAL]
 }
@@ -139,44 +142,46 @@ describe('chainToCandidates', () => {
 })
 
 describe('listPickToDrafts', () => {
-  it('binds every column relative to its row', async () => {
+  it('makes every column a list read scoped to the container', async () => {
     document.body.innerHTML = LIST_HTML
     const payload = await pick('list', 'li.card')
-    const { drafts, rows, count } = listPickToDrafts(payload)
+    const { drafts, count } = listPickToDrafts(payload)
 
     expect(count).toBe(3)
-    expect(rows).not.toBeNull()
-    expect(rows!.within?.selector).toBeTruthy()
     expect(drafts.length).toBeGreaterThan(0)
 
     for (const draft of drafts) {
       expect(draft.candidates.length, draft.name).toBeGreaterThan(0)
-      // Scoping is what makes one binding serve all N rows.
-      expect(draft.candidates[0].locator.within, draft.name).toEqual(rows)
+      expect(draft.spec.type.kind, draft.name).toBe('list')
+      const locator = draft.candidates[0].locator
+      // `all` is what turns one read into one value per row.
+      expect(locator.all, draft.name).toBe(true)
+      // Scoped to the container, never the row: `within` resolves to the
+      // FIRST match, so a row-scoped read would silently return row one only.
+      expect(locator.within?.selector, draft.name).toBe(payload.containerSelector)
     }
   })
 
-  it('resolves each binding inside a real row', async () => {
+  it('reads exactly one value per row, in row order', async () => {
     document.body.innerHTML = LIST_HTML
     const payload = await pick('list', 'li.card')
-    const { drafts, rows } = listPickToDrafts(payload)
+    const { drafts, count } = listPickToDrafts(payload)
 
-    const row = document.querySelector(rows!.within!.selector!)!.querySelector(rows!.selector!)!
+    const container = document.querySelector(payload.containerSelector)!
     for (const draft of drafts) {
       const selector = draft.candidates[0].locator.selector!
-      expect(row.querySelector(selector), `${draft.name} -> ${selector}`).not.toBeNull()
+      const matches = container.querySelectorAll(selector)
+      // The whole column-wise model depends on this: N rows in, N values out.
+      // A count that disagrees with the row count is exactly the misalignment
+      // that would shift every value after a missing cell.
+      expect(matches.length, `${draft.name} -> ${selector}`).toBe(count)
     }
   })
 
-  it('gives a text column a string type and a price column a price type', async () => {
+  it('carries a preview value for each column so it can be named', async () => {
     document.body.innerHTML = LIST_HTML
     const payload = await pick('list', 'li.card')
     const { drafts } = listPickToDrafts(payload)
-    for (const draft of drafts) {
-      expect(draft.spec.type.kind).toBe('scalar')
-    }
-    // Whatever names the inference produced, each draft carries the value the
-    // author will recognise when naming it.
     expect(drafts.some((d) => d.preview && d.preview.length > 0)).toBe(true)
   })
 })
@@ -211,7 +216,7 @@ describe('applyDrafts', () => {
   it('produces a document that passes the studio lint', async () => {
     document.body.innerHTML = LIST_HTML
     const payload = await pick('list', 'li.card')
-    const { drafts, rows, count } = listPickToDrafts(payload)
+    const { drafts } = listPickToDrafts(payload)
 
     let recipe = emptyRecipe('Search results')
     recipe = {
@@ -219,7 +224,7 @@ describe('applyDrafts', () => {
       sample_urls: ['https://example.com/1', 'https://example.com/2', 'https://example.com/3'],
       target: { match: [{ kind: 'glob', pattern: 'https://example.com/*' }] },
     }
-    recipe = applyDrafts(recipe, drafts, { groupId: 'rows', rows, maxRows: count })
+    recipe = applyDrafts(recipe, drafts, { groupId: 'rows' })
 
     const group = recipe.field_groups.find((g) => g.group_id === 'rows')!
     // The three places a field name lives must agree -- that is why applyDrafts
@@ -229,10 +234,6 @@ describe('applyDrafts', () => {
       expect(group.field_names).toContain(draft.name)
       expect(group.bindings[draft.name]?.length).toBeGreaterThan(0)
     }
-    expect(group.repeat?.kind).toBe('dom')
-    expect(group.repeat?.rows_locator).toEqual(rows)
-    expect(group.repeat?.row_field).toBe(drafts[0].name)
-
     const errors = lintRecipe(recipe).filter((issue) => issue.severity === 'error')
     expect(errors, JSON.stringify(errors, null, 2)).toEqual([])
   })
@@ -240,10 +241,10 @@ describe('applyDrafts', () => {
   it('is idempotent for a field that already exists', async () => {
     document.body.innerHTML = LIST_HTML
     const payload = await pick('list', 'li.card')
-    const { drafts, rows } = listPickToDrafts(payload)
+    const { drafts } = listPickToDrafts(payload)
 
-    const once = applyDrafts(emptyRecipe('r'), drafts, { groupId: 'rows', rows })
-    const twice = applyDrafts(once, drafts, { groupId: 'rows', rows })
+    const once = applyDrafts(emptyRecipe('r'), drafts, { groupId: 'rows' })
+    const twice = applyDrafts(once, drafts, { groupId: 'rows' })
     expect(Object.keys(twice.fields)).toEqual(Object.keys(once.fields))
     const group = twice.field_groups.find((g) => g.group_id === 'rows')!
     expect(group.field_names.length).toBe(drafts.length)

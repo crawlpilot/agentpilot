@@ -34,6 +34,7 @@ import type {
   Recipe,
   Transform,
   TypeSpec,
+  ValueType,
 } from './types'
 
 /** An XPath, as the vendored generators write them. */
@@ -96,10 +97,12 @@ const EXTRACTION_TYPE: Record<
 }
 
 interface ChainOptions {
-  /** Scope every candidate inside this locator -- a row, for list bindings. */
+  /** Scope every candidate inside this locator -- the container, for a list. */
   within?: Locator
   /** Read this attribute rather than the element's text. */
   attribute?: string
+  /** Return every match as a list rather than the first. */
+  all?: boolean
   /** Cap the chain. A 15-deep fallback list is noise in the editor. */
   limit?: number
 }
@@ -119,7 +122,7 @@ export function chainToCandidates(
   options: ChainOptions = {},
 ): Candidate[] {
   if (!chain?.length) return []
-  const { within, attribute, limit = 6 } = options
+  const { within, attribute, all, limit = 6 } = options
 
   // Persist only what will still resolve tomorrow. `filterPersistableChain`
   // also handles the degenerate case for us: on a page where *every* selector
@@ -131,6 +134,7 @@ export function chainToCandidates(
     const kind = isXPath(entry.selector) ? 'xpath' : 'css'
     const locator: Locator = { kind, selector: entry.selector }
     if (attribute) locator.attribute = attribute
+    if (all) locator.all = true
     if (within) locator.within = within
     return {
       // Source first, chain position second -- see the header note on
@@ -144,23 +148,40 @@ export function chainToCandidates(
   })
 }
 
-/** The best locator for the rows of a repeating group. */
-function rowsLocator(payload: PickPayload): Locator | null {
-  if (!payload.itemSelector) return null
-  const locator: Locator = {
-    kind: isXPath(payload.itemSelector) ? 'xpath' : 'css',
-    selector: payload.itemSelector,
+/**
+ * Scope a list read to the detected container.
+ *
+ * Without it, an item selector as general as `.card` collects the page's other
+ * cards too -- the container is what makes a loose selector safe, which is why
+ * the picker derives both. Note this is the *container*, never the row:
+ * `within` resolves to `containers[0]` (`recipe/v2/evaluate.py`), so scoping to
+ * a row selector would silently read the first row only.
+ */
+function containerScope(payload: PickPayload): Locator | undefined {
+  if (!payload.containerSelector) return undefined
+  return {
+    kind: isXPath(payload.containerSelector) ? 'xpath' : 'css',
+    selector: payload.containerSelector,
   }
-  // Scope rows to the detected container. Without it, an item selector as
-  // general as `.card` collects the page's other cards too -- the container is
-  // what makes a loose selector safe, which is why the picker derives both.
-  if (payload.containerSelector) {
-    locator.within = {
-      kind: isXPath(payload.containerSelector) ? 'xpath' : 'css',
-      selector: payload.containerSelector,
-    }
-  }
-  return locator
+}
+
+/**
+ * Compose a document-level selector for a column of a repeating list.
+ *
+ * The picker gives a row selector and a row-*relative* column selector; a
+ * single `all: true` read needs them as one descendant expression, because
+ * `within` cannot be the row (see `containerScope`). `li.card` + `.t` becomes
+ * `li.card .t`, which matches one node per row, in row order.
+ *
+ * `:scope >` is a relative-selector form that only means anything inside a
+ * `querySelectorAll` on the row itself; rewritten to a plain child combinator
+ * it carries the same meaning in the composed expression.
+ */
+function composeColumnSelector(itemSelector: string, columnSelector: string): string | null {
+  if (isXPath(itemSelector) || isXPath(columnSelector)) return null
+  const relative = columnSelector.trim().replace(/^:scope\s*/, '')
+  if (!relative) return null
+  return relative.startsWith('>') ? `${itemSelector} ${relative}` : `${itemSelector} ${relative}`
 }
 
 /** A column name the recipe document can key on. */
@@ -188,48 +209,67 @@ export interface FieldDraft {
 }
 
 /**
- * A list pick becomes a set of field drafts plus the `repeat` that walks rows.
+ * A repeating list becomes one `list`-typed field per column.
  *
- * Every column binds *relative to its row* (`within: rowsLocator`), which is
- * what makes one binding serve all N rows rather than only the first.
+ * This is not the shape you might expect, and the reason is a real limit in the
+ * replay engine rather than a preference. A `table` field's rows come only from
+ * `RepeatSpec`, and `RepeatSpec` has exactly two kinds
+ * (`recipe/v2/replay.py::_replay_repeat`): `json`, which iterates an array
+ * already in the page's structured data, and `dom`, which *clicks through an
+ * option set* and re-reads the page after each click. Neither describes "N
+ * cards already rendered on a search page" -- and modelling that as a `dom`
+ * repeat would click every card, navigating away from the page on the first
+ * one.
+ *
+ * What the engine does execute today is a column-wise read: a locator with
+ * `all: true` returns every match as a list, in document order. So each picked
+ * column becomes `list<T>` bound to `"<row> <column>"`, and the caller gets
+ * parallel arrays that zip into rows by index.
+ *
+ * The honest cost: nothing enforces that the arrays stay aligned. A card
+ * missing a price yields a shorter price list and silently shifts every value
+ * after it. A `dom_rows` repeat kind -- `rows_locator` over DOM nodes, columns
+ * resolved per row, exactly `_rows_from_json` but against elements -- is the
+ * fix, and it is a backend change deliberately outside this port's scope.
  */
 export function listPickToDrafts(payload: PickPayload): {
   drafts: FieldDraft[]
-  rows: Locator | null
   count: number
 } {
-  const rows = rowsLocator(payload)
   const columns = payload.data?.columns ?? []
   const firstRow = payload.data?.items?.[0]
+  const within = containerScope(payload)
+  const itemSelector = payload.itemSelector
   const names: string[] = []
 
   const drafts = columns.map((col) => {
     const name = toFieldName(col.name, names)
     names.push(name)
-    const mapped = COLUMN_TYPE[col.type] ?? COLUMN_TYPE.text
+    const mapped = COLUMN_VALUE_TYPE[col.type] ?? COLUMN_VALUE_TYPE.text
 
-    const spec: FieldSpec = { type: mapped.type, description: '' }
+    const spec: FieldSpec = {
+      type: { kind: 'list', items: { kind: 'scalar', value_type: mapped.value_type } },
+      description: '',
+    }
     if (mapped.transform) spec.transform = mapped.transform
 
-    const chain: PickSelector[] = col.locators ?? []
-    // The row-relative XPath is a last resort behind every CSS candidate, but
-    // it is better than a field with no binding on a page that defeats CSS.
-    if (col.xpath && !chain.some((c) => c.selector === col.xpath)) {
-      chain.push({ selector: col.xpath, strategy: 'XPath' })
+    // Compose each row-relative column selector against the row selector, so
+    // one read collects that column across every row.
+    const chain: PickSelector[] = []
+    for (const entry of col.locators ?? []) {
+      const composed = itemSelector ? composeColumnSelector(itemSelector, entry.selector) : null
+      if (composed) chain.push({ selector: composed, strategy: entry.strategy })
     }
 
     return {
       name,
       spec,
-      candidates: chainToCandidates(chain, {
-        within: rows ?? undefined,
-        attribute: col.attribute,
-      }),
+      candidates: chainToCandidates(chain, { within, attribute: col.attribute, all: true }),
       preview: firstRow ? String(firstRow[col.id] ?? '') : undefined,
     }
   })
 
-  return { drafts, rows, count: payload.count ?? 0 }
+  return { drafts, count: payload.count ?? 0 }
 }
 
 /** A detail pick becomes one field draft. */
@@ -268,9 +308,9 @@ export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> 
 export function applyDrafts(
   recipe: Recipe,
   drafts: FieldDraft[],
-  options: { groupId: string; rows?: Locator | null; maxRows?: number } = { groupId: 'core' },
+  options: { groupId?: string } = {},
 ): Recipe {
-  const { groupId, rows, maxRows } = options
+  const groupId = options.groupId ?? recipe.field_groups[0]?.group_id ?? 'core'
   let next = recipe
 
   if (!next.field_groups.some((g) => g.group_id === groupId)) {
@@ -292,28 +332,6 @@ export function applyDrafts(
             }
           : g,
       ),
-    }
-  }
-
-  if (rows) {
-    const rowField = drafts[0]?.name
-    if (rowField) {
-      next = {
-        ...next,
-        field_groups: next.field_groups.map((g) =>
-          g.group_id === groupId
-            ? {
-                ...g,
-                repeat: {
-                  kind: 'dom',
-                  rows_locator: rows,
-                  row_field: rowField,
-                  max_iterations: maxRows ?? 100,
-                },
-              }
-            : g,
-        ),
-      }
     }
   }
 

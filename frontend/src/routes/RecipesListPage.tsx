@@ -1,33 +1,37 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { BookOpen, PencilRuler } from 'lucide-react'
 import { useRecipesList } from '@/hooks/useRecipes'
 import { RecipesTable } from '@/components/app/RecipesTable'
-import { RecipeCreateDialog } from '@/components/app/RecipeCreateDialog'
 import { EmptyState } from '@/components/app/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth/AuthContext'
 
-function StudioLink() {
+/**
+ * The one front door.
+ *
+ * This used to sit beside `RecipeCreateDialog` as a second, competing "create"
+ * button -- one opening the three-pane editor, the other a form whose field
+ * schema is a raw-JSON textarea. Two entry points to the same object, neither
+ * obviously the right one, is a choice the author should not have to make.
+ * The wizard is the answer for a new recipe; the editor is reachable from
+ * inside it, and from every recipe's detail page.
+ */
+function NewRecipeLink() {
   return (
-    <Button variant="outline" asChild>
+    <Button asChild>
       <Link to="/recipes/new">
         <PencilRuler className="size-4" />
-        Open studio
+        New recipe
       </Link>
     </Button>
   )
 }
 
 export function RecipesListPage() {
-  const navigate = useNavigate()
   const { isAuthed } = useAuth()
   const { data, isLoading, isError } = useRecipesList()
   const recipes = data?.recipes ?? []
-
-  function handleCreated(recipeId: string, buildRunId: string) {
-    navigate(`/recipes/${recipeId}?runId=${buildRunId}&kind=build`)
-  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -39,10 +43,7 @@ export function RecipesListPage() {
           </p>
         </div>
         {isAuthed && (
-          <div className="flex items-center gap-2">
-            <StudioLink />
-            <RecipeCreateDialog onCreated={handleCreated} />
-          </div>
+          <NewRecipeLink />
         )}
       </div>
 
@@ -64,13 +65,8 @@ export function RecipesListPage() {
         <EmptyState
           icon={<BookOpen className="size-8" />}
           title="No recipes yet"
-          description="Create one to build a reusable extraction recipe from a URL and a field schema."
-          action={
-            <div className="flex items-center gap-2">
-              <StudioLink />
-              <RecipeCreateDialog onCreated={handleCreated} />
-            </div>
-          }
+          description="Point at a page, click what you want out of it, and the recipe is written for you."
+          action={<NewRecipeLink />}
         />
       ) : (
         <div className="rounded-lg border border-border">
