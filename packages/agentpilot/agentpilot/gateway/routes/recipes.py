@@ -472,7 +472,7 @@ async def submit_recipe_job(
         urls=urls,
         metadata=req.metadata,
     )
-    requests_total.labels(route="recipe_job_submit", status="200").inc()
+    requests_total.labels(tenant=authed.tenant, route="submit_recipe_job").inc()
     return RecipeJobQueuedResponse(success=True, job_id=job_id, queued=len(run_ids))
 
 

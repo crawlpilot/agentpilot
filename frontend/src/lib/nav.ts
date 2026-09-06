@@ -9,6 +9,7 @@ import {
   MousePointerClick,
   Route as RouteIcon,
   Server,
+  Store,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -42,6 +43,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, keywords: ['home', 'overview'] },
       { to: '/sessions', label: 'Sessions', icon: Globe, keywords: ['browser', 'context', 'pool'] },
+      { to: '/marketplace', label: 'Marketplace', icon: Store, keywords: ['store', 'scrapers', 'templates', 'prebuilt', 'catalogue', 'catalog'] },
       { to: '/recipes', label: 'Recipes', icon: BookOpen, keywords: ['extract', 'template', 'saved'] },
       { to: '/agent-runs', label: 'Agent runs', icon: Bot, keywords: ['ai', 'autonomous', 'task', 'history'] },
     ],
@@ -75,6 +77,8 @@ const SEGMENT_LABELS: Record<string, string> = {
   playground: 'Playground',
   sessions: 'Sessions',
   recipes: 'Recipes',
+  marketplace: 'Marketplace',
+  jobs: 'Jobs',
   'agent-runs': 'Agent runs',
   'api-keys': 'API Keys',
   nodes: 'Nodes',

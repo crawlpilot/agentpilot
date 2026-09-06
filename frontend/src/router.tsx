@@ -14,6 +14,9 @@ import { PlaygroundAgentTab } from '@/routes/PlaygroundAgentTab'
 import { AgentRunsListPage } from '@/routes/AgentRunsListPage'
 import { AgentRunDetailPage } from '@/routes/AgentRunDetailPage'
 import { RecipesListPage } from '@/routes/RecipesListPage'
+import { MarketplacePage } from '@/routes/MarketplacePage'
+import { MarketplaceDetailPage } from '@/routes/MarketplaceDetailPage'
+import { RecipeJobPage } from '@/routes/RecipeJobPage'
 import { RecipeDetailPage } from '@/routes/RecipeDetailPage'
 import { RecipeWizardPage } from '@/routes/RecipeWizardPage'
 import { RecipeStudioPage } from '@/routes/RecipeStudioPage'
@@ -57,6 +60,14 @@ export const router = createBrowserRouter([
       // one-shot Playground tools -- top-level list+detail, not a tab.
       { path: 'recipes', element: <RecipesListPage /> },
       { path: 'recipes/:recipeId', element: <RecipeDetailPage /> },
+      // The marketplace is the *use* surface for the same objects `/recipes`
+      // authors: browse what is published, hand one your URLs, read the batch.
+      // Separate paths because they answer different questions -- "what did I
+      // build?" against "what can I run?" -- and a published recipe belonging
+      // to another tenant has no page under `/recipes` at all.
+      { path: 'marketplace', element: <MarketplacePage /> },
+      { path: 'marketplace/:recipeId', element: <MarketplaceDetailPage /> },
+      { path: 'marketplace/:recipeId/jobs/:jobId', element: <RecipeJobPage /> },
       // Agent runs are persistent, revisitable entities (like Recipes/Sessions):
       // a top-level list + shareable detail, not just the one-shot Playground tab.
       { path: 'agent-runs', element: <AgentRunsListPage /> },
