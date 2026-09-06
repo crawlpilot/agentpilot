@@ -173,6 +173,27 @@ class RecipeWorkerLoop:
                 )
                 return
 
+        # Every remaining kind needs a page, and the page needs a domain to
+        # open the session against. A recipe with no `target.match` has an
+        # empty `url_pattern`, which is legitimate -- it is applied to URLs a
+        # caller submits -- but leaves a *scheduled* replay with nowhere to go.
+        # `open_interactive_session` rejects the empty domain with "unsafe
+        # identity path segment", which is true and says nothing about the
+        # actual problem, so it is caught here where the cause is known.
+        target_url = run.url or run.recipe.url_pattern
+        if not target_url:
+            await self._store.complete_run(
+                run.run_id,
+                run.lock,
+                data=None,
+                field_failures=None,
+                error=(
+                    "this recipe has no URL of its own to run against; submit URLs "
+                    "to it as a job, or give it a target matcher to make it schedulable"
+                ),
+            )
+            return
+
         session = await open_interactive_session(
             browser_config=self._browser_config,
             prototype_provider=self._prototype_provider,
@@ -182,7 +203,7 @@ class RecipeWorkerLoop:
             # profile, the proxy pin and the cookie jar are all domain-scoped,
             # so taking them from the recipe's own `url_pattern` would open a
             # session pinned to a site this run never visits.
-            domain=_domain_from_url(run.url or run.recipe.url_pattern),
+            domain=_domain_from_url(target_url),
             name=f"recipe-run-{run.run_id}",
             tier="auto",
             headful=False,

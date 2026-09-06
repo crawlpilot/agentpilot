@@ -22,4 +22,7 @@ export const queryKeys = {
   recipe: (id: string) => ['recipe', id] as const,
   recipeVersions: (id: string) => ['recipe-versions', id] as const,
   recipeRun: (recipeId: string, runId: string) => ['recipe-run', recipeId, runId] as const,
+  templates: (domain?: string, pageType?: string) => ['templates', domain ?? '', pageType ?? ''] as const,
+  recipeJobs: (recipeId: string) => ['recipe-jobs', recipeId] as const,
+  recipeJob: (recipeId: string, jobId: string) => ['recipe-job', recipeId, jobId] as const,
 }

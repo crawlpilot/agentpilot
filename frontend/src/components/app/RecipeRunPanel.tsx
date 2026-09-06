@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Play, Wand2, Code } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
@@ -70,14 +70,35 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
   const run = runData?.data
   const generatedCode = run?.kind === 'codegen' && run.data ? (run.data.code as string | undefined) : undefined
 
+  // A recipe with no target matcher has no URL of its own, which is the normal
+  // shape for one authored in the studio: it is applied to URLs a caller
+  // submits. `Run` would queue a replay with nowhere to navigate, so it points
+  // at the place that takes URLs instead of failing in the worker.
+  const hasOwnUrl = urlPattern.trim().length > 0
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" onClick={handleRun} disabled={runRecipe.isPending}>
-          <Play className="size-3.5" />
-          Run
-        </Button>
-        <Button size="sm" variant="outline" onClick={handleHeal} disabled={healRecipe.isPending}>
+        {hasOwnUrl ? (
+          <Button size="sm" variant="outline" onClick={handleRun} disabled={runRecipe.isPending}>
+            <Play className="size-3.5" />
+            Run
+          </Button>
+        ) : (
+          <Button size="sm" asChild>
+            <Link to={`/marketplace/${recipeId}`}>
+              <Play className="size-3.5" />
+              Run on your URLs
+            </Link>
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleHeal}
+          disabled={healRecipe.isPending || !hasOwnUrl}
+          title={hasOwnUrl ? undefined : 'Healing re-runs the recipe against its own URL, and this one has none.'}
+        >
           <Wand2 className="size-3.5" />
           Heal
         </Button>
@@ -100,6 +121,14 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
           </Button>
         </div>
       </div>
+
+      {!hasOwnUrl && (
+        <p className="text-xs text-muted-foreground">
+          This recipe declares no target URL, so it has nothing of its own to run against &mdash;
+          submit your own URLs to it instead. Give it a target matcher if you want it to run on a
+          schedule.
+        </p>
+      )}
 
       {activeRunId && run && (
         <div className="flex flex-col gap-2 rounded-md border border-border p-3">

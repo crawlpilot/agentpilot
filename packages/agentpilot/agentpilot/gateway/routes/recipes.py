@@ -281,8 +281,26 @@ async def run_recipe(
     authed: AuthedTenant = Depends(require_tenant_auth),
 ) -> RecipeRunQueuedResponse:
     store = _require_recipe_store(wiring)
-    if await store.get_recipe(recipe_id, authed.tenant) is None:
+    recipe = await store.get_recipe(recipe_id, authed.tenant)
+    if recipe is None:
         raise HTTPException(status_code=404, detail=f"no recipe {recipe_id!r}")
+
+    # A replay runs the recipe against *its own* URL, which it only has if it
+    # declares a `target.match`. A recipe authored in the studio usually does
+    # not -- it is meant to be applied to URLs a caller submits -- and there is
+    # no URL here to fall back to. Refusing with the alternative named is far
+    # better than queueing a run that dies in the worker opening a session for
+    # the empty-string domain.
+    if not recipe.url_pattern:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"recipe {recipe_id!r} has no URL of its own to run against; "
+                f"submit URLs to POST /v1/recipes/{recipe_id}/jobs, or give the "
+                "recipe a target matcher to make it schedulable"
+            ),
+        )
+
     run_id = await store.queue_run(recipe_id=recipe_id, tenant=authed.tenant, kind="replay")
     return RecipeRunQueuedResponse(success=True, run_id=run_id)
 

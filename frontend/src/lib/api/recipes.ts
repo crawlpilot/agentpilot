@@ -4,6 +4,10 @@ import type {
   RecipeCreateRequest,
   RecipeCreateResponse,
   RecipeGetResponse,
+  RecipeJobQueuedResponse,
+  RecipeJobRequest,
+  RecipeJobResponse,
+  RecipeJobsResponse,
   RecipeListResponse,
   RecipeRunQueuedResponse,
   RecipeRunResponse,
@@ -75,4 +79,29 @@ export function listRecipeVersions(token: string, recipeId: string) {
 
 export function getRecipeRun(token: string, recipeId: string, runId: string) {
   return apiRequest<RecipeRunResponse>(`/v1/recipes/${recipeId}/runs/${runId}`, { token })
+}
+
+// --- extraction jobs: a marketplace recipe applied to submitted urls ---
+
+/**
+ * Apply a recipe to the caller's own URLs. One queued run per URL.
+ *
+ * Not `runRecipe`: that queues the recipe's *own* scheduled replay against the
+ * URL pattern it was built for, and reports against the recipe's health. This
+ * takes the URLs from the caller and leaves health alone.
+ */
+export function submitRecipeJob(token: string, recipeId: string, req: RecipeJobRequest) {
+  return apiRequest<RecipeJobQueuedResponse>(`/v1/recipes/${recipeId}/jobs`, {
+    method: 'POST',
+    body: req,
+    token,
+  })
+}
+
+export function getRecipeJob(token: string, recipeId: string, jobId: string) {
+  return apiRequest<RecipeJobResponse>(`/v1/recipes/${recipeId}/jobs/${jobId}`, { token })
+}
+
+export function listRecipeJobs(token: string, recipeId: string) {
+  return apiRequest<RecipeJobsResponse>(`/v1/recipes/${recipeId}/jobs`, { token })
 }
