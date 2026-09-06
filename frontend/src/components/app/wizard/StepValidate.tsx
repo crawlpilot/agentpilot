@@ -6,7 +6,8 @@ import type { GroupValidation, ValidationRun } from '@/hooks/useRecipeValidation
 import { cn } from '@/lib/utils'
 
 interface Props {
-  sampleUrls: string[]
+  /** Pages the author is building against, offered as a picklist. */
+  urls: string[]
   url: string
   onUrlChange: (url: string) => void
   /** The URL the page is currently sitting on, i.e. the one authored against. */
@@ -47,7 +48,7 @@ function groupVerdict(group: GroupValidation): 'ok' | 'warn' | 'fail' {
  * one page it was built on.
  */
 export function StepValidate({
-  sampleUrls,
+  urls,
   url,
   onUrlChange,
   authoredUrl,
@@ -76,21 +77,21 @@ export function StepValidate({
         </p>
       </div>
 
-      {sampleUrls.length > 0 && (
+      {urls.length > 0 && (
         <div className="flex flex-col gap-1">
           <Select value={url} onValueChange={onUrlChange}>
             <SelectTrigger className="h-7 text-xs">
               <SelectValue placeholder="pick a sample URL" />
             </SelectTrigger>
             <SelectContent>
-              {sampleUrls.map((u) => (
+              {urls.map((u) => (
                 <SelectItem key={u} value={u}>
                   {u}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {sameAsAuthored && sampleUrls.length > 1 && (
+          {sameAsAuthored && urls.length > 1 && (
             <p className="flex items-start gap-1.5 text-[10px] leading-snug text-warning">
               <AlertTriangle className="mt-0.5 size-3 shrink-0" />
               This is the page you authored against. A different sample URL is a much stronger test

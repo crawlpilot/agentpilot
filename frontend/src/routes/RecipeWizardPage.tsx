@@ -89,6 +89,10 @@ export function RecipeWizardPage() {
   const [previewRows, setPreviewRows] = useState<PreviewRowsResult[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [applyReveal, setApplyReveal] = useState(true)
+  // Pages to build and test against. Wizard scaffolding, not recipe content:
+  // a saved recipe is applied to whatever URLs a caller submits at runtime, so
+  // the page it was authored on is not part of it. See `lib/recipe/lint.ts`.
+  const [workUrls, setWorkUrls] = useState<string[]>([])
   const [validateUrl, setValidateUrl] = useState('')
   const [pageType, setPageType] = useState('')
   const [visibility, setVisibility] = useState<TemplateVisibility>('private')
@@ -451,8 +455,8 @@ export function RecipeWizardPage() {
               <Step1Session
                 sessionId={sessionId}
                 onSessionChange={setSessionId}
-                sampleUrls={doc.sample_urls ?? []}
-                onSampleUrlsChange={(urls) => update((r) => ({ ...r, sample_urls: urls }))}
+                workUrls={workUrls}
+                onWorkUrlsChange={setWorkUrls}
                 name={doc.name}
                 onNameChange={(name) => update((r) => ({ ...r, name }))}
               />
@@ -505,10 +509,10 @@ export function RecipeWizardPage() {
               />
               <div className="px-3 pb-3">
                 <StepValidate
-                  sampleUrls={doc.sample_urls ?? []}
-                  url={validateUrl || (doc.sample_urls ?? [])[0] || ''}
+                  urls={workUrls}
+                  url={validateUrl || workUrls[0] || ''}
                   onUrlChange={setValidateUrl}
-                  authoredUrl={(doc.sample_urls ?? [])[0] ?? null}
+                  authoredUrl={workUrls[0] ?? null}
                   running={validation.running}
                   progress={validation.progress}
                   result={validation.result}
@@ -517,7 +521,7 @@ export function RecipeWizardPage() {
                   structuredOnly={structuredOnlyFields(built)}
                   onRun={() =>
                     void validation.validate(
-                      validateUrl || (doc.sample_urls ?? [])[0] || '',
+                      validateUrl || workUrls[0] || '',
                       buildValidationPlan(built),
                     )
                   }

@@ -31,6 +31,7 @@ from agentpilot.recipe.v2.models import (
 )
 from agentpilot.recipe.v2.replay import replay_recipe
 from agentpilot.recipe.v2.schema import Assertion, FieldSpec, TypeSpec
+from agentpilot.recipe.v2.transform import Transform
 from agentpilot.recipe.v2.urlmatch import target_accepts
 
 URL = "https://shop.test/p/1"
@@ -579,3 +580,71 @@ async def test_dom_rows_round_trips_through_the_wire_format() -> None:
     )
     assert RepeatSpec.from_dict(spec.to_dict()) == spec
     assert spec.to_dict()["kind"] == "dom_rows"
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_applies_the_field_transform_to_the_row_set(browser) -> None:
+    """A specification table is a table on the page and a *map* in the answer.
+
+    `to_object` is the contract's name for that collapse, and until the field's
+    transform pipeline ran over the rows it was inert: a recipe could declare
+    it, the studio could show it, and replay returned `[{name, value}, ...]`
+    anyway. This is the shape the recipe studio emits for any `th`/`dt` spec
+    table, so the two have to agree.
+    """
+
+    browser(js={"opts.rows": {"rows": [
+        {"name#0": "Brand", "value#0": "Nike"},
+        {"name#0": "Colour", "value#0": "Red"},
+        {"name#0": "Material", "value#0": "Mesh"},
+    ]}})
+    r = recipe(
+        fields={"specs": FieldSpec(
+            name="specs",
+            type=TypeSpec(kind="table", columns={
+                "name": TypeSpec(value_type="string"),
+                "value": TypeSpec(value_type="string"),
+            }),
+            transform=[Transform(op="to_object")],
+        )},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["specs"],
+            bindings={
+                "name": [Candidate(locator=Locator(kind="css", selector=".k"))],
+                "value": [Candidate(locator=Locator(kind="css", selector=".v"))],
+            },
+            repeat=RepeatSpec(kind="dom_rows", row_field="specs", max_iterations=50,
+                              rows_locator=Locator(kind="css", selector="tr.row")),
+        )],
+    )
+    res = await run(r)
+    assert res.data["specs"] == {"Brand": "Nike", "Colour": "Red", "Material": "Mesh"}
+    assert res.field_status["specs"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_keeps_the_rows_when_the_reshape_fails(browser) -> None:
+    """The read succeeded and only the reshaping did not.
+
+    Dropping the field would lose data that was collected correctly, so the
+    rows stand and the status says they are not what was asked for.
+    """
+
+    browser(js={"opts.rows": {"rows": [{"t#0": "Alpha"}, {"t#0": "Beta"}]}})
+    r = recipe(
+        fields={"items": FieldSpec(
+            name="items",
+            type=TypeSpec(kind="table", columns={"t": TypeSpec(value_type="string")}),
+            # `join` with no `sep` is a transform that cannot be applied.
+            transform=[Transform(op="join")],
+        )},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["items"],
+            bindings={"t": [Candidate(locator=Locator(kind="css", selector=".t"))]},
+            repeat=RepeatSpec(kind="dom_rows", row_field="items", max_iterations=50,
+                              rows_locator=Locator(kind="css", selector="li")),
+        )],
+    )
+    res = await run(r)
+    assert res.data["items"] == [{"t": "Alpha"}, {"t": "Beta"}]
+    assert res.field_status["items"] == "suspect"

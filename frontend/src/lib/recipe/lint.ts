@@ -15,6 +15,15 @@
 // Plus the two lints `docs/recipe-studio.md` asks for by name: a bare `wait`
 // where a condition exists, and a never-verified candidate on a recipe
 // somebody has approved.
+//
+// **`sample_urls` is deliberately not linted.** It used to be an error to save
+// without one, on the reasoning that a recipe fitted to a single page is a
+// guess. That reasoning describes *authoring*, and it had turned into a
+// property of the artefact: a recipe could not exist without naming the pages
+// it came from. It does not work that way at runtime -- a recipe is selected
+// by a person and applied to the URLs *they* submit, and the page it happened
+// to be built against says nothing about the pages it will run on. The field
+// stays in the document as optional provenance; nothing depends on it.
 
 import type { Locator, Recipe, Step } from './types'
 import { STRUCTURED_KINDS } from './types'
@@ -30,8 +39,6 @@ export interface LintIssue {
   /** Which tab to open when the issue is clicked. */
   tab?: 'schema' | 'steps' | 'fields' | 'transforms' | 'variants' | 'quality'
 }
-
-const MIN_SAMPLE_URLS = 3
 
 export function lintRecipe(recipe: Recipe): LintIssue[] {
   const issues: LintIssue[] = []
@@ -49,7 +56,6 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
     add('error', 'fields', 'No fields declared. The output schema is the input the build agent works from.', 'schema')
   }
 
-  lintSampleUrls(recipe, add)
   lintTarget(recipe, add)
 
   const variantIds = new Set((recipe.variants ?? []).map((v) => v.variant_id))
@@ -199,20 +205,6 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
   }
 
   return issues
-}
-
-function lintSampleUrls(recipe: Recipe, add: AddIssue) {
-  const urls = recipe.sample_urls.filter((u) => u.trim())
-  if (urls.length === 0) {
-    add('error', 'sample_urls', 'At least one sample URL is required.', 'schema')
-  } else if (urls.length < MIN_SAMPLE_URLS) {
-    add(
-      'warning',
-      'sample_urls',
-      `Only ${urls.length} sample URL${urls.length === 1 ? '' : 's'}. A candidate verified on one page is a guess, not an induced wrapper -- ${MIN_SAMPLE_URLS} or more separates the two.`,
-      'schema',
-    )
-  }
 }
 
 function lintTarget(recipe: Recipe, add: AddIssue) {

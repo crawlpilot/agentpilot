@@ -12,8 +12,14 @@ import { useToast } from '@/components/ui/toast'
 interface Props {
   sessionId: string | null
   onSessionChange: (id: string) => void
-  sampleUrls: string[]
-  onSampleUrlsChange: (urls: string[]) => void
+  /**
+   * Pages to build and test against. Wizard scaffolding, NOT recipe content:
+   * a recipe is applied at runtime to whatever URLs a caller submits, so the
+   * page it happened to be authored on is not part of what gets saved. See the
+   * note at the top of `lib/recipe/lint.ts`.
+   */
+  workUrls: string[]
+  onWorkUrlsChange: (urls: string[]) => void
   name: string
   onNameChange: (name: string) => void
 }
@@ -27,7 +33,7 @@ function hostOf(url: string): string | null {
 }
 
 /**
- * Pick or create a browser session, and say which pages this recipe is for.
+ * Pick or create a browser session, and open a page to build against.
  *
  * Creating a session happens *here* rather than sending the author to
  * `/sessions` in another tab, which is what the studio does today
@@ -38,21 +44,21 @@ function hostOf(url: string): string | null {
 export function Step1Session({
   sessionId,
   onSessionChange,
-  sampleUrls,
-  onSampleUrlsChange,
+  workUrls,
+  onWorkUrlsChange,
   name,
   onNameChange,
 }: Props) {
   const { data } = useSessionsList()
   const openSession = useOpenSession()
   const { toast } = useToast()
-  const [raw, setRaw] = useState(sampleUrls.join('\n'))
+  const [raw, setRaw] = useState(workUrls.join('\n'))
 
   const sessions = (data?.sessions ?? []).filter((s) => s.state === 'active')
 
   function commitUrls(text: string) {
     setRaw(text)
-    onSampleUrlsChange(
+    onWorkUrlsChange(
       text
         .split('\n')
         .map((line) => line.trim())
@@ -62,11 +68,11 @@ export function Step1Session({
 
   function createSession() {
     // The domain a session is opened against has to match the pages it will
-    // load, so derive it from the first sample URL rather than asking twice.
-    const domain = sampleUrls.map(hostOf).find(Boolean)
+    // load, so derive it from the first URL rather than asking twice.
+    const domain = workUrls.map(hostOf).find(Boolean)
     if (!domain) {
       toast({
-        title: 'Add a sample URL first',
+        title: 'Add a URL first',
         description: 'The session is opened against that page’s domain.',
       })
       return
@@ -94,9 +100,9 @@ export function Step1Session({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="sample-urls">Sample URLs</Label>
+        <Label htmlFor="work-urls">Pages to build against</Label>
         <Textarea
-          id="sample-urls"
+          id="work-urls"
           rows={4}
           value={raw}
           onChange={(e) => commitUrls(e.target.value)}
@@ -104,8 +110,10 @@ export function Step1Session({
           className="font-mono text-xs"
         />
         <p className="text-[11px] text-muted-foreground">
-          One per line, and more than one on purpose. A recipe built from a single page is a guess
-          fitted to that page &mdash; the second and third URL are what turn it into a pattern.
+          One per line. These open the session and give the Validate step somewhere to run &mdash;
+          they are not saved with the recipe. A second and third page are still worth adding: a
+          recipe that only works on the page it was built from is a guess, and validating against a
+          different one is how you find out which you have.
         </p>
       </div>
 
