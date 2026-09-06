@@ -471,6 +471,9 @@ describe('itemsToRecipe', () => {
   const reset = (id: string): WorkItem => ({ kind: 'reset', id })
 
   const selectorsOf = (steps: Step[] | undefined) => (steps ?? []).map((s) => s.target?.selector)
+  /** Just the actions -- the synthesized reveal waits are asserted separately. */
+  const actionsOf = (steps: Step[] | undefined) =>
+    (steps ?? []).filter((s) => s.op !== 'wait_for_selector').map((s) => s.target?.selector)
 
   it('puts actions before the first field into global_setup', () => {
     const r = itemsToRecipe(emptyRecipe('r'), [action('a', '#banner'), field('title')])
@@ -487,7 +490,9 @@ describe('itemsToRecipe', () => {
     expect(r.field_groups).toHaveLength(2)
     expect(r.field_groups[0].field_names).toEqual(['title'])
     expect(r.field_groups[1].field_names).toEqual(['origin'])
-    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#more'])
+    expect(actionsOf(r.field_groups[1].steps)).toEqual(['#more'])
+    // ...and the click is followed by a wait for what it reveals.
+    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#more', '.origin'])
   })
 
   it('accumulates steps, because every group re-navigates', () => {
@@ -498,8 +503,8 @@ describe('itemsToRecipe', () => {
       field('a'), action('1', '#one'), field('b'), action('2', '#two'), field('c'),
     ])
     expect(r.field_groups.map((g) => g.field_names)).toEqual([['a'], ['b'], ['c']])
-    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#one'])
-    expect(selectorsOf(r.field_groups[2].steps)).toEqual(['#one', '#two'])
+    expect(actionsOf(r.field_groups[1].steps)).toEqual(['#one'])
+    expect(actionsOf(r.field_groups[2].steps)).toEqual(['#one', '#two'])
   })
 
   it('reset clears the accumulation for conflicting reveals', () => {
@@ -508,8 +513,88 @@ describe('itemsToRecipe', () => {
       field('a'), action('1', '#drawer-one'), field('b'),
       reset('r1'), action('2', '#drawer-two'), field('c'),
     ])
-    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#drawer-one'])
-    expect(selectorsOf(r.field_groups[2].steps)).toEqual(['#drawer-two'])
+    expect(actionsOf(r.field_groups[1].steps)).toEqual(['#drawer-one'])
+    expect(actionsOf(r.field_groups[2].steps)).toEqual(['#drawer-two'])
+  })
+
+  it('waits for what a reveal revealed, before the group reads it', () => {
+    // The driver returns from a click as soon as the event is dispatched --
+    // it awaits a new document only when the URL changed. Without this the
+    // group reads the page as it was before the drawer opened, which showed up
+    // as the same recipe resolving a field on one run and not the next.
+    const r = itemsToRecipe(emptyRecipe('r'), [field('title'), action('a', '#more'), field('origin')])
+    const steps = r.field_groups[1].steps ?? []
+    const wait = steps.find((s) => s.op === 'wait_for_selector')
+
+    expect(wait).toBeDefined()
+    // The condition is the next field's own selector -- named, not guessed at.
+    expect(wait?.target?.selector).toBe('.origin')
+    expect(wait?.args?.state).toBe('visible')
+    // After the click, never before it.
+    expect(steps.indexOf(wait!)).toBe(1)
+    // A page where the drawer was already open satisfies it instantly; one
+    // where it never opens should report an unreadable field, not a dead run.
+    expect(wait?.on_error).toBe('continue')
+    expect(wait?.optional).toBe(true)
+  })
+
+  it('waits on the container a picked table lives in', () => {
+    // A drawer can render its list element before it has any children, so the
+    // container is the honest condition -- waiting on a row would race the
+    // rows being appended.
+    const table: WorkItem = {
+      kind: 'field',
+      id: 'items',
+      draft: {
+        name: 'items',
+        spec: { type: { kind: 'table', columns: {} }, description: '' },
+        candidates: [],
+        columns: { t: chainToCandidates([{ selector: '.t', strategy: 'Minimal' }]) },
+        repeat: {
+          kind: 'dom_rows',
+          row_field: 'items',
+          max_iterations: 100,
+          rows_locator: {
+            kind: 'css',
+            selector: 'li',
+            within: { kind: 'css', selector: 'ul.spec' },
+          },
+        },
+      },
+    }
+    const r = itemsToRecipe(emptyRecipe('r'), [field('title'), action('a', '#more'), table])
+    const wait = (r.field_groups[1].steps ?? []).find((s) => s.op === 'wait_for_selector')
+    expect(wait?.target?.selector).toBe('ul.spec')
+  })
+
+  it('does not wait after an action that reveals nothing', () => {
+    // A `wait` op has already waited; adding a condition after it would be the
+    // bare-wait-plus-guess the lint refuses.
+    const r = itemsToRecipe(emptyRecipe('r'), [
+      field('title'),
+      { kind: 'action', id: 'w', step: { op: 'wait', args: { ms: 500 }, on_error: 'continue' } },
+      field('origin'),
+    ])
+    expect((r.field_groups[1].steps ?? []).some((s) => s.op === 'wait_for_selector')).toBe(false)
+  })
+
+  it('skips the wait when the next field has no CSS to wait on', () => {
+    // A field bound only to a JSON path has no element to become visible, and
+    // inventing one would block the group for the full timeout every run.
+    const jsonField: WorkItem = {
+      kind: 'field',
+      id: 'price',
+      draft: {
+        name: 'price',
+        spec: { type: { kind: 'scalar', value_type: 'price' }, description: '' },
+        candidates: [
+          { priority: 10, locator: { kind: 'json_ld', path: 'offers.price' }, verified_on: 1 },
+        ],
+      },
+    }
+    const r = itemsToRecipe(emptyRecipe('r'), [field('title'), action('a', '#more'), jsonField])
+    expect(actionsOf(r.field_groups[1].steps)).toEqual(['#more'])
+    expect((r.field_groups[1].steps ?? []).some((s) => s.op === 'wait_for_selector')).toBe(false)
   })
 
   it('keeps consecutive fields in one group', () => {

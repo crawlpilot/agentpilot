@@ -36,6 +36,7 @@ import type {
   Locator,
   Recipe,
   RepeatSpec,
+  StepOp,
   Transform,
   TypeSpec,
   ValueType,
@@ -544,6 +545,89 @@ export type WorkItem =
   | { kind: 'reset'; id: string }
 
 /**
+ * Ops whose effect the page renders *after* the action returns.
+ *
+ * `fill` and `clear` put text in an input and it is readable the instant the
+ * action returns. A click, a scroll or a tab switch starts work the browser
+ * finishes later, and that gap is what a reveal has to be waited out across.
+ */
+const REVEALING_OPS = new Set<StepOp>([
+  'click', 'double_click', 'hover', 'press', 'send_keys', 'select_option',
+  'check', 'uncheck', 'scroll', 'scroll_into_view', 'tap', 'swipe', 'drag',
+  'find_text', 'new_tab', 'switch_tab', 'close_tab',
+])
+
+/** How long a reveal gets to appear before the group reads without it. */
+const REVEAL_TIMEOUT_MS = 5_000
+
+/**
+ * The document-scoped CSS a field's value lives at, if it has one.
+ *
+ * A locator is stored relative to its scope -- a table's rows sit inside a
+ * container, an array's members inside the picked wrapper -- and a step target
+ * is resolved against the document, so the two are composed here rather than
+ * one being passed where the other is meant.
+ */
+function documentScopedSelector(draft: FieldDraft): string | null {
+  const rows = draft.repeat?.rows_locator
+  // For a table, what appears is the container the rows live in. Waiting on
+  // the container rather than a row is deliberate: a drawer can render its
+  // list element before it has any children.
+  if (rows) {
+    if (rows.within?.kind === 'css' && rows.within.selector) return rows.within.selector
+    return rows.kind === 'css' ? (rows.selector ?? null) : null
+  }
+  const dom = draft.candidates.find((c) => c.locator.kind === 'css' && c.locator.selector)
+  if (!dom) return null
+  const { selector, within } = dom.locator
+  if (within?.kind === 'css' && within.selector) return `${within.selector} ${selector}`
+  return selector ?? null
+}
+
+/**
+ * Wait for what the reveal was supposed to reveal, before reading it.
+ *
+ * **Why this is authored into the recipe rather than done by the engine.** A
+ * click that does not navigate returns from the driver the moment the event is
+ * dispatched -- `patchright_driver` awaits a new document only when the URL
+ * changed -- so a group would otherwise read the page as it was before the
+ * drawer opened. The same recipe returned `items: resolved` on one run and
+ * `items: empty` on the next against an unchanged page, which is what a race
+ * looks like from the outside.
+ *
+ * The engine could have waited for the DOM to go quiet after every click, and
+ * that was the wrong answer twice over. It is an *implicit* wait, so timing
+ * stops being reproducible and a recipe that is merely lucky looks correct.
+ * And a quiet period is a heuristic that fails hardest exactly where it is
+ * needed: a product page with a carousel, a countdown or lazy images never
+ * goes quiet, so it would burn the full step timeout on every click and still
+ * be free to read too early.
+ *
+ * The precise condition is available here and nowhere else. The author clicks
+ * the reveal and then picks the fields *inside* what it revealed, so the very
+ * next field's selector is the thing to wait for -- named explicitly, visible
+ * in the document, and editable like any other step. `lint.ts` refuses a bare
+ * `wait` where a condition exists; this is that rule applied to its own output.
+ *
+ * `continue`/`optional` because a page where the content was already open
+ * satisfies it immediately, and one where it never appears should report a
+ * field it could not read rather than a run that died waiting.
+ */
+function waitStepFor(draft: FieldDraft): Step | null {
+  const selector = documentScopedSelector(draft)
+  if (!selector) return null
+  return {
+    op: 'wait_for_selector',
+    target: { kind: 'css', selector },
+    args: { state: 'visible' },
+    timeout_ms: REVEAL_TIMEOUT_MS,
+    on_error: 'continue',
+    optional: true,
+    label: 'wait for the reveal to render',
+  }
+}
+
+/**
  * Compile the authoring list into `global_setup` + `field_groups`.
  *
  * The mapping is dictated by one fact about replay: `_replay_group`
@@ -582,7 +666,20 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
         ? firstResetAt
         : firstFieldAt
 
-  const globalSetup = items.slice(0, leadingEnd).filter((i) => i.kind === 'action').map((i) => i.step)
+  const leadingActions = items.slice(0, leadingEnd).filter((i) => i.kind === 'action')
+  const globalSetup = leadingActions.map((i) => i.step)
+
+  // A leading action can be a reveal too -- an author whose first move is
+  // "expand the details" puts the click here, not in a group. The condition is
+  // the same one a group would wait for: the first field that gets read after
+  // it. Harmless when the leading action was only a cookie banner, since the
+  // field is already present and the wait resolves at once.
+  const lastLeading = leadingActions.at(-1)?.step
+  const firstField = firstFieldAt === -1 ? null : items[firstFieldAt]
+  if (lastLeading && REVEALING_OPS.has(lastLeading.op) && firstField?.kind === 'field') {
+    const wait = waitStepFor(firstField.draft)
+    if (wait) globalSetup.push(wait)
+  }
 
   interface Pending {
     steps: Step[]
