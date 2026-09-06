@@ -21,6 +21,7 @@ import { lintRecipe } from '@/lib/recipe/lint'
 import {
   detailPickToDraft,
   itemsToRecipe,
+  jsonHitToDraft,
   listPickToDrafts,
   stepsToHighlightFields,
   toLocator,
@@ -290,6 +291,14 @@ export function RecipeWizardPage() {
     }
   }
 
+  /** Define a field straight from a path into the page's embedded JSON. */
+  function addJsonField(hit: PathHit) {
+    setItems((current) => [
+      ...current,
+      { kind: 'field', id: `j-${Date.now()}`, draft: jsonHitToDraft(hit, drafts.map((d) => d.name)) },
+    ])
+  }
+
   /** Offer a structured-data path above a picked CSS candidate. */
   function findInJson(draft: FieldDraft, index: number) {
     if (!draft.preview || !hits?.length) return
@@ -453,6 +462,10 @@ export function RecipeWizardPage() {
                 onTestSelector={sessionId ? picker.testSelector : undefined}
                 onFindInJson={findInJson}
                 jsonProbeReady={(hits?.length ?? 0) > 0}
+                jsonHits={hits}
+                jsonLoading={execute.isPending}
+                onProbeJson={() => { setHits(null); probeJson() }}
+                onAddJsonField={addJsonField}
               />
             )}
 

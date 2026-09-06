@@ -284,6 +284,38 @@ export function listPickToDrafts(payload: PickPayload): {
   return { drafts: [draft], count }
 }
 
+/**
+ * A path into the page's embedded JSON becomes a field draft.
+ *
+ * `SOURCE_PRIORITY` ranks these far above CSS (`json_ld: 10` vs `css: 60`),
+ * and deservedly: a path into JSON-LD or hydration state survives a redesign
+ * that breaks every selector on the page.
+ *
+ * `verified_on: 1` because the path was read *out of this page* a moment ago
+ * -- it is not a guess, and the lint's "never verified" warning has to keep
+ * meaning something for the candidates that are.
+ */
+export function jsonHitToDraft(
+  hit: { kind: 'json_ld' | 'hydration' | 'meta'; path: string; value: string },
+  taken: Iterable<string> = [],
+): FieldDraft {
+  const leaf = hit.path.split(/[.[\]]/).filter(Boolean).pop() ?? 'field'
+  return {
+    name: toFieldName(leaf, taken),
+    spec: { type: { kind: 'scalar', value_type: 'string' }, description: '' },
+    candidates: [
+      {
+        priority: SOURCE_PRIORITY[hit.kind],
+        locator: { kind: hit.kind, path: hit.path, path_lang: 'simple' },
+        verified_on: 1,
+        confidence: null,
+        note: `read from ${hit.kind}`,
+      },
+    ],
+    preview: hit.value,
+  }
+}
+
 /** A detail pick becomes one field draft. */
 export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> = []): FieldDraft {
   const mapped = EXTRACTION_TYPE[payload.extractionType ?? 'text'] ?? EXTRACTION_TYPE.text

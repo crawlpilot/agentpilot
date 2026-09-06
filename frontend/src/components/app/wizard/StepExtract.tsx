@@ -21,10 +21,12 @@ import { Reorderable } from '@/components/ui/reorderable'
 import { CandidateChain } from './CandidateChain'
 import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
+import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
 import { readAttribute, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
+import type { PathHit } from '@/lib/recipe/probe'
 import type { Candidate, OnError, Step, StepOp, TypeSpec, ValueType } from '@/lib/recipe/types'
 import { cn } from '@/lib/utils'
 
@@ -42,6 +44,11 @@ interface Props {
   onTestSelector?: (selector: string) => Promise<number>
   onFindInJson?: (draft: FieldDraft, index: number) => void
   jsonProbeReady: boolean
+  /** Flattened page JSON, for defining a field straight from a path. */
+  jsonHits: PathHit[] | null
+  jsonLoading: boolean
+  onProbeJson: () => void
+  onAddJsonField: (hit: PathHit) => void
 }
 
 const PICK_MODES: { id: Exclude<PickerMode, 'single'>; label: string; icon: typeof List }[] = [
@@ -105,6 +112,10 @@ export function StepExtract({
   onTestSelector,
   onFindInJson,
   jsonProbeReady,
+  jsonHits,
+  jsonLoading,
+  onProbeJson,
+  onAddJsonField,
 }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const picking = status !== 'idle'
@@ -214,6 +225,13 @@ export function StepExtract({
             Click the element in the page on the left. Use Wider / Narrower to adjust first.
           </p>
         )}
+
+        <JsonFieldPicker
+          hits={jsonHits}
+          loading={jsonLoading}
+          onProbe={onProbeJson}
+          onAdd={onAddJsonField}
+        />
       </div>
 
       {/* --- the list --- */}
