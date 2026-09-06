@@ -6,6 +6,7 @@ import type { PreviewField, PreviewResult, PreviewStep, StepOutcome } from '@/li
 import {
   PICKER_GLOBAL,
   PICKER_VERSION,
+  type HighlightField,
   type PickerMode,
   type PickMessage,
   type PickPayload,
@@ -85,6 +86,8 @@ export interface UsePagePicker {
   preview: (fields: PreviewField[]) => Promise<PreviewResult[]>
   /** Apply reveal steps in the page before previewing. A rehearsal, not replay. */
   applySteps: (steps: PreviewStep[]) => Promise<StepOutcome[]>
+  /** Mark everything already picked, persistently, on the page. */
+  showHighlights: (fields: HighlightField[]) => void
 }
 
 export function usePagePicker(sessionId: string | null): UsePagePicker {
@@ -160,6 +163,18 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
+  const showHighlights = useCallback(
+    (fields: HighlightField[]) => {
+      // Fire-and-forget: markers are an aid, and a page that navigated away
+      // mid-update should not surface an error for losing its decorations.
+      const call = fields.length
+        ? `window.${PICKER_GLOBAL}.showHighlights(${JSON.stringify(fields)})`
+        : `window.${PICKER_GLOBAL}.clearHighlights()`
+      void run(call).catch(() => {})
+    },
+    [run],
+  )
+
   const pick = useCallback(
     async (mode: PickerMode): Promise<PickPayload | null> => {
       setError(null)
@@ -214,5 +229,5 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
-  return { status, error, pick, cancel, refine, testSelector, preview, applySteps }
+  return { status, error, pick, cancel, refine, testSelector, preview, applySteps, showHighlights }
 }

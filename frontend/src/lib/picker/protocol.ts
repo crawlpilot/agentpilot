@@ -127,6 +127,19 @@ export interface PickData {
   source_url?: string
 }
 
+/**
+ * One persistent on-page marker for a field the author has already picked.
+ *
+ * Mirrors the extension's `HighlightableElement`. `action` drives the colour:
+ * green for something being read, amber for something being clicked.
+ */
+export interface HighlightField {
+  id: string
+  name: string
+  action: 'extract' | 'click'
+  selectors: { type: string; value: string }[]
+}
+
 /** The surface `entry.ts` installs on `window.__cpPicker`. */
 export interface PickerApi {
   version: number
@@ -135,7 +148,7 @@ export interface PickerApi {
   action(key: 'ArrowUp' | 'ArrowDown' | 'Enter'): void
   take(): PickMessage | null
   isPicking(): boolean
-  showHighlights(elements: unknown[]): void
+  showHighlights(elements: HighlightField[]): void
   clearHighlights(): void
   testSelector(selector: string): number
   /**

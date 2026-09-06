@@ -196,7 +196,7 @@ export const APPLY_STEPS_JS = `async (steps) => {
   for (const step of steps) {
     try {
       if (step.op === 'wait') {
-        await sleep(Math.min(step.ms || 0, 10000));
+        await sleep(Math.min(step.ms || 0, 5000));
         out.push({op: step.op, status: 'ok'});
         continue;
       }

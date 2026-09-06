@@ -9,6 +9,10 @@ interface Props {
   running: boolean
   onRun: () => void
   disabled?: boolean
+  /** How many reveal steps will be rehearsed before the read. */
+  revealCount: number
+  applyReveal: boolean
+  onApplyRevealChange: (apply: boolean) => void
 }
 
 const STATUS_STYLE: Record<PreviewStatus, { label: string; variant: 'success' | 'accent' | 'outline' | 'destructive' | 'warning' }> = {
@@ -40,7 +44,15 @@ const STATUS_STYLE: Record<PreviewStatus, { label: string; variant: 'success' | 
  *   what makes that visible, and it is the single most valuable thing on this
  *   screen.
  */
-export function StepPreview({ results, running, onRun, disabled }: Props) {
+export function StepPreview({
+  results,
+  running,
+  onRun,
+  disabled,
+  revealCount,
+  applyReveal,
+  onApplyRevealChange,
+}: Props) {
   const table = results ? toRows(results) : null
   const scalars = results?.filter((r) => !Array.isArray(r.value)) ?? []
 
@@ -58,6 +70,27 @@ export function StepPreview({ results, running, onRun, disabled }: Props) {
           </span>
         )}
       </div>
+
+      {revealCount > 0 && (
+        <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-[11px] leading-snug">
+          <input
+            type="checkbox"
+            className="mt-0.5 shrink-0"
+            checked={applyReveal}
+            onChange={(e) => onApplyRevealChange(e.target.checked)}
+          />
+          <span className="min-w-0">
+            <span className="font-medium">
+              Run the {revealCount} reveal step{revealCount === 1 ? '' : 's'} first
+            </span>
+            <span className="block text-muted-foreground">
+              A rehearsal, not replay: this clicks from page script, while a real run dispatches a
+              trusted browser click. A step that fails here is a genuine problem; one that passes is
+              not yet proof.
+            </span>
+          </span>
+        </label>
+      )}
 
       {!results && (
         <p className="rounded-md border border-dashed border-border p-3 text-[11px] leading-snug text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -78,9 +78,18 @@ export function RecipeWizardPage() {
   const [reveal, setReveal] = useState<Step[]>([])
   const [preview, setPreview] = useState<PreviewResult[] | null>(null)
   const [previewing, setPreviewing] = useState(false)
+  const [applyReveal, setApplyReveal] = useState(true)
 
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
+
+  // A preview describes one exact recipe. The moment a field is renamed, a
+  // candidate reordered or a reveal step added, the table on screen is about a
+  // recipe that no longer exists -- and a stale green table is worse than no
+  // table, because it is the one thing here an author is meant to trust.
+  useEffect(() => {
+    setPreview(null)
+  }, [drafts, reveal])
 
   function goTo(next: number) {
     setStep(next)
@@ -187,6 +196,24 @@ export function RecipeWizardPage() {
     if (!sessionId || drafts.length === 0) return
     setPreviewing(true)
     try {
+      if (applyReveal && reveal.length > 0) {
+        const outcomes = await picker.applySteps(
+          reveal.map((step) => ({
+            op: step.op,
+            selector: step.target?.selector,
+            kind: step.target?.kind === 'xpath' ? 'xpath' : 'css',
+            text: step.args?.text as string | undefined,
+            ms: step.args?.ms as number | undefined,
+          })),
+        )
+        const failed = outcomes.filter((o) => o.status !== 'ok')
+        if (failed.length > 0) {
+          toast({
+            title: `${failed.length} reveal step${failed.length === 1 ? '' : 's'} did not apply`,
+            description: failed.map((f) => `${f.op}: ${f.detail ?? f.status}`).join(' · '),
+          })
+        }
+      }
       setPreview(await picker.preview(toPreviewFields(drafts)))
     } catch (err) {
       toast({
@@ -363,6 +390,9 @@ export function RecipeWizardPage() {
                 running={previewing}
                 disabled={!sessionId || drafts.length === 0}
                 onRun={() => void runPreview()}
+                revealCount={reveal.length}
+                applyReveal={applyReveal}
+                onApplyRevealChange={setApplyReveal}
               />
             )}
 

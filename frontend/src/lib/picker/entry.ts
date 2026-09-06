@@ -32,7 +32,14 @@ import {
   DUR_VALIDATE,
   DUR_FADE,
 } from './vendor/content/utils/highlight-tokens'
-import { PICKER_GLOBAL, PICKER_VERSION, type PickerApi, type PickerMode, type PickMessage } from './protocol'
+import {
+  PICKER_GLOBAL,
+  PICKER_VERSION,
+  type HighlightField,
+  type PickerApi,
+  type PickerMode,
+  type PickMessage,
+} from './protocol'
 import { enrich } from './enrich'
 import { APPLY_STEPS_JS, PREVIEW_JS } from './preview'
 
@@ -98,9 +105,17 @@ function isPicking(): boolean {
   return picker !== null
 }
 
-function showHighlights(elements: Parameters<SelectionHighlightManager['showHighlights']>[0]) {
+/**
+ * Mark everything already picked, so the page shows its own state.
+ *
+ * Without this an author picking a twelve-column table has no way to tell
+ * which cells they have already taken -- the page looks identical before and
+ * after every click. The extension solved it the same way, and it is the
+ * difference between picking and guessing.
+ */
+function showHighlights(elements: HighlightField[]) {
   highlights ??= new SelectionHighlightManager()
-  highlights.showHighlights(elements)
+  highlights.showHighlights(elements as Parameters<SelectionHighlightManager['showHighlights']>[0])
 }
 
 function clearHighlights() {
