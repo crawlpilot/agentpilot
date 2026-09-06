@@ -759,7 +759,20 @@ function toPreviewLocators(candidates: Candidate[]): PreviewLocator[] {
       attribute: c.locator.attribute,
       all: c.locator.all,
       index: c.locator.index,
+      // Dropping `within` here meant the preview read a scoped locator against
+      // the whole document -- a different question from the one replay asks,
+      // and the one thing this reader exists not to do. It went unnoticed while
+      // nothing the wizard produced was scoped; an array field is (its members
+      // are read inside the picked wrapper), so it would have previewed the
+      // page's every element.
+      within: toPreviewWithin(c.locator.within),
     }))
+}
+
+function toPreviewWithin(within: Locator | undefined): PreviewLocator['within'] {
+  if (!within?.selector) return undefined
+  if (within.kind !== 'css' && within.kind !== 'xpath') return undefined
+  return { kind: within.kind, selector: within.selector }
 }
 
 /** Table drafts as row-wise preview requests. Scalar drafts are ignored. */

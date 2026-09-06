@@ -2,10 +2,11 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { PICKER_GLOBAL, type PickerApi, type PickPayload } from '@/lib/picker/protocol'
-import type { PreviewRowsResult } from '@/lib/picker/preview'
+import type { PreviewResult, PreviewRowsResult } from '@/lib/picker/preview'
 import {
   chainToCandidates,
   toHighlightFields,
+  toPreviewFields,
   toPreviewRowsFields,
   detailPickToDraft,
   itemsToRecipe,
@@ -234,6 +235,143 @@ describe('detailPickToDraft', () => {
     expect(draft.candidates[0].locator.attribute).toBeUndefined()
     expect(draft.preview).toBe('$42.00')
     expect(draft.candidates.length).toBeGreaterThan(1)
+  })
+
+  it('reads an array from its members, not from the wrapper', async () => {
+    // The clicked element is the gallery; the values are its images. A
+    // candidate on the wrapper with `all: true` matches one node and returns a
+    // one-item list, which is a list-shaped way of returning nothing.
+    document.body.innerHTML = `
+      <div class="gal"><img src="/1.jpg"><img src="/2.jpg"><img src="/3.jpg"></div>`
+    const draft = detailPickToDraft(await pick('detail', 'div.gal'))
+    expect(draft.spec.type.kind).toBe('list')
+    const locator = draft.candidates[0].locator
+    expect(locator.all).toBe(true)
+    expect(locator.selector).toBe('img')
+    expect(locator.attribute).toBe('src')
+    // The wrapper chain survives as the scope, so a wrapper selector that
+    // stops resolving still falls through to the next candidate.
+    expect(locator.within?.selector).toBeTruthy()
+  })
+
+  it('reads a text array as every direct child, through the real reader', async () => {
+    // `:scope > *` is only correct if the reader resolves it against the
+    // `within` element rather than the document, so this asserts through
+    // `api.preview` rather than on the locator alone.
+    document.body.innerHTML = `
+      <ul class="tags"><li>Alpha</li><li>Beta</li><li>Gamma</li></ul>`
+    const draft = detailPickToDraft(await pick('detail', 'ul.tags'))
+    expect(draft.spec.type.kind).toBe('list')
+
+    const api = install()
+    document.body.innerHTML = `
+      <ul class="tags"><li>Alpha</li><li>Beta</li><li>Gamma</li></ul>`
+    const [result] = api.preview(toPreviewFields([draft])) as PreviewResult[]
+    expect(result.value).toEqual(['Alpha', 'Beta', 'Gamma'])
+  })
+})
+
+/**
+ * A detail pick that lands on a table or a list.
+ *
+ * This is the commonest way an author reaches a table -- they click the thing
+ * they want, and `DetailSelectionStrategy` works out that it repeats. It has
+ * to produce the same `dom_rows` field a list-mode pick does, because it is
+ * the same data; producing a scalar bound to the container instead is how a
+ * twelve-row spec table came back as one string of every cell run together.
+ */
+describe('a detail pick on a repeating container', () => {
+  const SPEC_HTML = `
+    <div id="wrap"><table id="spec"><tbody>
+      <tr class="row"><th class="k">Brand</th><td class="v">Nike</td></tr>
+      <tr class="row"><th class="k">Colour</th><td class="v">Red</td></tr>
+      <tr class="row"><th class="k">Material</th><td class="v">Mesh</td></tr>
+      <tr class="row"><th class="k">Weight</th><td class="v">250g</td></tr>
+    </tbody></table></div>`
+
+  it('becomes a dom_rows table, not a scalar read of the container', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = detailPickToDraft(await pick('detail', 'ul#l'))
+
+    expect(draft.spec.type.kind).toBe('table')
+    expect(draft.repeat?.kind).toBe('dom_rows')
+    // The rows, not the container: scoping to the container would read it once.
+    expect(draft.repeat?.rows_locator?.selector).not.toBe('#l')
+    expect(draft.repeat?.rows_locator?.within?.selector).toBe('#l')
+    expect(draft.repeat?.row_field).toBe(draft.name)
+    // Every column carries a binding, and a table binds by column.
+    expect(Object.keys(draft.columns ?? {}).length).toBeGreaterThan(1)
+    expect(draft.candidates).toEqual([])
+  })
+
+  it('resolves the same rows a list-mode pick of the same list would', async () => {
+    document.body.innerHTML = LIST_HTML
+    const viaDetail = detailPickToDraft(await pick('detail', 'ul#l'))
+    document.body.innerHTML = LIST_HTML
+    const { drafts } = listPickToDrafts(await pick('list', 'li.card'))
+
+    const api = install()
+    document.body.innerHTML = LIST_HTML
+    const [fromDetail] = api.previewRows(toPreviewRowsFields([viaDetail])) as PreviewRowsResult[]
+    const [fromList] = api.previewRows(toPreviewRowsFields(drafts)) as PreviewRowsResult[]
+
+    expect(fromDetail.rows.length).toBe(3)
+    expect(fromDetail.rows.length).toBe(fromList.rows.length)
+    // Same values, whichever door the author came through. Column *names* are
+    // free to differ -- they are inferred per pick -- so compare the contents.
+    const values = (r: PreviewRowsResult) => r.rows.map((row) => Object.values(row).sort())
+    expect(values(fromDetail)).toEqual(values(fromList))
+  })
+
+  it('reads a th/dt spec table as a label -> value map', async () => {
+    document.body.innerHTML = SPEC_HTML
+    const draft = detailPickToDraft(await pick('detail', '#spec'))
+
+    expect(draft.keyValue).toBe(true)
+    expect(Object.keys(draft.columns ?? {})).toEqual(['name', 'value'])
+    // `to_object` is what actually collapses the rows at replay; the type
+    // stays `table` because the read really is two columns of rows.
+    expect(draft.spec.transform).toEqual([{ op: 'to_object' }])
+    expect(draft.spec.type.kind).toBe('table')
+
+    const api = install()
+    document.body.innerHTML = SPEC_HTML
+    const [rows] = api.previewRows(toPreviewRowsFields([draft])) as PreviewRowsResult[]
+    expect(rows.rows).toEqual([
+      { name: 'Brand', value: 'Nike' },
+      { name: 'Colour', value: 'Red' },
+      { name: 'Material', value: 'Mesh' },
+      { name: 'Weight', value: '250g' },
+    ])
+  })
+
+  it('leaves a 2-column list of records alone', async () => {
+    // Two columns is what *permits* a map, never what decides one. Only a
+    // `th`/`dt` leading the row is evidence, and a product list has neither --
+    // collapsing it would key the output on titles.
+    document.body.innerHTML = `
+      <ul id="p">
+        <li class="c"><h3>Alpha</h3><span>$10</span></li>
+        <li class="c"><h3>Beta</h3><span>$20</span></li>
+        <li class="c"><h3>Gamma</h3><span>$30</span></li>
+      </ul>`
+    const draft = detailPickToDraft(await pick('detail', 'ul#p'))
+    expect(draft.keyValue).toBeFalsy()
+    expect(draft.spec.transform).toBeUndefined()
+  })
+
+  it('passes the studio lint and binds every column', async () => {
+    document.body.innerHTML = SPEC_HTML
+    const draft = detailPickToDraft(await pick('detail', '#spec'))
+    const items: WorkItem[] = [{ kind: 'field', id: 'f1', draft }]
+    const recipe = itemsToRecipe({ ...emptyRecipe('Specs'), sample_urls: [] }, items)
+
+    const group = recipe.field_groups[0]
+    expect(group.repeat?.kind).toBe('dom_rows')
+    for (const column of Object.keys(recipe.fields[draft.name].type.columns ?? {})) {
+      expect(group.bindings[column]?.length ?? 0).toBeGreaterThan(0)
+    }
+    expect(lintRecipe(recipe).filter((i) => i.severity === 'error')).toEqual([])
   })
 })
 
