@@ -4,7 +4,9 @@ data-collection recipes. `POST` creates a recipe and queues its initial
 `POST /{id}/run` queues a deterministic (no-LLM) `replay`; `POST /{id}/heal`
 forces a heal cycle; `GET /{id}/versions` lists build/heal history;
 `POST /{id}/codegen` queues LLM-authored scraper-code generation for a
-target language. Mounted on the `gateway` (no `_proxy` variant) -- run CRUD
+target language; `POST /{id}/jobs` applies a catalogue recipe to a caller's
+own list of URLs (one queued run each) and `GET /{id}/jobs/{job_id}` reports
+the batch. Mounted on the `gateway` (no `_proxy` variant) -- run CRUD
 never touches `crawlpilot.driver`; the actual processing happens in
 `agentpilot.jobs.recipe_worker_loop.RecipeWorkerLoop` and
 `agentpilot.jobs.recipe_scheduler_loop.RecipeSchedulerLoop`, running
@@ -22,6 +24,12 @@ from agentpilot.gateway.schemas import (
     RecipeCreateRequest,
     RecipeCreateResponse,
     RecipeGetResponse,
+    RecipeJobOut,
+    RecipeJobQueuedResponse,
+    RecipeJobRequest,
+    RecipeJobResponse,
+    RecipeJobResultOut,
+    RecipeJobsResponse,
     RecipeListResponse,
     RecipeOut,
     RecipeRunOut,
@@ -36,6 +44,7 @@ from agentpilot.gateway.schemas import (
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
+from agentpilot.jobs.recipe_store import RecipeJobOut as RecipeJobRow
 from agentpilot.jobs.recipe_store import RecipeOut as RecipeRow
 from agentpilot.jobs.recipe_store import RecipeRunOut as RecipeRunRow
 from agentpilot.observability.metrics import requests_total
@@ -338,3 +347,145 @@ async def get_recipe_run(
     if run is None or run.recipe_id != recipe_id:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
     return RecipeRunResponse(success=True, data=_run_out(run))
+
+
+# --- extraction jobs --------------------------------------------------------
+#
+# The runtime half of the marketplace. `GET /templates` is how a caller finds
+# a scraper; this is how they use one, and the two together are what make a
+# recipe reusable by somebody who did not author it.
+
+
+def _job_out(job: RecipeJobRow) -> RecipeJobOut:
+    return RecipeJobOut(
+        job_id=job.job_id,
+        recipe_id=job.recipe_id,
+        recipe_name=job.recipe_name,
+        recipe_version=job.recipe_version,
+        status=job.status,  # type: ignore[arg-type]
+        total=job.total,
+        queued=job.queued,
+        running=job.running,
+        completed=job.completed,
+        failed=job.failed,
+        created_at=job.created_at.isoformat(),
+        finished_at=job.finished_at.isoformat() if job.finished_at else None,
+    )
+
+
+def _job_result_out(run: RecipeRunRow) -> RecipeJobResultOut:
+    # `field_failures` is where the worker parks the v2 verdict for a job run;
+    # a run from any other path has the v1 shape and simply has none of these
+    # keys, which reads as "no per-field detail" rather than as an error.
+    detail = run.field_failures or {}
+    return RecipeJobResultOut(
+        run_id=run.run_id,
+        url=run.url or "",
+        status=run.status,  # type: ignore[arg-type]
+        data=run.data,
+        field_status=detail.get("field_status"),
+        outcome=detail.get("outcome"),
+        error=run.error,
+        finished_at=run.finished_at.isoformat() if run.finished_at else None,
+    )
+
+
+def _normalize_urls(raw: list[str]) -> list[str]:
+    """Trim, drop blanks, and de-duplicate while keeping submission order.
+
+    De-duplicating matters more than it looks: a caller pasting from a
+    spreadsheet routinely repeats a URL, and each duplicate would otherwise
+    cost a full browser session to produce a row identical to one already in
+    the job.
+    """
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in raw:
+        url = item.strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out
+
+
+@router.post("/{recipe_id}/jobs", response_model=RecipeJobQueuedResponse)
+async def submit_recipe_job(
+    recipe_id: str,
+    req: RecipeJobRequest,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeJobQueuedResponse:
+    """Apply a recipe to the caller's own URLs.
+
+    This is deliberately not `POST /{id}/run`. That queues *the recipe's own*
+    scheduled replay against the URL pattern it was built for, and reports
+    against the recipe's health. This queues one run per submitted URL, reports
+    as a batch, and leaves health alone -- a URL somebody pasted is not
+    evidence about the scraper.
+    """
+
+    store = _require_recipe_store(wiring)
+    recipe = await store.get_recipe(recipe_id, authed.tenant)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail=f"no recipe {recipe_id!r}")
+
+    # Refused here rather than failing every run: the recipe cannot answer for
+    # a URL it was not given, and finding that out N sessions later -- once per
+    # submitted URL -- is a slow way to be told something knowable now.
+    if not recipe.document:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"recipe {recipe_id!r} has no v2 document, so it can only run against "
+                "the URL pattern it was built for; rebuild it in the studio to submit URLs"
+            ),
+        )
+
+    urls = _normalize_urls(req.urls)
+    if not urls:
+        raise HTTPException(status_code=422, detail="urls: no non-empty URLs submitted")
+
+    job_id, run_ids = await store.create_job(
+        recipe_id=recipe_id,
+        tenant=authed.tenant,
+        recipe_version=recipe.version,
+        urls=urls,
+        metadata=req.metadata,
+    )
+    requests_total.labels(route="recipe_job_submit", status="200").inc()
+    return RecipeJobQueuedResponse(success=True, job_id=job_id, queued=len(run_ids))
+
+
+@router.get("/{recipe_id}/jobs", response_model=RecipeJobsResponse)
+async def list_recipe_jobs(
+    recipe_id: str,
+    limit: int = 50,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeJobsResponse:
+    store = _require_recipe_store(wiring)
+    jobs = await store.list_jobs(
+        tenant=authed.tenant, recipe_id=recipe_id, limit=min(limit, 200)
+    )
+    return RecipeJobsResponse(success=True, jobs=[_job_out(j) for j in jobs])
+
+
+@router.get("/{recipe_id}/jobs/{job_id}", response_model=RecipeJobResponse)
+async def get_recipe_job(
+    recipe_id: str,
+    job_id: str,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeJobResponse:
+    store = _require_recipe_store(wiring)
+    job = await store.get_job(job_id, authed.tenant)
+    if job is None or job.recipe_id != recipe_id:
+        raise HTTPException(
+            status_code=404, detail=f"no job {job_id!r} for recipe {recipe_id!r}"
+        )
+    runs = await store.list_job_runs(job_id, authed.tenant)
+    return RecipeJobResponse(
+        success=True, job=_job_out(job), results=[_job_result_out(r) for r in runs]
+    )

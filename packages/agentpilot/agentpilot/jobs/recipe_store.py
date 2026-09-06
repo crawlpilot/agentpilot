@@ -35,6 +35,11 @@ class RecipeOut:
     created_at: datetime
     updated_at: datetime
     heal_attempts: int = 0
+    # The v2 document, when the recipe was authored rather than agent-built.
+    # The v1 columns above stay authoritative for the schedulers and the older
+    # replay path; this is what a *job* runs, because only the v2 engine takes
+    # the URL as input instead of reading it off the recipe.
+    document: dict[str, Any] | None = None
 
 
 @dataclass
@@ -46,6 +51,46 @@ class ClaimedRecipeRun:
     params: dict[str, Any] | None
     lock: str
     recipe: RecipeOut
+    # Set when this run came from a submitted job rather than the scheduler.
+    # The worker branches on it twice: which replay engine to use, and whether
+    # the outcome is allowed to change the recipe's health.
+    job_id: str | None = None
+    url: str | None = None
+
+
+@dataclass
+class RecipeJobOut:
+    """One submission of N urls against one recipe, plus its rollup.
+
+    The counts are computed in SQL from the runs rather than kept as columns:
+    a denormalised counter has to be updated by whoever finishes a run, and a
+    worker that dies between `complete_run` and the increment leaves a job that
+    never reports finished. Counting is cheap and cannot drift.
+    """
+
+    job_id: str
+    recipe_id: str
+    recipe_name: str
+    tenant: str
+    recipe_version: int
+    total: int
+    queued: int
+    running: int
+    completed: int
+    failed: int
+    created_at: datetime
+    finished_at: datetime | None
+    metadata: dict[str, Any] | None = None
+
+    @property
+    def status(self) -> str:
+        if self.queued or self.running:
+            return "running"
+        # Every URL failed is a failed job; some failing is `partial`, which is
+        # the honest answer for a batch and the one a caller can act on.
+        if self.failed and self.completed:
+            return "partial"
+        return "failed" if self.failed else "completed"
 
 
 @dataclass
@@ -61,6 +106,8 @@ class RecipeRunOut:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    job_id: str | None = None
+    url: str | None = None
 
 
 def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
@@ -80,6 +127,7 @@ def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         heal_attempts=row.get("heal_attempts", 0),
+        document=row.get("document"),
     )
 
 
@@ -96,19 +144,62 @@ def _run_from_row(row: dict[str, Any]) -> RecipeRunOut:
         created_at=row["created_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        job_id=row.get("job_id"),
+        url=row.get("url"),
     )
 
 
 _RECIPE_COLUMNS = (
     "recipe_id, tenant, name, url_pattern, field_schema, version, global_setup, "
     "field_groups, health_status, last_verified_at, last_run_at, "
-    "schedule_interval_seconds, created_at, updated_at, heal_attempts"
+    "schedule_interval_seconds, created_at, updated_at, heal_attempts, document"
 )
 
 _RUN_COLUMNS = (
     "run_id, recipe_id, tenant, kind, status, data, field_failures, error, "
-    "created_at, started_at, finished_at"
+    "created_at, started_at, finished_at, job_id, url"
 )
+
+# A job plus its rollup, counted from the runs in one pass. `finished_at` is
+# the last run to finish, and is NULL while any is still outstanding -- which
+# is what makes a single row enough to answer "is this done?" without a second
+# query per poll.
+_JOB_SELECT = """
+    SELECT j.job_id, j.recipe_id, j.tenant, j.recipe_version, j.total,
+           j.metadata, j.created_at, r.name AS recipe_name,
+           COUNT(*) FILTER (WHERE run.status = 'queued')    AS queued,
+           COUNT(*) FILTER (WHERE run.status = 'running')   AS running,
+           COUNT(*) FILTER (WHERE run.status = 'completed') AS completed,
+           COUNT(*) FILTER (WHERE run.status IN ('failed', 'cancelled')) AS failed,
+           CASE WHEN COUNT(*) FILTER (WHERE run.status IN ('queued', 'running')) = 0
+                THEN MAX(run.finished_at) END AS finished_at
+    FROM recipe_jobs j
+    JOIN recipes r ON r.recipe_id = j.recipe_id
+    LEFT JOIN recipe_runs run ON run.job_id = j.job_id
+"""
+
+_JOB_GROUP_BY = (
+    " GROUP BY j.job_id, j.recipe_id, j.tenant, j.recipe_version, j.total, "
+    "j.metadata, j.created_at, r.name"
+)
+
+
+def _job_from_row(row: dict[str, Any]) -> RecipeJobOut:
+    return RecipeJobOut(
+        job_id=row["job_id"],
+        recipe_id=row["recipe_id"],
+        recipe_name=row["recipe_name"],
+        tenant=row["tenant"],
+        recipe_version=row["recipe_version"],
+        total=row["total"],
+        queued=row["queued"],
+        running=row["running"],
+        completed=row["completed"],
+        failed=row["failed"],
+        created_at=row["created_at"],
+        finished_at=row["finished_at"],
+        metadata=row["metadata"],
+    )
 
 
 class PostgresRecipeStore:
@@ -396,6 +487,114 @@ class PostgresRecipeStore:
                 rows = await cur.fetchall()
         return list(rows)
 
+    async def create_job(
+        self,
+        *,
+        recipe_id: str,
+        tenant: str,
+        recipe_version: int,
+        urls: list[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[str, list[str]]:
+        """Submit `urls` to a recipe. Returns `(job_id, run_ids)`.
+
+        One run per URL, all queued in a single transaction: a partially
+        enqueued job is worse than a rejected one, because it reports a total
+        it will never reach and nothing distinguishes that from work still
+        pending.
+
+        The runs go on the same queue as everything else with `kind='replay'`
+        -- which is what they are, a replay of this recipe, differing only in
+        where the URL came from. `job_id` is what tells them apart, and the
+        worker branches on it rather than on a fifth `kind` that would need the
+        CHECK constraint widened for no gain.
+        """
+
+        from psycopg.types.json import Jsonb
+
+        job_id = str(uuid.uuid4())
+        run_ids = [str(uuid.uuid4()) for _ in urls]
+        now = datetime.now(UTC)
+
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO recipe_jobs
+                    (job_id, recipe_id, tenant, recipe_version, total, metadata, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    job_id, recipe_id, tenant, recipe_version, len(urls),
+                    Jsonb(metadata) if metadata else None, now,
+                ),
+            )
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    """
+                    INSERT INTO recipe_runs
+                        (run_id, recipe_id, tenant, kind, status, job_id, url, created_at)
+                    VALUES (%s, %s, %s, 'replay', 'queued', %s, %s, %s)
+                    """,
+                    [
+                        (run_id, recipe_id, tenant, job_id, url, now)
+                        for run_id, url in zip(run_ids, urls, strict=True)
+                    ],
+                )
+        return job_id, run_ids
+
+    async def get_job(self, job_id: str, tenant: str) -> RecipeJobOut | None:
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    _JOB_SELECT + " WHERE j.job_id = %s AND j.tenant = %s" + _JOB_GROUP_BY,
+                    (job_id, tenant),
+                )
+                row = await cur.fetchone()
+                return _job_from_row(row) if row else None
+
+    async def list_jobs(
+        self, *, tenant: str, recipe_id: str | None = None, limit: int = 50
+    ) -> list[RecipeJobOut]:
+        from psycopg.rows import dict_row
+
+        clauses = ["j.tenant = %s"]
+        params: list[Any] = [tenant]
+        if recipe_id:
+            clauses.append("j.recipe_id = %s")
+            params.append(recipe_id)
+        params.append(limit)
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    _JOB_SELECT + " WHERE " + " AND ".join(clauses) + _JOB_GROUP_BY
+                    + " ORDER BY j.created_at DESC LIMIT %s",
+                    tuple(params),
+                )
+                return [_job_from_row(row) for row in await cur.fetchall()]
+
+    async def list_job_runs(self, job_id: str, tenant: str) -> list[RecipeRunOut]:
+        """Every URL's run, in submission order.
+
+        Ordered by `created_at` and then `url`: the runs of one job are
+        inserted in a single statement and share a timestamp to the
+        microsecond, so time alone is not a total order and the rows would
+        shuffle between polls of a job that is still running.
+        """
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    f"SELECT {_RUN_COLUMNS} FROM recipe_runs "
+                    "WHERE job_id = %s AND tenant = %s ORDER BY created_at, url",
+                    (job_id, tenant),
+                )
+                return [_run_from_row(row) for row in await cur.fetchall()]
+
     async def queue_run(
         self, *, recipe_id: str, tenant: str, kind: str, params: dict[str, Any] | None = None
     ) -> str:
@@ -462,7 +661,8 @@ class PostgresRecipeStore:
                         attempts = attempts + 1, started_at = now()
                     FROM next
                     WHERE r.run_id = next.run_id
-                    RETURNING r.run_id, r.recipe_id, r.tenant, r.kind, r.params
+                    RETURNING r.run_id, r.recipe_id, r.tenant, r.kind, r.params,
+                              r.job_id, r.url
                     """,
                     (limit, lock),
                 )
@@ -492,6 +692,8 @@ class PostgresRecipeStore:
                     params=r["params"],
                     lock=lock,
                     recipe=recipe,
+                    job_id=r["job_id"],
+                    url=r["url"],
                 )
             )
         return claimed

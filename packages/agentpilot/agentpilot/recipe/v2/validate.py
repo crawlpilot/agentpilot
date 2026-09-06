@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+
 def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return `(errors, warnings)` for a v2 document."""
 

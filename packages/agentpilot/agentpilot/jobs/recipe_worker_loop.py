@@ -178,7 +178,11 @@ class RecipeWorkerLoop:
             prototype_provider=self._prototype_provider,
             session_id=f"recipe-run-{run.run_id}",
             scope=run.tenant,
-            domain=_domain_from_url(run.recipe.url_pattern),
+            # For a submitted run, the domain is the *submitted URL's* -- the
+            # profile, the proxy pin and the cookie jar are all domain-scoped,
+            # so taking them from the recipe's own `url_pattern` would open a
+            # session pinned to a site this run never visits.
+            domain=_domain_from_url(run.url or run.recipe.url_pattern),
             name=f"recipe-run-{run.run_id}",
             tier="auto",
             headful=False,
@@ -233,6 +237,12 @@ class RecipeWorkerLoop:
         await self._complete_from_result(run, result)
 
     async def _process_replay(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
+        # A submitted run and a scheduled one are both replays, and they differ
+        # in the two ways this branches on.
+        if run.job_id is not None and run.url:
+            await self._process_job_run(run, session)
+            return
+
         recipe = _to_recipe_model(run.recipe)
         result = await replay_recipe(
             recipe, session=session, registry=self._registry, driver=self._driver
@@ -241,6 +251,67 @@ class RecipeWorkerLoop:
             run.recipe_id, health_status="healthy" if result.success else "degraded"
         )
         await self._complete_from_result(run, result)
+
+    async def _process_job_run(
+        self, run: ClaimedRecipeRun, session: InteractiveSession
+    ) -> None:
+        """One URL of a submitted job, through the v2 engine.
+
+        **v2, not v1, and not by preference.** The older `replay_recipe` reads
+        the page to visit off the recipe's own `url_pattern`; there is nowhere
+        to put a caller's URL. `recipe/v2/replay.py` takes it as `RunInput`,
+        which is the whole reason a catalogue of recipes can be applied to
+        somebody else's list of pages. A recipe with no v2 document was built
+        by the agent against one URL pattern and cannot answer for another, so
+        it is refused rather than silently run against the wrong page.
+
+        **The result never touches recipe health.** A scheduled replay failing
+        means the recipe is degraded; a submitted run failing usually means the
+        URL was wrong, and letting one bad paste mark a public template broken
+        would take a working scraper out of the catalogue for every tenant that
+        can see it.
+        """
+
+        from agentpilot.recipe.v2.models import Recipe as RecipeV2
+        from agentpilot.recipe.v2.models import RunInput
+        from agentpilot.recipe.v2.replay import replay_recipe as replay_v2
+
+        document = run.recipe.document
+        if not document:
+            await self._store.complete_run(
+                run.run_id,
+                run.lock,
+                data=None,
+                field_failures=None,
+                error=(
+                    "this recipe has no v2 document, so it can only run against "
+                    "the URL pattern it was built for"
+                ),
+            )
+            return
+
+        result = await replay_v2(
+            RecipeV2.from_dict(document),
+            RunInput(url=run.url or "", metadata=(run.params or {}).get("metadata") or {}),
+            session=session,
+            registry=self._registry,
+            driver=self._driver,
+        )
+        await self._store.complete_run(
+            run.run_id,
+            run.lock,
+            data=result.data,
+            # `field_status` is v2's per-field verdict (resolved / fallback /
+            # suspect / empty / failed) and is what the job view colours each
+            # URL by -- richer than v1's failures list, and the same shape a
+            # caller reading the API needs to judge a partial result.
+            field_failures={
+                "field_status": result.field_status,
+                "truncated": result.truncated,
+                "outcome": result.outcome,
+            },
+            error=result.error,
+        )
 
     async def _process_heal(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
         recipe = _to_recipe_model(run.recipe)

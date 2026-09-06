@@ -485,6 +485,82 @@ class TemplatesResponse(BaseModel):
     templates: list[TemplateOut]
 
 
+# --- extraction jobs: a catalogue recipe applied to submitted urls ----------
+
+
+class RecipeJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    urls: list[str] = Field(min_length=1, max_length=500)
+    """The pages to run this recipe against.
+
+    Capped because a job is enqueued in one transaction and reported as one
+    unit -- a caller with fifty thousand URLs wants several jobs, not one that
+    takes a day and reports a single status the whole time.
+    """
+    metadata: dict[str, Any] | None = None
+    """Addressable from the recipe as `{{meta.*}}` in step args, `template`
+    transforms and predicate operands, and nowhere else -- never interpolated
+    into a selector, an xpath, or Lua source. See `RunInput` in
+    `recipe/v2/models.py` for why those three are excluded."""
+
+
+class RecipeJobOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    recipe_id: str
+    recipe_name: str
+    recipe_version: int
+    """Which version answered. A catalogue recipe is healed and re-versioned
+    underneath its entry; without this, results from either side of a heal are
+    indistinguishable."""
+    status: Literal["running", "completed", "partial", "failed"]
+    """`partial` is a real outcome for a batch, not a rounding of `failed`:
+    some URLs yielded and some did not, and a caller can use the ones that
+    did."""
+    total: int
+    queued: int
+    running: int
+    completed: int
+    failed: int
+    created_at: str
+    finished_at: str | None
+
+
+class RecipeJobResultOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    url: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    data: dict[str, Any] | None
+    field_status: dict[str, str] | None
+    """Per-field verdict from the v2 engine -- `resolved`, `fallback`,
+    `suspect`, `empty`, `failed`. A run can complete with data and still have
+    lost a field, which a bare status cannot say."""
+    outcome: str | None
+    error: str | None
+    finished_at: str | None
+
+
+class RecipeJobQueuedResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    job_id: str
+    queued: int
+
+
+class RecipeJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    job: RecipeJobOut
+    results: list[RecipeJobResultOut]
+
+
+class RecipeJobsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    jobs: list[RecipeJobOut]
+
+
 class RecipeSaveResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
