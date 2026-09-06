@@ -479,7 +479,11 @@ describe('itemsToRecipe', () => {
     const r = itemsToRecipe(emptyRecipe('r'), [action('a', '#banner'), field('title')])
     // global_setup is re-run for every group, which is exactly what a cookie
     // banner needs and why leading actions belong there.
-    expect(selectorsOf(r.global_setup)).toEqual(['#banner'])
+    expect(actionsOf(r.global_setup)).toEqual(['#banner'])
+    // A leading click can be a reveal as much as a banner dismissal, so it is
+    // followed by the same wait a group's would be. Costless when it was only
+    // a banner: the field is already there and the wait resolves at once.
+    expect(selectorsOf(r.global_setup)).toEqual(['#banner', '.title'])
     expect(r.field_groups).toHaveLength(1)
     expect(r.field_groups[0].field_names).toEqual(['title'])
     expect(r.field_groups[0].steps ?? []).toEqual([])
