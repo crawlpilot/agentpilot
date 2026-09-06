@@ -98,6 +98,81 @@ _READ_JS = """() => {
   return {value: read(el)};
 }"""
 
+# Rows of a `dom_rows` repeat, read in one pass.
+#
+# The row element is the *root* each column resolves against, which is what
+# `within` cannot express: `within` resolves to `containers[0]`, so a
+# row-scoped read through it would silently return row one, every time. Here
+# the root is supplied by the iteration, exactly as `_rows_from_json` supplies
+# the current array member.
+#
+# A column that matches nothing in a given row yields null for that row rather
+# than shifting -- which is the entire point of reading row-wise instead of
+# collecting each column with `all: true` and zipping by index.
+_READ_ROWS_JS = """() => {
+  const opts = %s;
+  const pick = (root, sel, isXpath) => {
+    try {
+      if (isXpath) {
+        const r = document.evaluate(sel, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        const out = [];
+        for (let i = 0; i < r.snapshotLength; i++) out.push(r.snapshotItem(i));
+        return out;
+      }
+      return Array.from(root.querySelectorAll(sel));
+    } catch (e) { return null; }
+  };
+  const SKIP = {SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1};
+  const textOf = (el) => {
+    let out = '';
+    const walk = (n) => {
+      if (n.nodeType === 3) { out += n.nodeValue; return; }
+      if (n.nodeType !== 1 || SKIP[n.tagName]) return;
+      for (let c = n.firstChild; c; c = c.nextSibling) walk(c);
+    };
+    walk(el);
+    return out;
+  };
+  const read = (el, a) => {
+    if (!el) return null;
+    a = a || 'text';
+    if (a === 'text') { const t = textOf(el); return t == null ? null : t.trim(); }
+    if (a === 'visible_text') return el.innerText == null ? null : el.innerText.trim();
+    if (a === 'html') return el.outerHTML == null ? null : el.outerHTML;
+    if (a === 'value') {
+      if (el.value !== undefined && el.value !== null) return el.value;
+      return el.getAttribute('value');
+    }
+    return el.getAttribute(a);
+  };
+
+  let root = document;
+  if (opts.rows.within) {
+    const containers = pick(document, opts.rows.within.selector, opts.rows.within.kind === 'xpath');
+    if (containers === null) return {error: 'invalid within selector'};
+    if (!containers.length) return {rows: []};
+    root = containers[0];
+  }
+  const rowEls = pick(root, opts.rows.selector, opts.rows.kind === 'xpath');
+  if (rowEls === null) return {error: 'invalid rows selector'};
+
+  const rows = rowEls.map((rowEl) => {
+    const row = {};
+    for (const col of opts.columns) {
+      const nodes = pick(rowEl, col.selector, col.kind === 'xpath');
+      if (nodes === null || !nodes.length) { row[col.name] = null; continue; }
+      if (col.all) {
+        row[col.name] = nodes.map((n) => read(n, col.attribute)).filter((v) => v !== null);
+        continue;
+      }
+      const i = (col.index === null || col.index === undefined) ? 0 : col.index;
+      row[col.name] = read(i < 0 ? nodes[nodes.length + i] : nodes[i], col.attribute);
+    }
+    return row;
+  });
+  return {rows: rows};
+}"""
+
 _COUNT_JS = """() => {
   const opts = %s;
   try { return document.querySelectorAll(opts.selector).length; } catch (e) { return -1; }
@@ -193,6 +268,54 @@ class PageReader:
             driver=self._driver,
         )
         return result.js_returns[0] if result.js_returns else None
+
+    async def read_rows(
+        self, rows_locator: Locator, columns: dict[str, Locator]
+    ) -> list[dict[str, Any]] | None:
+        """Resolve N row elements and read every column *relative to its row*.
+
+        One round trip, not N x M. A results page with 48 rows and 6 columns
+        would otherwise cost 288 `execute_js` calls, and the rows would be read
+        at 288 different moments -- on a page that lazy-loads or re-renders,
+        that is not a snapshot of anything.
+
+        Returns `None` when the locator kind cannot address DOM elements, which
+        is the caller's signal that this recipe is malformed rather than that
+        the page was empty.
+        """
+
+        if rows_locator.kind not in ("css", "xpath"):
+            return None
+
+        cols = [
+            {
+                "name": name,
+                "kind": loc.kind,
+                "selector": loc.selector or "",
+                "attribute": loc.attribute,
+                "all": loc.all,
+                "index": loc.index,
+            }
+            for name, loc in columns.items()
+            if loc.kind in ("css", "xpath")
+        ]
+        opts = {
+            "rows": {
+                "kind": rows_locator.kind,
+                "selector": rows_locator.selector or "",
+                "within": (
+                    {"kind": rows_locator.within.kind, "selector": rows_locator.within.selector}
+                    if rows_locator.within is not None
+                    else None
+                ),
+            },
+            "columns": cols,
+        }
+        out = await self._eval_js(_READ_ROWS_JS % json.dumps(opts))
+        if isinstance(out, dict) and out.get("error"):
+            raise LocatorError(f"{out['error']}: {rows_locator.selector!r}")
+        rows = out.get("rows") if isinstance(out, dict) else None
+        return rows if isinstance(rows, list) else []
 
     async def read(self, locator: Locator) -> Any:
         """Resolve one locator, returning its raw value (pre-transform)."""

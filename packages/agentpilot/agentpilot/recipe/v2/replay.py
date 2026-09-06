@@ -218,6 +218,8 @@ async def _replay_repeat(
 
     if repeat.kind == "json":
         rows, truncated = await _rows_from_json(group, repeat, reader, tctx)
+    elif repeat.kind == "dom_rows":
+        rows, truncated = await _rows_from_dom_rows(group, repeat, reader, tctx)
     else:
         rows, truncated = await _rows_from_dom(group, repeat, reader, ctx, tctx, result)
 
@@ -270,6 +272,75 @@ async def _rows_from_json(
             if loc.kind in _STRUCTURED:
                 return resolve_path(_el, loc.path or "", loc.path_lang)
             return None
+
+        row = await _resolve_columns(group, _row_evaluate, tctx)
+        if row:
+            rows.append(row)
+    return rows, truncated
+
+
+async def _rows_from_dom_rows(
+    group: FieldGroup,
+    repeat: RepeatSpec,
+    reader: PageReader,
+    tctx: TransformContext,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Rows from N row elements already rendered on the page.
+
+    The commonest extraction there is, and the one v2.0 could not express: a
+    results page, a listing, an HTML table. `json` needs the data to already be
+    an array and `dom` clicks -- which on a results page navigates away on the
+    first row.
+
+    Structurally this is `_rows_from_json` against elements instead of array
+    members: read the rows once, then resolve every column *relative to its own
+    row*. Rows therefore stay aligned by construction. The alternative authors
+    were forced into -- one `all: true` read per column, zipped by index --
+    silently shifts every value below a row that happens to lack a cell, and
+    nothing in the output says it happened.
+
+    Transforms still run per column, through the same `resolve_field` path as
+    every other read, so a column's `Candidate[]` fallback chain works here too.
+    """
+
+    if repeat.rows_locator is None:
+        return [], False
+
+    # Every candidate of every column, not just the first: `resolve_field`
+    # walks a column's whole chain until one yields, and reading only the
+    # primary would quietly turn each fallback into a miss -- the chain would
+    # still be in the document and would simply never be tried.
+    #
+    # Slots are keyed by the candidate's identity so the evaluator below can
+    # answer without re-deriving anything; the locator objects are frozen
+    # dataclasses held by the recipe for the whole run, so identity is stable.
+    slots: dict[str, Locator] = {}
+    slot_of: dict[int, str] = {}
+    for name, candidates in group.bindings.items():
+        for index, candidate in enumerate(candidates):
+            key = f"{name}#{index}"
+            slots[key] = candidate.locator
+            slot_of[id(candidate.locator)] = key
+
+    # The whole matrix in one round trip, so every row is read at the same
+    # moment -- see `PageReader.read_rows`.
+    raw = await reader.read_rows(repeat.rows_locator, slots)
+    if raw is None:
+        return [], False
+
+    limit = repeat.max_iterations
+    truncated = len(raw) > limit
+    rows: list[dict[str, Any]] = []
+
+    for element in raw[:limit]:
+        async def _row_evaluate(loc: Locator, _el: dict[str, Any] = element) -> Any:
+            # The row's cells were already read; resolution is a lookup, which
+            # is what keeps this to one round trip. A locator the read could
+            # not address (a `json_ld` path on a DOM row) has no slot and
+            # answers None, so `resolve_field` falls through to the next
+            # candidate exactly as it would for an empty read.
+            key = slot_of.get(id(loc))
+            return _el.get(key) if key is not None else None
 
         row = await _resolve_columns(group, _row_evaluate, tctx)
         if row:

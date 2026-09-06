@@ -437,3 +437,145 @@ async def test_metadata_reaches_a_step_argument(browser) -> None:
     r = recipe(global_setup=[Step(op="find_text", args={"text": "{{meta.sku}}"})])
     await run(r, meta={"sku": "ABC123"})
     assert "FindTextAction" in fake.actions
+
+
+# --- dom_rows: N row elements already on the page (v2.1) --------------------
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_reads_every_row_in_one_pass(browser) -> None:
+    """The commonest extraction there is, and the one v2.0 could not express.
+
+    `json` needs the data to already be an array; `dom` clicks, which on a
+    results page navigates away on the first row.
+    """
+
+    fake = browser(js={"opts.rows": {"rows": [
+        {"title#0": "Alpha", "price#0": "10"},
+        {"title#0": "Beta", "price#0": "20"},
+        {"title#0": "Gamma", "price#0": "30"},
+    ]}})
+    r = recipe(
+        fields={"items": FieldSpec(name="items", type=TypeSpec(
+            kind="table",
+            columns={"title": TypeSpec(value_type="string"),
+                     "price": TypeSpec(value_type="string")},
+        ))},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["items"],
+            bindings={
+                "title": [Candidate(locator=Locator(kind="css", selector=".t"))],
+                "price": [Candidate(locator=Locator(kind="css", selector=".p"))],
+            },
+            repeat=RepeatSpec(
+                kind="dom_rows", row_field="items", max_iterations=50,
+                rows_locator=Locator(kind="css", selector="li.card",
+                                     within=Locator(kind="css", selector="#results")),
+            ),
+        )],
+    )
+    res = await run(r)
+    assert res.data["items"] == [
+        {"title": "Alpha", "price": "10"},
+        {"title": "Beta", "price": "20"},
+        {"title": "Gamma", "price": "30"},
+    ]
+    # One read for the whole matrix, and nothing was clicked.
+    assert fake.actions.count("ExecuteJsAction") == 1
+    assert "ClickAction" not in fake.actions
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_keeps_rows_aligned_when_a_cell_is_missing(browser) -> None:
+    """The bug this kind exists to prevent.
+
+    Reading each column separately with `all: true` and zipping by index means
+    a row that lacks a price silently takes the *next* row's price, and every
+    value below shifts. Row-wise, a missing cell is a missing cell.
+    """
+
+    browser(js={"opts.rows": {"rows": [
+        {"title#0": "Alpha", "price#0": "10"},
+        {"title#0": "Beta", "price#0": None},
+        {"title#0": "Gamma", "price#0": "30"},
+    ]}})
+    r = recipe(
+        fields={"items": FieldSpec(name="items", type=TypeSpec(
+            kind="table",
+            columns={"title": TypeSpec(value_type="string"),
+                     "price": TypeSpec(value_type="string")},
+        ))},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["items"],
+            bindings={
+                "title": [Candidate(locator=Locator(kind="css", selector=".t"))],
+                "price": [Candidate(locator=Locator(kind="css", selector=".p"))],
+            },
+            repeat=RepeatSpec(kind="dom_rows", row_field="items", max_iterations=50,
+                              rows_locator=Locator(kind="css", selector="li.card")),
+        )],
+    )
+    res = await run(r)
+    rows = res.data["items"]
+    assert [row["title"] for row in rows] == ["Alpha", "Beta", "Gamma"]
+    # Gamma keeps its own price rather than inheriting Beta's shifted one.
+    assert rows[2]["price"] == "30"
+    assert "price" not in rows[1]
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_falls_through_a_columns_candidate_chain(browser) -> None:
+    """A column's fallback chain has to work per row.
+
+    Reading only each column's primary candidate would leave every fallback in
+    the document and never try it -- the failure would look like an empty
+    column on a recipe that plainly declares an alternative.
+    """
+
+    browser(js={"opts.rows": {"rows": [
+        {"price#0": None, "price#1": "99"},
+    ]}})
+    r = recipe(
+        fields={"items": FieldSpec(name="items", type=TypeSpec(
+            kind="table", columns={"price": TypeSpec(value_type="string")}))},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["items"],
+            bindings={"price": [
+                Candidate(priority=10, locator=Locator(kind="css", selector=".gone")),
+                Candidate(priority=20, locator=Locator(kind="css", selector=".real")),
+            ]},
+            repeat=RepeatSpec(kind="dom_rows", row_field="items", max_iterations=50,
+                              rows_locator=Locator(kind="css", selector="li")),
+        )],
+    )
+    res = await run(r)
+    assert res.data["items"] == [{"price": "99"}]
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_reports_truncation(browser) -> None:
+    browser(js={"opts.rows": {"rows": [{"t#0": s} for s in "ABCDE"]}})
+    r = recipe(
+        fields={"items": FieldSpec(name="items", type=TypeSpec(
+            kind="table", columns={"t": TypeSpec(value_type="string")}))},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["items"],
+            bindings={"t": [Candidate(locator=Locator(kind="css", selector=".t"))]},
+            repeat=RepeatSpec(kind="dom_rows", row_field="items", max_iterations=2,
+                              rows_locator=Locator(kind="css", selector="li")),
+        )],
+    )
+    res = await run(r)
+    assert len(res.data["items"]) == 2
+    assert res.truncated["items"] is True
+    assert res.field_status["items"] == "suspect"
+
+
+@pytest.mark.asyncio
+async def test_dom_rows_round_trips_through_the_wire_format() -> None:
+    spec = RepeatSpec(
+        kind="dom_rows", row_field="items", max_iterations=50,
+        rows_locator=Locator(kind="css", selector="li.card"),
+    )
+    assert RepeatSpec.from_dict(spec.to_dict()) == spec
+    assert spec.to_dict()["kind"] == "dom_rows"

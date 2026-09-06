@@ -50,7 +50,7 @@ StepOp = Literal[
     "new_tab", "switch_tab", "close_tab", "download",
 ]
 OnError = Literal["fail", "continue", "skip_group"]
-RepeatKind = Literal["dom", "json"]
+RepeatKind = Literal["dom", "dom_rows", "json"]
 MatcherKind = Literal["glob", "regex", "host"]
 RecipeStatus = Literal["draft", "approved", "published"]
 HealthStatus = Literal["healthy", "degraded", "broken"]
@@ -359,14 +359,26 @@ class Candidate:
 
 @dataclass(frozen=True)
 class RepeatSpec:
-    """Produces the rows of a `table` field, from DOM options or from an array
-    already present in structured data.
+    """Produces the rows of a `table` field.
+
+    Three kinds, in descending order of preference:
 
     `kind="json"` is the one to reach for. On the pages this contract was
     written against, the size table, the spec sheet and every accordion section
     were all already in the page's JSON -- clicking for them costs page
     mutations, a re-render race, and worse resilience, to reproduce data one
     read already contains.
+
+    `kind="dom_rows"` reads N row *elements* already rendered on the page --
+    search results, a listing, an HTML table -- resolving each column relative
+    to its own row. This is the commonest extraction there is and until v2.1 it
+    had no representation at all: `json` needs the data to already be an array,
+    and `dom` clicks, which on a results page means navigating away on the
+    first row. Authors were left emitting one `all: true` list per column and
+    zipping by index, which silently misaligns the moment one row lacks a cell.
+
+    `kind="dom"` clicks through an option set, re-reading the page after each
+    click. The last resort, and the only one that mutates the page.
     """
 
     kind: RepeatKind
