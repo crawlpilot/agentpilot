@@ -254,6 +254,28 @@ describe('detailPickToDraft', () => {
     expect(locator.within?.selector).toBeTruthy()
   })
 
+  it('scopes each member by a wrapper of its own kind, so the field can be saved', async () => {
+    // A `css` locator scoped by an `xpath` one is an *error* in the lint and in
+    // `validate_document` -- the two are composed rather than resolved
+    // separately. Every picked chain ends in XPath candidates, so getting this
+    // wrong made an array field unsaveable rather than merely wrong.
+    document.body.innerHTML = `
+      <div class="gal"><img src="/1.jpg"><img src="/2.jpg"><img src="/3.jpg"></div>`
+    const draft = detailPickToDraft(await pick('detail', 'div.gal'))
+
+    expect(draft.candidates.some((c) => c.locator.kind === 'xpath')).toBe(true)
+    for (const { locator } of draft.candidates) {
+      expect(locator.within?.kind).toBe(locator.kind)
+      // `//img` would ignore its context node and collect the whole page;
+      // `document.evaluate` only honours the root for a relative expression.
+      if (locator.kind === 'xpath') expect(locator.selector?.startsWith('.')).toBe(true)
+    }
+
+    const items: WorkItem[] = [{ kind: 'field', id: 'f1', draft }]
+    const recipe = itemsToRecipe(emptyRecipe('Gallery'), items)
+    expect(lintRecipe(recipe).filter((i) => i.severity === 'error')).toEqual([])
+  })
+
   it('reads a text array as every direct child, through the real reader', async () => {
     // `:scope > *` is only correct if the reader resolves it against the
     // `within` element rather than the document, so this asserts through

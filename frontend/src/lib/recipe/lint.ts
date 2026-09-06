@@ -225,7 +225,7 @@ function lintTarget(recipe: Recipe, add: AddIssue) {
     add(
       'info',
       'target.match',
-      'No URL matchers, so this recipe accepts any URL. That is legal, but it also means nothing stops a scheduled run pointing it at the wrong page type.',
+      'No URL matchers, so this recipe accepts any URL. That is right for a generic recipe and risky for a site-specific one: a matcher is what rejects a mismatched URL at submit time, rather than returning a page of empty fields for each of them.',
       'schema',
     )
   }

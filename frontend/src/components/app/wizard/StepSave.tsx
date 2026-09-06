@@ -69,8 +69,9 @@ export function StepSave({
           Scraper marketplace
         </p>
         <p className="text-[11px] leading-snug text-muted-foreground">
-          What this recipe is <em>for</em>, so it can be found by site and page kind rather than by
-          name. The domain is taken from your sample URLs.
+          What this recipe is <em>for</em>, so it can be found by page kind rather than by name.
+          Published recipes are applied to whatever URLs a caller submits &mdash; the pages you
+          built against are not saved with it.
         </p>
 
         <div className="flex flex-col gap-1.5">

@@ -88,7 +88,13 @@ const COLUMN_VALUE_TYPE: Record<PickColumn['type'], { value_type: ValueType; tra
  */
 const EXTRACTION_TYPE: Record<
   'text' | 'link' | 'image' | 'text_array' | 'link_array' | 'image_array',
-  { type: TypeSpec; attribute?: string; transform?: Transform[]; member?: string }
+  {
+    type: TypeSpec
+    attribute?: string
+    transform?: Transform[]
+    /** Read these inside the picked wrapper. Both kinds -- see `memberCandidates`. */
+    member?: { css: string; xpath: string }
+  }
 > = {
   text: { type: { kind: 'scalar', value_type: 'string' } },
   link: {
@@ -103,22 +109,22 @@ const EXTRACTION_TYPE: Record<
   },
   text_array: {
     type: { kind: 'list', items: { kind: 'scalar', value_type: 'string' } },
-    // `:scope > *` is the direct-children read, matching the extension's
-    // `element.children` walk. `filter_empty` drops the separators and empty
-    // wrappers that walk skips by tag and this one cannot.
-    member: ':scope > *',
+    // The direct-children read, matching the extension's `element.children`
+    // walk. `filter_empty` drops the separators and empty wrappers that walk
+    // skips by tag and this one cannot.
+    member: { css: ':scope > *', xpath: './*' },
     transform: [{ op: 'filter_empty' }],
   },
   link_array: {
     type: { kind: 'list', items: { kind: 'scalar', value_type: 'url' } },
     attribute: 'href',
-    member: 'a[href]',
+    member: { css: 'a[href]', xpath: './/a[@href]' },
     transform: [{ op: 'url_resolve' }],
   },
   image_array: {
     type: { kind: 'list', items: { kind: 'scalar', value_type: 'url' } },
     attribute: 'src',
-    member: 'img',
+    member: { css: 'img', xpath: './/img' },
     transform: [{ op: 'url_resolve' }],
   },
 }
@@ -490,21 +496,35 @@ export function detailPickToDraft(payload: PickPayload, taken: Iterable<string> 
  *
  * The wrapper chain is the fallback chain -- `within` is what carries it, so a
  * wrapper selector that stops resolving falls through to the next exactly as
- * it would for a scalar. The `selector` is the same member query every time,
- * because the values' relationship to their wrapper is the one thing here that
- * does not vary.
+ * it would for a scalar. The values' relationship to their wrapper is the one
+ * thing here that does not vary, so only the scope changes down the chain.
+ *
+ * **The member takes its wrapper's kind, and must.** A `css` locator scoped by
+ * an `xpath` one is rejected by the lint and by `validate_document` -- the two
+ * are composed rather than resolved separately -- so a chain that ends in
+ * XPath candidates (most do) would have made the field unsaveable. The xpath
+ * forms are written `./` and `.//` rather than `//`: `document.evaluate`
+ * ignores its context node for an absolutely-rooted expression, so a `//img`
+ * member would collect every image on the page instead of the wrapper's.
  */
-function memberCandidates(chain: PickSelector[], member: string, attribute?: string): Candidate[] {
-  return chainToCandidates(chain, { attribute }).map((candidate) => ({
-    ...candidate,
-    locator: {
-      kind: 'css' as const,
-      selector: member,
-      all: true,
-      ...(attribute ? { attribute } : {}),
-      within: candidate.locator,
-    },
-  }))
+function memberCandidates(
+  chain: PickSelector[],
+  member: { css: string; xpath: string },
+  attribute?: string,
+): Candidate[] {
+  return chainToCandidates(chain, { attribute }).map((candidate) => {
+    const kind = candidate.locator.kind === 'xpath' ? 'xpath' : 'css'
+    return {
+      ...candidate,
+      locator: {
+        kind,
+        selector: kind === 'xpath' ? member.xpath : member.css,
+        all: true,
+        ...(attribute ? { attribute } : {}),
+        within: candidate.locator,
+      },
+    }
+  })
 }
 
 /**
