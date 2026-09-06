@@ -41,7 +41,7 @@ import {
   type PickMessage,
 } from './protocol'
 import { enrich } from './enrich'
-import { APPLY_STEPS_JS, PREVIEW_JS } from './preview'
+import { runPreview, runSteps } from './preview'
 
 const TEST_HIGHLIGHT_CLASS = 'crawlpilot-test-highlight'
 
@@ -215,16 +215,6 @@ function testSelector(selector: string): number {
  * default would make rollup emit a namespace object instead of the API.
  * Shared constants and types live in `protocol.ts` for that reason.
  */
-/**
- * Resolve the recipe's fields against this page.
- *
- * `PREVIEW_JS` is an arrow-function *source string* so it stays diffable
- * against the Python it is ported from; it is compiled once, here, rather
- * than being re-sent and re-parsed on every preview.
- */
-const runPreview = new Function(`return (${PREVIEW_JS})`)() as (fields: unknown[]) => unknown[]
-const runSteps = new Function(`return (${APPLY_STEPS_JS})`)() as (steps: unknown[]) => Promise<unknown[]>
-
 const api: PickerApi = {
   version: PICKER_VERSION,
   start,
@@ -235,8 +225,8 @@ const api: PickerApi = {
   showHighlights,
   clearHighlights,
   testSelector,
-  preview: (fields) => runPreview(fields),
-  applySteps: (steps) => runSteps(steps),
+  preview: (fields) => runPreview(fields as Parameters<typeof runPreview>[0]),
+  applySteps: (steps) => runSteps(steps as Parameters<typeof runSteps>[0]),
 }
 
 /**

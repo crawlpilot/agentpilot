@@ -1,3 +1,5 @@
+import { clickElementRobust } from './vendor/content/services/dom/domUtils'
+
 /**
  * Run the recipe's bindings against the live page and report what comes back.
  *
@@ -55,100 +57,138 @@ export interface PreviewResult {
 /**
  * The in-page reader.
  *
- * Kept as a source string rather than a function so it is unambiguous that
- * this runs in the *remote* page, and so it stays diffable against the Python
- * original it is ported from.
+ * A real function, not a source string handed to `new Function`.
+ *
+ * It was a string, and that was a bug with teeth: `new Function` is `eval` as
+ * far as CSP is concerned, so on any page whose policy omits `unsafe-eval` --
+ * Amazon and Walmart among them, i.e. exactly the pages this targets -- it
+ * threw at module scope, which killed the whole bundle *before* it could
+ * assign `window.__cpPicker`. Preview and reveal steps both went silent, and
+ * the failure looked like "the preview shows nothing" rather than like a CSP
+ * violation. Bundled code has no such problem.
+ *
+ * This is still a port of `recipe/v2/evaluate.py::_READ_JS` and
+ * `resolve.py::resolve_field`, and still deliberately faithful to them; see
+ * the module header.
  */
-export const PREVIEW_JS = `(fields) => {
-  const pick = (root, sel, isXpath) => {
-    try {
-      if (isXpath) {
-        const r = document.evaluate(sel, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-        const out = [];
-        for (let i = 0; i < r.snapshotLength; i++) out.push(r.snapshotItem(i));
-        return out;
+
+const SKIP_TAGS: Record<string, true> = {
+  SCRIPT: true, STYLE: true, NOSCRIPT: true, TEMPLATE: true,
+}
+
+/** textContent minus script/style/template subtrees. See the module header. */
+function textOf(el: Element): string {
+  let out = ''
+  const walk = (n: Node) => {
+    if (n.nodeType === 3) {
+      out += n.nodeValue ?? ''
+      return
+    }
+    if (n.nodeType !== 1 || SKIP_TAGS[(n as Element).tagName]) return
+    for (let c = n.firstChild; c; c = c.nextSibling) walk(c)
+  }
+  walk(el)
+  return out
+}
+
+function pick(root: Document | Element, selector: string, isXPath: boolean): Element[] | null {
+  try {
+    if (isXPath) {
+      const r = document.evaluate(selector, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null)
+      const out: Element[] = []
+      for (let i = 0; i < r.snapshotLength; i++) {
+        const node = r.snapshotItem(i)
+        if (node instanceof Element) out.push(node)
       }
-      return Array.from(root.querySelectorAll(sel));
-    } catch (e) { return null; }
-  };
-
-  // textContent minus script/style/template subtrees. Raw textContent would
-  // include the source of any inline <script>, which on real pages is common
-  // enough to matter -- see the note in evaluate.py.
-  const SKIP = {SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1};
-  const textOf = (el) => {
-    let out = '';
-    const walk = (n) => {
-      if (n.nodeType === 3) { out += n.nodeValue; return; }
-      if (n.nodeType !== 1 || SKIP[n.tagName]) return;
-      for (let c = n.firstChild; c; c = c.nextSibling) walk(c);
-    };
-    walk(el);
-    return out;
-  };
-
-  const read = (el, attribute) => {
-    if (!el) return null;
-    const a = attribute || 'text';
-    if (a === 'text') { const t = textOf(el); return t == null ? null : t.trim(); }
-    if (a === 'visible_text') return el.innerText == null ? null : el.innerText.trim();
-    if (a === 'html') return el.outerHTML == null ? null : el.outerHTML;
-    if (a === 'value') {
-      if (el.value !== undefined && el.value !== null) return el.value;
-      return el.getAttribute('value');
+      return out
     }
-    return el.getAttribute(a);
-  };
+    return Array.from(root.querySelectorAll(selector))
+  } catch {
+    return null
+  }
+}
 
-  const evaluate = (opts) => {
-    let root = document;
-    if (opts.within) {
-      const containers = pick(document, opts.within.selector, opts.within.kind === 'xpath');
-      if (containers === null) return {error: 'invalid within selector'};
-      if (!containers.length) return {value: opts.all ? [] : null, matches: 0};
-      root = containers[0];
-    }
-    const nodes = pick(root, opts.selector, opts.kind === 'xpath');
-    if (nodes === null) return {error: 'invalid selector'};
-    if (opts.all) {
-      return {value: nodes.map((n) => read(n, opts.attribute)).filter((v) => v !== null), matches: nodes.length};
-    }
-    const i = (opts.index === null || opts.index === undefined) ? 0 : opts.index;
-    const el = i < 0 ? nodes[nodes.length + i] : nodes[i];
-    return {value: read(el, opts.attribute), matches: nodes.length};
-  };
+function readValue(el: Element | null | undefined, attribute?: string): string | null {
+  if (!el) return null
+  const a = attribute || 'text'
+  if (a === 'text') return textOf(el).trim()
+  if (a === 'visible_text') {
+    const t = (el as HTMLElement).innerText
+    return t == null ? null : t.trim()
+  }
+  if (a === 'html') return el.outerHTML ?? null
+  if (a === 'value') {
+    const v = (el as HTMLInputElement).value
+    if (v !== undefined && v !== null) return v
+    return el.getAttribute('value')
+  }
+  return el.getAttribute(a)
+}
 
-  // Empty means "did not produce a value", which is what makes the ordered
-  // candidate list a fallback chain rather than a list of equals.
-  const isEmpty = (v) =>
-    v === null || v === undefined ||
+function evaluateLocator(
+  opts: PreviewLocator,
+): { value?: string | string[] | null; matches?: number; error?: string } {
+  let root: Document | Element = document
+  if (opts.within) {
+    const containers = pick(document, opts.within.selector, opts.within.kind === 'xpath')
+    if (containers === null) return { error: 'invalid within selector' }
+    if (!containers.length) return { value: opts.all ? [] : null, matches: 0 }
+    root = containers[0]
+  }
+  const nodes = pick(root, opts.selector, opts.kind === 'xpath')
+  if (nodes === null) return { error: 'invalid selector' }
+  if (opts.all) {
+    return {
+      value: nodes.map((n) => readValue(n, opts.attribute)).filter((v): v is string => v !== null),
+      matches: nodes.length,
+    }
+  }
+  const i = opts.index === null || opts.index === undefined ? 0 : opts.index
+  const el = i < 0 ? nodes[nodes.length + i] : nodes[i]
+  return { value: readValue(el, opts.attribute), matches: nodes.length }
+}
+
+/**
+ * Empty means "did not produce a value", which is what makes the ordered
+ * candidate list a fallback chain rather than a list of equals.
+ */
+function isEmpty(v: unknown): boolean {
+  return (
+    v === null ||
+    v === undefined ||
     (typeof v === 'string' && v.trim() === '') ||
-    (Array.isArray(v) && v.length === 0);
+    (Array.isArray(v) && v.length === 0)
+  )
+}
 
+export function runPreview(fields: PreviewField[]): PreviewResult[] {
   return fields.map((field) => {
-    let firstError = null;
+    let firstError: string | null = null
     for (let i = 0; i < field.candidates.length; i++) {
-      const out = evaluate(field.candidates[i]);
-      if (out.error) { if (!firstError) firstError = out.error; continue; }
-      if (isEmpty(out.value)) continue;
+      const out = evaluateLocator(field.candidates[i])
+      if (out.error) {
+        firstError ??= out.error
+        continue
+      }
+      if (isEmpty(out.value)) continue
       return {
         name: field.name,
         status: i === 0 ? 'resolved' : 'fallback',
-        value: out.value,
+        value: out.value ?? null,
         candidate: i + 1,
-        matches: out.matches,
-      };
+        matches: out.matches ?? 0,
+      }
     }
     return {
       name: field.name,
-      status: firstError ? 'error' : (field.required ? 'failed' : 'empty'),
+      status: firstError ? 'error' : field.required ? 'failed' : 'empty',
       value: null,
       candidate: null,
       matches: 0,
-      error: firstError || undefined,
-    };
-  });
-}`
+      error: firstError ?? undefined,
+    }
+  })
+}
 
 /** A reveal step, flattened to what the in-page runner needs. */
 export interface PreviewStep {
@@ -180,57 +220,83 @@ export interface StepOutcome {
  * The alternative was to leave reveal steps unapplied and let every field
  * behind an accordion preview as `empty`, which teaches the author nothing.
  */
-export const APPLY_STEPS_JS = `async (steps) => {
-  const pickOne = (sel, isXpath) => {
-    try {
-      if (isXpath) {
-        const r = document.evaluate(sel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-        return r.singleNodeValue;
-      }
-      return document.querySelector(sel);
-    } catch (e) { return null; }
-  };
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const out = [];
+export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const out: StepOutcome[] = []
+
+  const pickOne = (selector: string, isXPath: boolean): Element | null => {
+    const found = pick(document, selector, isXPath)
+    return found && found.length ? found[0] : null
+  }
 
   for (const step of steps) {
     try {
       if (step.op === 'wait') {
-        await sleep(Math.min(step.ms || 0, 5000));
-        out.push({op: step.op, status: 'ok'});
-        continue;
+        // Capped: a mistyped "60000" must not leave the preview looking hung.
+        await sleep(Math.min(step.ms || 0, 5000))
+        out.push({ op: step.op, status: 'ok' })
+        continue
       }
 
-      const el = step.selector ? pickOne(step.selector, step.kind === 'xpath') : null;
-      if (!el) { out.push({op: step.op, status: 'skipped', detail: 'no match'}); continue; }
+      const el = step.selector ? pickOne(step.selector, step.kind === 'xpath') : null
+
+      if (step.op === 'scroll') {
+        // Pagination's infinite-scroll mode emits this with no target.
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' })
+        await sleep(400)
+        out.push({ op: step.op, status: 'ok' })
+        continue
+      }
+
+      if (!el) {
+        // The cookie banner that did not appear this time. Not an error.
+        out.push({ op: step.op, status: 'skipped', detail: 'no match' })
+        continue
+      }
 
       if (step.op === 'click') {
-        el.click();
-        // Give a re-render a moment to land before the next step reads the
-        // page. Replay has settle/timeout machinery for this; here a short
-        // fixed pause is the honest approximation.
-        await sleep(250);
+        // `clickElementRobust`, not `el.click()`. A bare `.click()` fires one
+        // untrusted `click` and nothing else, which a great many real controls
+        // ignore -- anything listening for pointerdown/mousedown, and most
+        // component libraries. The vendored helper dispatches the whole
+        // pointer/mouse sequence and yields between phases so a framework can
+        // process each one, which is why the extension uses it too.
+        await clickElementRobust(el as HTMLElement)
+        // Let a re-render land before the next step reads the page. Replay has
+        // settle/timeout machinery for this; a short pause is the honest
+        // approximation of it here.
+        await sleep(300)
       } else if (step.op === 'scroll_into_view') {
-        el.scrollIntoView({behavior: 'auto', block: 'center'});
-        await sleep(250);
+        el.scrollIntoView({ behavior: 'auto', block: 'center' })
+        await sleep(300)
       } else if (step.op === 'fill') {
-        el.focus();
-        el.value = step.text == null ? '' : step.text;
-        el.dispatchEvent(new Event('input', {bubbles: true}));
-        el.dispatchEvent(new Event('change', {bubbles: true}));
+        const input = el as HTMLInputElement
+        input.focus()
+        // Assigning `.value` directly is invisible to React, which tracks the
+        // last value it wrote on the node. Going through the prototype setter
+        // is what makes the framework see the change.
+        const proto =
+          input instanceof HTMLTextAreaElement
+            ? HTMLTextAreaElement.prototype
+            : HTMLInputElement.prototype
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+        if (setter) setter.call(input, step.text ?? '')
+        else input.value = step.text ?? ''
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
       } else if (step.op === 'wait_for_selector') {
         // Already resolved above, so it is present.
       } else {
-        out.push({op: step.op, status: 'skipped', detail: 'not simulated'});
-        continue;
+        out.push({ op: step.op, status: 'skipped', detail: 'not simulated' })
+        continue
       }
-      out.push({op: step.op, status: 'ok'});
+      out.push({ op: step.op, status: 'ok' })
     } catch (e) {
-      out.push({op: step.op, status: 'failed', detail: String(e && e.message || e)});
+      out.push({ op: step.op, status: 'failed', detail: e instanceof Error ? e.message : String(e) })
     }
   }
-  return out;
-}`
+  return out
+}
 
 /**
  * Zip list-valued results into rows, the way a caller would read them.
