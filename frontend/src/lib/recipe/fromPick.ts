@@ -30,6 +30,7 @@ import { SOURCE_PRIORITY } from './document'
 import type {
   Candidate,
   FieldGroup,
+  Step,
   FieldSpec,
   Locator,
   Recipe,
@@ -394,6 +395,122 @@ export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
             : undefined,
       })),
   }))
+}
+
+/**
+ * One entry in the authoring list: a field to read, an action to perform, or a
+ * marker that the page must be reloaded first.
+ *
+ * Fields and actions live in *one ordered list* because on a real page they
+ * interleave -- a value behind a drawer needs the click that opens it, and the
+ * click is only meaningful before that particular read. Keeping them in
+ * separate steps forces an author to jump back and forth to express one
+ * sequence, which is the arrangement the extension avoids and the one this
+ * replaced.
+ */
+export type WorkItem =
+  | { kind: 'field'; id: string; draft: FieldDraft }
+  | { kind: 'action'; id: string; step: Step }
+  | { kind: 'reset'; id: string }
+
+/**
+ * Compile the authoring list into `global_setup` + `field_groups`.
+ *
+ * The mapping is dictated by one fact about replay: `_replay_group`
+ * **re-navigates at the start of every group** and re-runs `global_setup` each
+ * time (`recipe/v2/replay.py`). A group therefore does not inherit the page
+ * state an earlier group left behind -- it starts from a fresh load, every
+ * time. Three consequences, and all three are why this function is not a
+ * one-liner:
+ *
+ * 1. **Leading actions become `global_setup`.** Actions before the first field
+ *    are the ones every group needs -- the cookie banner, the region prompt --
+ *    and `global_setup` is re-run per group, which is exactly right for them.
+ *
+ * 2. **A group's steps are cumulative, not incremental.** For `[A1, F1, A2,
+ *    F2, A3, F3]`, the group holding `F3` needs `[A2, A3]`, not `[A3]`: it
+ *    re-navigated, so `A2`'s effect is gone. Emitting only the incremental
+ *    action is the subtle bug this exists to avoid, and it would fail only on
+ *    progressively-revealed content -- late, and in production.
+ *
+ * 3. **`reset` exists because cumulative is not always right.** Two drawers
+ *    that close each other cannot both be open, so accumulating their opens
+ *    produces a sequence that cannot run. The Zara example hits this exactly
+ *    (`_readme`: "two drawers that conflict so they need separate groups"). A
+ *    `reset` clears the accumulation and starts a genuinely independent group.
+ */
+export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
+  const firstFieldAt = items.findIndex((i) => i.kind === 'field')
+  const firstResetAt = items.findIndex((i) => i.kind === 'reset')
+
+  // Leading actions: everything before the first field, and before any reset
+  // (a reset before any field would make them not-global after all).
+  const leadingEnd =
+    firstFieldAt === -1
+      ? items.length
+      : firstResetAt !== -1 && firstResetAt < firstFieldAt
+        ? firstResetAt
+        : firstFieldAt
+
+  const globalSetup = items.slice(0, leadingEnd).filter((i) => i.kind === 'action').map((i) => i.step)
+
+  interface Pending {
+    steps: Step[]
+    drafts: FieldDraft[]
+  }
+  const groups: Pending[] = []
+  let accumulated: Step[] = []
+  let current: Pending | null = null
+
+  for (const item of items.slice(leadingEnd)) {
+    if (item.kind === 'reset') {
+      accumulated = []
+      current = null
+      continue
+    }
+    if (item.kind === 'action') {
+      accumulated = [...accumulated, item.step]
+      // The next field belongs to a new group: it needs this action, and the
+      // fields already placed did not.
+      current = null
+      continue
+    }
+    if (current === null) {
+      current = { steps: accumulated, drafts: [] }
+      groups.push(current)
+    }
+    current.drafts.push(item.draft)
+  }
+
+  let next: Recipe = {
+    ...recipe,
+    fields: {},
+    field_groups: [],
+    global_setup: globalSetup,
+  }
+
+  // Nothing picked yet: keep a single empty group so the document stays the
+  // shape `emptyRecipe` promises rather than becoming group-less.
+  if (groups.length === 0) {
+    return { ...next, field_groups: [{ group_id: 'core', field_names: [], bindings: {}, steps: [] }] }
+  }
+
+  groups.forEach((group, index) => {
+    const groupId = groups.length === 1 ? 'core' : `group_${index + 1}`
+    const bindings: Record<string, Candidate[]> = {}
+    const fieldNames: string[] = []
+    for (const draft of group.drafts) {
+      if (next.fields[draft.name]) continue
+      next = { ...next, fields: { ...next.fields, [draft.name]: draft.spec } }
+      fieldNames.push(draft.name)
+      bindings[draft.name] = draft.candidates
+    }
+    const fieldGroup: FieldGroup = { group_id: groupId, field_names: fieldNames, bindings }
+    if (group.steps.length > 0) fieldGroup.steps = group.steps
+    next = { ...next, field_groups: [...next.field_groups, fieldGroup] }
+  })
+
+  return next
 }
 
 /**

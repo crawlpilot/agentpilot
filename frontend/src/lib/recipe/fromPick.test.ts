@@ -6,13 +6,15 @@ import {
   applyDrafts,
   chainToCandidates,
   detailPickToDraft,
+  itemsToRecipe,
   listPickToDrafts,
   toFieldName,
   withJsonAlternatives,
+  type WorkItem,
 } from './fromPick'
 import { emptyRecipe, SOURCE_PRIORITY } from './document'
 import { lintRecipe } from './lint'
-import type { Locator } from './types'
+import type { Locator, Step } from './types'
 
 /**
  * The mapping is tested against payloads produced by the *real* picker running
@@ -268,5 +270,91 @@ describe('withJsonAlternatives', () => {
   it('is a no-op when the value is not in the page JSON', () => {
     const picked = chainToCandidates([{ selector: 'span.price', strategy: 'Minimal' }])
     expect(withJsonAlternatives(picked, [])).toEqual(picked)
+  })
+})
+
+describe('itemsToRecipe', () => {
+  const field = (name: string): WorkItem => ({
+    kind: 'field',
+    id: name,
+    draft: {
+      name,
+      spec: { type: { kind: 'scalar', value_type: 'string' }, description: '' },
+      candidates: chainToCandidates([{ selector: `.${name}`, strategy: 'Minimal' }]),
+    },
+  })
+  const action = (id: string, selector: string): WorkItem => ({
+    kind: 'action',
+    id,
+    step: { op: 'click', target: { kind: 'css', selector }, on_error: 'continue' },
+  })
+  const reset = (id: string): WorkItem => ({ kind: 'reset', id })
+
+  const selectorsOf = (steps: Step[] | undefined) => (steps ?? []).map((s) => s.target?.selector)
+
+  it('puts actions before the first field into global_setup', () => {
+    const r = itemsToRecipe(emptyRecipe('r'), [action('a', '#banner'), field('title')])
+    // global_setup is re-run for every group, which is exactly what a cookie
+    // banner needs and why leading actions belong there.
+    expect(selectorsOf(r.global_setup)).toEqual(['#banner'])
+    expect(r.field_groups).toHaveLength(1)
+    expect(r.field_groups[0].field_names).toEqual(['title'])
+    expect(r.field_groups[0].steps ?? []).toEqual([])
+  })
+
+  it('starts a new group when an action follows a field', () => {
+    const r = itemsToRecipe(emptyRecipe('r'), [field('title'), action('a', '#more'), field('origin')])
+    expect(r.field_groups).toHaveLength(2)
+    expect(r.field_groups[0].field_names).toEqual(['title'])
+    expect(r.field_groups[1].field_names).toEqual(['origin'])
+    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#more'])
+  })
+
+  it('accumulates steps, because every group re-navigates', () => {
+    // The bug this exists to prevent: emitting only the incremental action.
+    // The group holding `c` re-navigated, so `#one`'s effect is gone and it
+    // must be replayed before `#two`.
+    const r = itemsToRecipe(emptyRecipe('r'), [
+      field('a'), action('1', '#one'), field('b'), action('2', '#two'), field('c'),
+    ])
+    expect(r.field_groups.map((g) => g.field_names)).toEqual([['a'], ['b'], ['c']])
+    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#one'])
+    expect(selectorsOf(r.field_groups[2].steps)).toEqual(['#one', '#two'])
+  })
+
+  it('reset clears the accumulation for conflicting reveals', () => {
+    // Two drawers that close each other cannot both be open -- the Zara case.
+    const r = itemsToRecipe(emptyRecipe('r'), [
+      field('a'), action('1', '#drawer-one'), field('b'),
+      reset('r1'), action('2', '#drawer-two'), field('c'),
+    ])
+    expect(selectorsOf(r.field_groups[1].steps)).toEqual(['#drawer-one'])
+    expect(selectorsOf(r.field_groups[2].steps)).toEqual(['#drawer-two'])
+  })
+
+  it('keeps consecutive fields in one group', () => {
+    const r = itemsToRecipe(emptyRecipe('r'), [field('a'), field('b'), field('c')])
+    expect(r.field_groups).toHaveLength(1)
+    expect(r.field_groups[0].field_names).toEqual(['a', 'b', 'c'])
+  })
+
+  it('produces a document that passes the lint', () => {
+    let recipe = emptyRecipe('Interleaved')
+    recipe = {
+      ...recipe,
+      sample_urls: ['https://e.com/1', 'https://e.com/2', 'https://e.com/3'],
+      target: { match: [{ kind: 'glob', pattern: 'https://e.com/*' }] },
+    }
+    const built = itemsToRecipe(recipe, [
+      action('a', '#banner'), field('title'), action('b', '#more'), field('origin'),
+    ])
+    const errors = lintRecipe(built).filter((i) => i.severity === 'error')
+    expect(errors, JSON.stringify(errors, null, 2)).toEqual([])
+  })
+
+  it('keeps an empty document the shape emptyRecipe promises', () => {
+    const r = itemsToRecipe(emptyRecipe('r'), [])
+    expect(r.field_groups).toHaveLength(1)
+    expect(r.field_groups[0].field_names).toEqual([])
   })
 })

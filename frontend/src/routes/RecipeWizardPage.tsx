@@ -9,10 +9,8 @@ import { LintPanel } from '@/components/app/studio/LintPanel'
 import { JsonTab } from '@/components/app/studio/JsonTab'
 import { WizardSteps, type WizardStep } from '@/components/app/wizard/WizardSteps'
 import { Step1Session } from '@/components/app/wizard/Step1Session'
-import { Step2Pick } from '@/components/app/wizard/Step2Pick'
-import { Step3Fields } from '@/components/app/wizard/Step3Fields'
+import { StepExtract } from '@/components/app/wizard/StepExtract'
 import { Step4Pagination, type PaginationChoice } from '@/components/app/wizard/Step4Pagination'
-import { StepActions } from '@/components/app/wizard/StepActions'
 import { StepPreview } from '@/components/app/wizard/StepPreview'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
@@ -21,14 +19,15 @@ import { useToast } from '@/components/ui/toast'
 import { emptyRecipe } from '@/lib/recipe/document'
 import { lintRecipe } from '@/lib/recipe/lint'
 import {
-  applyDrafts,
   detailPickToDraft,
+  itemsToRecipe,
   listPickToDrafts,
   stepsToHighlightFields,
   toHighlightFields,
   toPreviewFields,
   withJsonAlternatives,
   type FieldDraft,
+  type WorkItem,
 } from '@/lib/recipe/fromPick'
 import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { PickerMode } from '@/lib/picker/protocol'
@@ -37,9 +36,11 @@ import type { Recipe, Step, StepOp } from '@/lib/recipe/types'
 
 const STEPS: WizardStep[] = [
   { id: 'session', title: 'Page', hint: 'Which pages, and a browser to look at them in' },
-  { id: 'pick', title: 'Pick', hint: 'Click what you want out of the page' },
-  { id: 'fields', title: 'Fields', hint: 'Name the output attributes and check their fallbacks' },
-  { id: 'actions', title: 'Reveal', hint: 'Clicks, scrolls and waits the page needs before it can be read' },
+  {
+    id: 'extract',
+    title: 'Extract',
+    hint: 'Pick the values you want, and any clicks or scrolls the page needs first — in the order they happen',
+  },
   { id: 'paging', title: 'More', hint: 'How to reach the rest of the results' },
   { id: 'preview', title: 'Preview', hint: 'Run it on this page and look at the data' },
   { id: 'review', title: 'Review', hint: 'What the recipe says, and what the lint makes of it' },
@@ -74,13 +75,23 @@ export function RecipeWizardPage() {
   const [furthest, setFurthest] = useState(0)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [pickMode, setPickMode] = useState<Exclude<PickerMode, 'single'>>('list')
-  const [drafts, setDrafts] = useState<FieldDraft[]>([])
+  const [items, setItems] = useState<WorkItem[]>([])
   const [paging, setPaging] = useState<PaginationChoice>({ mode: 'none', maxPages: 5 })
   const [hits, setHits] = useState<PathHit[] | null>(null)
-  const [reveal, setReveal] = useState<Step[]>([])
   const [preview, setPreview] = useState<PreviewResult[] | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [applyReveal, setApplyReveal] = useState(true)
+
+  // Fields and reveal steps are two readings of the same ordered list; the
+  // order between them is the thing that matters, so it is stored once.
+  const drafts = useMemo(
+    () => items.flatMap((i) => (i.kind === 'field' ? [i.draft] : [])),
+    [items],
+  )
+  const reveal = useMemo(
+    () => items.flatMap((i) => (i.kind === 'action' ? [i.step] : [])),
+    [items],
+  )
 
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
@@ -104,7 +115,7 @@ export function RecipeWizardPage() {
     // `picker.showHighlights` is stable via useCallback; listing the whole
     // picker object would re-fire this on every status change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, drafts, reveal, picker.status, picker.showHighlights])
+  }, [sessionId, items, drafts, reveal, picker.status, picker.showHighlights])
 
   // A preview describes one exact recipe. The moment a field is renamed, a
   // candidate reordered or a reveal step added, the table on screen is about a
@@ -112,7 +123,7 @@ export function RecipeWizardPage() {
   // table, because it is the one thing here an author is meant to trust.
   useEffect(() => {
     setPreview(null)
-  }, [drafts, reveal])
+  }, [items])
 
   function goTo(next: number) {
     setStep(next)
@@ -159,20 +170,17 @@ export function RecipeWizardPage() {
           toast({ title: 'Nothing readable in that item', description: 'Try a wider selection.' })
           return
         }
-        setDrafts(picked)
+        setItems((current) => [
+          ...current.filter((i) => i.kind !== 'field'),
+          ...picked.map((draft, i) => ({ kind: 'field' as const, id: `f-${Date.now()}-${i}`, draft })),
+        ])
         toast({
           title: `${picked.length} field${picked.length === 1 ? '' : 's'} from ${count} rows`,
           description: 'Name them on the Fields step.',
         })
-        // One list pick yields the whole schema, so there is nothing more to
-        // do here -- move on. A single-field pick is the opposite: the author
-        // almost always wants the next field too, so stay put and let them
-        // keep clicking.
-        goTo(2)
       } else {
         const draft = detailPickToDraft(payload, drafts.map((d) => d.name))
-        setDrafts((current) => [...current, draft])
-        setFurthest((f) => Math.max(f, 2))
+        setItems((current) => [...current, { kind: 'field', id: `f-${Date.now()}`, draft }])
       }
     } catch {
       // usePagePicker surfaces the message in `picker.error`.
@@ -199,18 +207,30 @@ export function RecipeWizardPage() {
     if (!payload) return
     const selector = payload.itemSelectors?.[0]?.selector ?? payload.containerSelector
     if (!selector) return
-    setReveal((current) => [
+    setItems((current) => [
       ...current,
       {
-        op,
-        target: { kind: 'css', selector },
-        // A reveal step is usually optional by nature -- the cookie banner
-        // that is not always there, the accordion already open. Failing the
-        // whole run because one did not apply is the wrong default.
-        on_error: 'continue',
-        optional: true,
-        args: {},
+        kind: 'action',
+        id: `a-${Date.now()}`,
+        step: {
+          op,
+          target: { kind: 'css', selector },
+          // A reveal step is usually optional by nature -- the cookie banner
+          // that is not always there, the accordion already open. Failing the
+          // whole run because one did not apply is the wrong default.
+          on_error: 'continue',
+          optional: true,
+          args: {},
+        },
       },
+    ])
+  }
+
+  /** An action with no target: a fixed wait. */
+  function addPlainAction(op: StepOp) {
+    setItems((current) => [
+      ...current,
+      { kind: 'action', id: `a-${Date.now()}`, step: { op, on_error: 'continue', optional: true, args: {} } },
     ])
   }
 
@@ -260,10 +280,23 @@ export function RecipeWizardPage() {
       })
       return
     }
-    setDrafts((current) =>
-      current.map((d, i) =>
-        i === index ? { ...d, candidates: withJsonAlternatives(d.candidates, matches.map((hit) => hitToLocator(hit))) } : d,
-      ),
+    let seen = -1
+    setItems((current) =>
+      current.map((item) => {
+        if (item.kind !== 'field') return item
+        seen += 1
+        if (seen !== index) return item
+        return {
+          ...item,
+          draft: {
+            ...item.draft,
+            candidates: withJsonAlternatives(
+              item.draft.candidates,
+              matches.map((hit) => hitToLocator(hit)),
+            ),
+          },
+        }
+      }),
     )
     toast({
       title: `Found in ${matches[0].kind}`,
@@ -273,10 +306,11 @@ export function RecipeWizardPage() {
 
   /** Fold the wizard's state into the document. */
   const built = useMemo(() => {
-    let recipe = applyDrafts(doc, drafts, { groupId: 'core' })
-    // Reveal steps first, then pagination: the page has to be in the state the
-    // fields expect before anything asks for the next page of it.
-    const setup: Step[] = [...reveal]
+    // The ordered list compiles into global_setup + field_groups; pagination
+    // is appended after, because it only makes sense once the page is in the
+    // state the fields expect.
+    let recipe = itemsToRecipe(doc, items)
+    const setup: Step[] = []
     if (paging.mode === 'next' && paging.selector) {
       setup.push({
         op: 'click',
@@ -291,7 +325,7 @@ export function RecipeWizardPage() {
     }
     if (setup.length > 0) recipe = { ...recipe, global_setup: [...(recipe.global_setup ?? []), ...setup] }
     return recipe
-  }, [doc, drafts, paging, reveal])
+  }, [doc, items, paging])
 
   const issues = useMemo(() => lintRecipe(built), [built])
   const errors = issues.filter((i) => i.severity === 'error').length
@@ -304,8 +338,7 @@ export function RecipeWizardPage() {
   const canAdvance =
     (step === 0 && !!sessionId && doc.name.trim().length > 0) ||
     (step === 1 && drafts.length > 0) ||
-    (step === 2 && drafts.length > 0) ||
-    step >= 3
+    step >= 2
 
   return (
     <div className="flex h-screen flex-col bg-background">
@@ -364,39 +397,24 @@ export function RecipeWizardPage() {
             )}
 
             {step === 1 && (
-              <Step2Pick
-                mode={pickMode}
-                onModeChange={setPickMode}
+              <StepExtract
+                items={items}
+                onChange={setItems}
+                pickMode={pickMode}
+                onPickModeChange={setPickMode}
                 status={picker.status}
-                fieldCount={drafts.length}
-                onStart={() => void startPick()}
+                onPickField={() => void startPick()}
+                onPickAction={(op) => void pickStepTarget(op)}
+                onAddPlainAction={addPlainAction}
                 onCancel={picker.cancel}
                 onRefine={picker.refine}
-              />
-            )}
-
-            {step === 2 && (
-              <Step3Fields
-                drafts={drafts}
-                onChange={setDrafts}
                 onTestSelector={sessionId ? picker.testSelector : undefined}
                 onFindInJson={findInJson}
                 jsonProbeReady={(hits?.length ?? 0) > 0}
               />
             )}
 
-            {step === 3 && (
-              <StepActions
-                steps={reveal}
-                onChange={setReveal}
-                status={picker.status}
-                onPickTarget={(op) => void pickStepTarget(op)}
-                onCancel={picker.cancel}
-                onRefine={picker.refine}
-              />
-            )}
-
-            {step === 4 && (
+            {step === 2 && (
               <Step4Pagination
                 value={paging}
                 onChange={setPaging}
@@ -407,7 +425,7 @@ export function RecipeWizardPage() {
               />
             )}
 
-            {step === 5 && (
+            {step === 3 && (
               <StepPreview
                 results={preview}
                 running={previewing}
@@ -419,10 +437,10 @@ export function RecipeWizardPage() {
               />
             )}
 
-            {step === 6 && (
+            {step === 4 && (
               <div className="flex flex-col gap-3 p-3">
                 <div className="rounded-md border border-border">
-                  <LintPanel issues={issues} onJump={() => setStep(2)} />
+                  <LintPanel issues={issues} onJump={() => setStep(1)} />
                 </div>
                 <JsonTab recipe={built} onReplace={(next) => reset(next)} />
               </div>
