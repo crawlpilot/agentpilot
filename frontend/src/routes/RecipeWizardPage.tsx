@@ -26,13 +26,14 @@ import {
   toLocator,
   toHighlightFields,
   toPreviewFields,
+  toPreviewRowsFields,
   withJsonAlternatives,
   type FieldDraft,
   type WorkItem,
 } from '@/lib/recipe/fromPick'
 import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { PickerMode } from '@/lib/picker/protocol'
-import type { PreviewResult } from '@/lib/picker/preview'
+import type { PreviewResult, PreviewRowsResult } from '@/lib/picker/preview'
 import type { Recipe, Step, StepOp } from '@/lib/recipe/types'
 
 const STEPS: WizardStep[] = [
@@ -80,6 +81,7 @@ export function RecipeWizardPage() {
   const [paging, setPaging] = useState<PaginationChoice>({ mode: 'none', maxPages: 5 })
   const [hits, setHits] = useState<PathHit[] | null>(null)
   const [preview, setPreview] = useState<PreviewResult[] | null>(null)
+  const [previewRows, setPreviewRows] = useState<PreviewRowsResult[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [applyReveal, setApplyReveal] = useState(true)
 
@@ -124,6 +126,7 @@ export function RecipeWizardPage() {
   // table, because it is the one thing here an author is meant to trust.
   useEffect(() => {
     setPreview(null)
+    setPreviewRows([])
   }, [items])
 
   function goTo(next: number) {
@@ -260,7 +263,14 @@ export function RecipeWizardPage() {
           })
         }
       }
-      setPreview(await picker.preview(toPreviewFields(drafts)))
+      // Scalars and tables are two different reads: a table resolves each
+      // column *relative to its row*, which is what keeps rows aligned.
+      const [scalars, tables] = await Promise.all([
+        picker.preview(toPreviewFields(drafts)),
+        picker.previewRows(toPreviewRowsFields(drafts)),
+      ])
+      setPreview(scalars)
+      setPreviewRows(tables)
     } catch (err) {
       toast({
         title: 'Preview failed',
@@ -431,6 +441,7 @@ export function RecipeWizardPage() {
             {step === 3 && (
               <StepPreview
                 results={preview}
+                rowResults={previewRows}
                 running={previewing}
                 disabled={!sessionId || drafts.length === 0}
                 onRun={() => void runPreview()}

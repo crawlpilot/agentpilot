@@ -388,6 +388,36 @@ export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
 }
 
 /**
+ * The extracted data as the caller actually receives it.
+ *
+ * This is the answer to "is the recipe right?", and it is a different question
+ * from "did each selector resolve?" -- which is why the preview shows both. A
+ * per-field status table can be entirely green while the *shape* is wrong: a
+ * table nested where the caller expected a list, a price that is a string with
+ * a currency symbol still attached, a column named `span_2`. Rendering the
+ * real JSON is the only way that becomes visible before the recipe is saved.
+ *
+ * Values are pre-transform, for the reason given in the module header, so this
+ * is the shape and the raw content -- not the final cast values.
+ */
+export function toOutputJson(
+  results: PreviewResult[],
+  rowResults: PreviewRowsResult[] = [],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const r of results) {
+    // A field that did not resolve is absent from the payload, exactly as
+    // `replay.py::_record` leaves it out of `result.data`. Emitting null here
+    // would misrepresent what a caller gets.
+    if (r.status === 'resolved' || r.status === 'fallback') out[r.name] = r.value
+  }
+  for (const r of rowResults) {
+    if (r.rows.length > 0) out[r.name] = r.rows
+  }
+  return out
+}
+
+/**
  * Zip list-valued results into rows, the way a caller would read them.
  *
  * A repeating list is stored as one `all: true` read per column (see
