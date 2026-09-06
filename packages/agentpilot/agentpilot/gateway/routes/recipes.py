@@ -204,7 +204,7 @@ async def save_recipe_v2(
 
     store = _require_recipe_store(wiring)
     recipe_id, version, warnings = await _save(store, auth.tenant, req, recipe_id=None)
-    requests_total.labels(route="recipes.save_v2", status="200").inc()
+    requests_total.labels(tenant=auth.tenant, route="save_recipe_v2").inc()
     return RecipeSaveResponse(
         success=True, recipe_id=recipe_id, version=version, warnings=warnings
     )
@@ -229,7 +229,7 @@ async def update_recipe(
     if existing is None:
         raise HTTPException(status_code=404, detail="no such recipe")
     saved_id, version, warnings = await _save(store, auth.tenant, req, recipe_id=recipe_id)
-    requests_total.labels(route="recipes.update", status="200").inc()
+    requests_total.labels(tenant=auth.tenant, route="update_recipe").inc()
     return RecipeSaveResponse(
         success=True, recipe_id=saved_id, version=version, warnings=warnings
     )
