@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from typing import Any
 
-MIN_SAMPLE_URLS = 3
-
-
 def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return `(errors, warnings)` for a v2 document."""
 
@@ -42,15 +39,12 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
         errors.append("field_groups: a recipe needs at least one group")
         groups = []
 
-    sample_urls = doc.get("sample_urls") or []
-    if len(sample_urls) < MIN_SAMPLE_URLS:
-        # Not an error: a one-URL recipe is authorable and sometimes correct.
-        # It is also, per `recipe-operations.md` D4.1, usually a guess fitted
-        # to one page -- worth saying, not worth blocking.
-        warnings.append(
-            f"sample_urls: {len(sample_urls)} given; "
-            f"{MIN_SAMPLE_URLS}+ is what separates a pattern from a guess"
-        )
+    # `sample_urls` is not checked. It used to warn below three, on the
+    # reasoning that a recipe fitted to one page is a guess -- true of
+    # authoring, and wrong as a property of the saved artefact. A recipe is
+    # chosen by a caller and applied to the URLs *they* submit; the page it was
+    # built against constrains nothing. The field remains as optional
+    # provenance. Mirrors the same decision in `frontend/src/lib/recipe/lint.ts`.
 
     if not (doc.get("target") or {}).get("match"):
         warnings.append("target.match: empty, so this recipe accepts any URL")

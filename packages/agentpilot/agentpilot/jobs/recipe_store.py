@@ -221,9 +221,13 @@ class PostgresRecipeStore:
         matchers = (document.get("target") or {}).get("match") or []
         url_pattern = str(matchers[0].get("pattern", "")) if matchers else ""
         name = str(document.get("name") or "")
-        # Derived, not asked for twice: the domain a recipe is *for* is the
-        # host of the pages it was authored against.
-        domain = _domain_of(document.get("sample_urls") or []) or _domain_of([url_pattern])
+        # Derived from the recipe's own `target`, and from nothing else. It
+        # used to fall back to the host of `sample_urls`, which quietly made
+        # the page an author happened to test on into the domain the recipe was
+        # filed under -- for a recipe that is applied to whatever URLs a caller
+        # submits, that is a label taken from scaffolding. A recipe that
+        # declares no target has no domain, sorts NULLS LAST, and still lists.
+        domain = _domain_of([url_pattern])
         field_schema = document.get("fields") or {}
         global_setup = document.get("global_setup") or []
         field_groups = document.get("field_groups") or []

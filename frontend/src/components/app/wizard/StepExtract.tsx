@@ -23,7 +23,7 @@ import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
 import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
-import { readAttribute, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
+import { readAttribute, setKeyValue, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
 import type { PathHit } from '@/lib/recipe/probe'
@@ -602,11 +602,36 @@ function ColumnList({
     })
   }
 
+  // A 2-column table is the only one that *can* be a map, and whether it
+  // should be is a question about the data, not the markup -- so it is asked
+  // here rather than guessed at. `enrich.ts` pre-answers it for the one case
+  // the markup states outright (a `th`/`dt` leading every row).
+  const canBeMap = Object.keys(columns).length === 2
+
   return (
     <div className="flex flex-col gap-1">
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
         Columns &mdash; each read relative to its own row
       </p>
+
+      {canBeMap && (
+        <label className="flex items-start gap-1.5 rounded border border-dashed border-border p-1.5 text-[11px]">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={draft.keyValue ?? false}
+            onChange={(e) => onPatch(setKeyValue(draft, e.target.checked))}
+          />
+          <span>
+            <span className="font-medium">Read as label &rarr; value</span>
+            <span className="block text-[10px] leading-snug text-muted-foreground">
+              {draft.keyValue
+                ? 'Yields one object keyed by the first column, e.g. {"Brand": "Nike"} — the columns are named name and value.'
+                : 'For a specification table. Yields one object keyed by the first column instead of a list of rows.'}
+            </span>
+          </span>
+        </label>
+      )}
       {Object.entries(columns).map(([name, candidates]) => {
         const expanded = open === name
         const attribute = readAttribute(candidates) ?? 'text'

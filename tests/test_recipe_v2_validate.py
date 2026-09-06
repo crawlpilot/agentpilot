@@ -130,10 +130,16 @@ def test_a_field_no_group_collects_is_a_warning_not_an_error() -> None:
     assert any("orphan" in w for w in warnings)
 
 
-def test_one_sample_url_warns_but_saves() -> None:
-    errors, warnings = validate_document(doc(sample_urls=["https://e.com/1"]))
-    assert errors == []
-    assert any("sample_urls" in w for w in warnings)
+def test_sample_urls_are_not_a_constraint_on_the_recipe() -> None:
+    """A recipe is applied to the URLs a caller submits, not to the ones it was
+    built on -- so neither having few of them nor having none says anything
+    about whether the recipe is valid. This used to warn below three, which
+    made scaffolding look like a defect in the artefact."""
+
+    for urls in ([], ["https://e.com/1"]):
+        errors, warnings = validate_document(doc(sample_urls=urls))
+        assert errors == []
+        assert not any("sample_urls" in w for w in warnings)
 
 
 def test_the_obvious_refusals() -> None:
