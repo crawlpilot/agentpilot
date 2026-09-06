@@ -131,6 +131,26 @@ export function StepExtract({
   const fieldIndexOf = (id: string) =>
     items.filter((i) => i.kind === 'field').findIndex((i) => i.id === id)
 
+  /**
+   * Where global setup ends.
+   *
+   * Actions before the first field compile into `global_setup`, which replay
+   * runs **once per group, after navigation** -- the consent wall, the region
+   * interstitial, the login that decides which layout the page renders in.
+   * That is a materially different guarantee from a group step (which runs for
+   * its own group only), and an author cannot reason about it if the boundary
+   * is invisible. See `itemsToRecipe`.
+   */
+  const firstFieldAt = items.findIndex((i) => i.kind === 'field')
+  const firstResetAt = items.findIndex((i) => i.kind === 'reset')
+  const globalEnd =
+    firstFieldAt === -1
+      ? items.length
+      : firstResetAt !== -1 && firstResetAt < firstFieldAt
+        ? firstResetAt
+        : firstFieldAt
+  const hasGlobal = items.slice(0, globalEnd).some((i) => i.kind === 'action')
+
   return (
     <div className="flex flex-col gap-3 p-3">
       {/* --- what to add --- */}
@@ -200,7 +220,9 @@ export function StepExtract({
       {items.length === 0 ? (
         <p className="rounded-md border border-dashed border-border p-3 text-[11px] leading-snug text-muted-foreground">
           Nothing yet. Pick a field to read, or add a reveal action if what you want is behind a
-          click. Order matters &mdash; an action applies to every field below it.
+          click. Order matters: an action applies to every field below it, and anything added
+          <strong> before the first field</strong> becomes global setup &mdash; run once per group,
+          after navigation, for consent walls and region prompts.
         </p>
       ) : (
         <>
@@ -217,8 +239,27 @@ export function StepExtract({
             </Button>
           </div>
 
+          {hasGlobal && (
+            <div className="rounded-md border border-accent/40 bg-accent/5 px-2 py-1.5">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-accent">
+                Global setup
+              </p>
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                Runs once per group, right after navigation &mdash; consent walls, region
+                interstitials, a login that decides the page layout. Anything above the first field
+                lands here.
+              </p>
+            </div>
+          )}
+
           <div>
             {items.map((item, index) => (
+              <div key={`wrap-${item.id}`}>
+                {index === globalEnd && hasGlobal && (
+                  <p className="border-t border-dashed border-border pt-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Per group &mdash; runs only for the fields below it
+                  </p>
+                )}
               <Reorderable
                 key={item.id}
                 index={index}
@@ -265,6 +306,7 @@ export function StepExtract({
                   />
                 )}
               </Reorderable>
+              </div>
             ))}
           </div>
         </>
