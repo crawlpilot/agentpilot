@@ -89,7 +89,7 @@ export function MarketplacePage() {
   const { data, isLoading, isError } = useTemplates()
   const [query, setQuery] = useState('')
 
-  const templates = data?.templates ?? []
+  const templates = useMemo(() => data?.templates ?? [], [data])
 
   // Filtering client-side rather than round-tripping: the endpoint filters by
   // exact `domain`/`page_type`, which is the wrong shape for a search box

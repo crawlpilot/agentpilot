@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readGroup } from './RecipeFieldGroupsList'
+import { readGroup } from './fieldGroups'
 import type { RecipeFieldGroup } from '@/lib/api/types'
 
 /**

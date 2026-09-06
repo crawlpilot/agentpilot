@@ -11,38 +11,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { parseUrls, rawPieceCount, suspiciousUrls } from '@/lib/recipe/submit'
 
 /** What the backend accepts in one submission -- mirrors `RecipeJobRequest`. */
 const MAX_URLS = 500
-
-/**
- * Split a textarea into URLs the way somebody actually pastes them.
- *
- * Newlines, commas and whitespace all appear in real pastes -- out of a
- * spreadsheet column, out of a CSV cell, out of a chat message. Splitting on
- * all three costs nothing and removes the "one per line" instruction that
- * people ignore anyway.
- *
- * De-duplication happens here *and* on the server. Here so the count above the
- * button is the truth before submitting; there because the API is public and
- * cannot trust this ran.
- */
-export function parseUrls(raw: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const piece of raw.split(/[\s,]+/)) {
-    const url = piece.trim()
-    if (!url || seen.has(url)) continue
-    seen.add(url)
-    out.push(url)
-  }
-  return out
-}
-
-/** Flag what will certainly fail, without pretending to validate a URL. */
-export function suspiciousUrls(urls: string[]): string[] {
-  return urls.filter((u) => !/^https?:\/\//i.test(u))
-}
 
 export function MarketplaceDetailPage() {
   const { recipeId = '' } = useParams<{ recipeId: string }>()
@@ -143,7 +115,7 @@ export function MarketplaceDetailPage() {
               </span>
               {/* Said only when it happened, so the count above is trusted
                   rather than second-guessed against what was pasted. */}
-              {raw.trim() !== '' && urls.length < raw.trim().split(/[\s,]+/).length && (
+              {urls.length < rawPieceCount(raw) && (
                 <span>· duplicates removed</span>
               )}
               {suspicious.length > 0 && (

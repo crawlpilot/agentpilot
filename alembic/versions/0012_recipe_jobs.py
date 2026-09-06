@@ -57,7 +57,10 @@ def upgrade() -> None:
     # marks the recipe healthy or degraded, and a run against a URL somebody
     # pasted must not -- otherwise one bad submission marks a public template
     # broken for every tenant that can see it.
-    op.execute("ALTER TABLE recipe_runs ADD COLUMN job_id TEXT REFERENCES recipe_jobs (job_id) ON DELETE CASCADE")
+    op.execute(
+        "ALTER TABLE recipe_runs ADD COLUMN job_id TEXT "
+        "REFERENCES recipe_jobs (job_id) ON DELETE CASCADE"
+    )
     op.execute("ALTER TABLE recipe_runs ADD COLUMN url TEXT")
     op.execute("CREATE INDEX ix_recipe_runs_job ON recipe_runs (job_id, created_at)")
 
