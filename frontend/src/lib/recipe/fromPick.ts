@@ -591,6 +591,8 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
   const groups: Pending[] = []
   let accumulated: Step[] = []
   let current: Pending | null = null
+  // Whether the last action was one whose effect the page renders later.
+  let revealed = false
 
   for (const item of items.slice(leadingEnd)) {
     if (item.kind === 'reset') {
@@ -603,9 +605,19 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
       // The next field belongs to a new group: it needs this action, and the
       // fields already placed did not.
       current = null
+      revealed = REVEALING_OPS.has(item.step.op)
       continue
     }
     if (current === null) {
+      // The reveal has to have *landed* before the group reads. See
+      // `waitStepFor`: the driver returns from a click as soon as it is
+      // dispatched, so without this the group reads the page as it was before
+      // the drawer opened.
+      if (revealed) {
+        const wait = waitStepFor(item.draft)
+        if (wait) accumulated = [...accumulated, wait]
+        revealed = false
+      }
       current = { steps: accumulated, drafts: [] }
       groups.push(current)
     }
