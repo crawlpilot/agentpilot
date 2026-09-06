@@ -1,11 +1,23 @@
-import { useNavigate } from 'react-router-dom'
-import { BookOpen } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { BookOpen, PencilRuler } from 'lucide-react'
 import { useRecipesList } from '@/hooks/useRecipes'
 import { RecipesTable } from '@/components/app/RecipesTable'
 import { RecipeCreateDialog } from '@/components/app/RecipeCreateDialog'
 import { EmptyState } from '@/components/app/EmptyState'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth/AuthContext'
+
+function StudioLink() {
+  return (
+    <Button variant="outline" asChild>
+      <Link to="/recipes/new">
+        <PencilRuler className="size-4" />
+        Open studio
+      </Link>
+    </Button>
+  )
+}
 
 export function RecipesListPage() {
   const navigate = useNavigate()
@@ -26,7 +38,12 @@ export function RecipesListPage() {
             Reusable, self-healing extraction recipes -- built once, replayed on demand or on a schedule.
           </p>
         </div>
-        {isAuthed && <RecipeCreateDialog onCreated={handleCreated} />}
+        {isAuthed && (
+          <div className="flex items-center gap-2">
+            <StudioLink />
+            <RecipeCreateDialog onCreated={handleCreated} />
+          </div>
+        )}
       </div>
 
       {!isAuthed ? (
@@ -48,7 +65,12 @@ export function RecipesListPage() {
           icon={<BookOpen className="size-8" />}
           title="No recipes yet"
           description="Create one to build a reusable extraction recipe from a URL and a field schema."
-          action={<RecipeCreateDialog onCreated={handleCreated} />}
+          action={
+            <div className="flex items-center gap-2">
+              <StudioLink />
+              <RecipeCreateDialog onCreated={handleCreated} />
+            </div>
+          }
         />
       ) : (
         <div className="rounded-lg border border-border">

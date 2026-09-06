@@ -15,6 +15,7 @@ import { AgentRunsListPage } from '@/routes/AgentRunsListPage'
 import { AgentRunDetailPage } from '@/routes/AgentRunDetailPage'
 import { RecipesListPage } from '@/routes/RecipesListPage'
 import { RecipeDetailPage } from '@/routes/RecipeDetailPage'
+import { RecipeStudioPage } from '@/routes/RecipeStudioPage'
 import { ApiKeysPage } from '@/routes/ApiKeysPage'
 import { NodesPage } from '@/routes/NodesPage'
 
@@ -24,6 +25,11 @@ export const router = createBrowserRouter([
   // tab (see SessionsTable's "Live" link) as a focused viewer, matching the
   // reference product's dedicated live-view tab rather than an in-app modal.
   { path: '/sessions/:sessionId/live', element: <LiveViewPage /> },
+  // The studio is three panes wide -- a live page, the output schema and the
+  // recipe document, all needed at once. It gets the full viewport for the
+  // same reason the live view does, and by the same precedent.
+  { path: '/recipes/new', element: <RecipeStudioPage /> },
+  { path: '/recipes/:recipeId/studio', element: <RecipeStudioPage /> },
   {
     path: '/',
     element: <App />,

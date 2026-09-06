@@ -91,15 +91,36 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
         add('error', `${where}.${name}`, 'Group collects a field that the schema does not declare.', 'fields')
         continue
       }
-      const candidates = group.bindings[name] ?? []
-      if (candidates.length === 0) {
-        add('error', `${where}.${name}`, 'No candidates bound -- this field can never resolve.', 'fields')
+      const spec = recipe.fields[name]
+      // A `table` field is bound one *column* at a time: `field_names` carries
+      // the field, while `bindings` is keyed by the column names declared in
+      // `type.columns` (contract §8, and the shape both the Zara and Walmart
+      // examples use). Looking for `bindings[name]` on a table therefore finds
+      // nothing and reports a correctly-bound table as unresolvable.
+      const bindingKeys =
+        spec.type.kind === 'table' ? Object.keys(spec.type.columns ?? {}) : [name]
+
+      if (bindingKeys.length === 0) {
+        add('error', `${where}.${name}`, 'Declared as a table but has no columns.', 'fields')
         continue
       }
 
+      const unbound = bindingKeys.filter((key) => (group.bindings[key] ?? []).length === 0)
+      if (unbound.length === bindingKeys.length) {
+        add('error', `${where}.${name}`, 'No candidates bound -- this field can never resolve.', 'fields')
+        continue
+      }
+      for (const key of unbound) {
+        add('error', `${where}.${name}.${key}`, `Column "${key}" has no candidates bound.`, 'fields')
+      }
+
+      const candidates = bindingKeys.flatMap((key) =>
+        (group.bindings[key] ?? []).map((candidate) => ({ candidate, key })),
+      )
+
       let anyStructured = false
-      for (const [index, candidate] of candidates.entries()) {
-        const at = `${name} -> candidate ${index + 1}`
+      for (const [index, { candidate, key }] of candidates.entries()) {
+        const at = `${key} -> candidate ${index + 1}`
         if (STRUCTURED_KINDS.includes(candidate.locator.kind)) anyStructured = true
         lintLocator(candidate.locator, at, false, add)
         if (candidate.variant_id && !variantIds.has(candidate.variant_id)) {
@@ -125,7 +146,6 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
         )
       }
 
-      const spec = recipe.fields[name]
       if (spec.type.kind === 'table' && !group.repeat) {
         add(
           'warning',

@@ -32,7 +32,10 @@ export function useRecipe(recipeId: string) {
   return useQuery({
     queryKey: queryKeys.recipe(recipeId),
     queryFn: () => getRecipe(apiKey!, recipeId),
-    enabled: isAuthed,
+    // An empty id would GET `/v1/recipes/`, which is the *list* route -- a
+    // request that succeeds and returns the wrong shape. The studio's "new
+    // recipe" route has no id, so guard it here rather than at each caller.
+    enabled: isAuthed && recipeId !== '',
     // A recipe is a persistent entity, not a terminal job -- keep polling so
     // a build/heal finishing in the worker is eventually reflected here.
     refetchInterval: 5_000,

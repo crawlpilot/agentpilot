@@ -1,5 +1,5 @@
-import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ArrowLeft, PencilRuler } from 'lucide-react'
 import { useRecipe, useRecipeVersions } from '@/hooks/useRecipes'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -69,6 +69,12 @@ export function RecipeDetailPage() {
         <Badge variant={healthVariant(recipe.health_status)} className="capitalize">
           {recipe.health_status}
         </Badge>
+        <Button size="sm" variant="outline" className="ml-auto" asChild>
+          <Link to={`/recipes/${recipe.recipe_id}/studio`}>
+            <PencilRuler className="size-3.5" />
+            Open in studio
+          </Link>
+        </Button>
       </div>
 
       <Card className="max-w-md">
