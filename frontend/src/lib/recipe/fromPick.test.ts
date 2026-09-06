@@ -13,6 +13,8 @@ import {
   jsonHitToDraft,
   planGroups,
   listPickToDrafts,
+  availableShapes,
+  setShape,
   toFieldName,
   withJsonAlternatives,
   type WorkItem,
@@ -199,7 +201,13 @@ describe('listPickToDrafts', () => {
   it('carries a first-row preview per column so it can be named', async () => {
     document.body.innerHTML = LIST_HTML
     const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
-    expect(Object.values(draft.columnPreviews ?? {}).some((v) => v.length > 0)).toBe(true)
+    // Several rows, not one: a single sample cannot distinguish "every row
+    // says this" from "the first row happened to".
+    const previews = Object.values(draft.columnPreviews ?? {})
+    expect(previews.some((v) => v.length > 1)).toBe(true)
+    expect(draft.columnPreviews?.title ?? draft.columnPreviews?.h3).toEqual(
+      expect.arrayContaining(['Alpha', 'Beta']),
+    )
   })
 
   it('declares a column in the type for every binding', async () => {
@@ -303,6 +311,113 @@ describe('detailPickToDraft', () => {
  * the same data; producing a scalar bound to the container instead is how a
  * twelve-row spec table came back as one string of every cell run together.
  */
+/**
+ * A broad pick is how you *point at* data; it is not a statement of intent.
+ * Clicking a product card finds title, price, image and link, and the reason
+ * for clicking it was usually "give me the URLs". These cover narrowing that
+ * pick down afterwards, without picking again.
+ */
+describe('narrowing a broad pick', () => {
+  it('flattens one column into a list of values, and it really reads', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const urlColumn = Object.keys(draft.source!.columnTypes).find(
+      (c) => draft.source!.columnTypes[c].value_type === 'url',
+    )!
+    const flat = setShape(draft, 'values', [urlColumn])
+
+    expect(flat.spec.type).toEqual({ kind: 'list', items: { kind: 'scalar', value_type: 'url' } })
+    // A table type with no repeat is a lint error, so both have to go.
+    expect(flat.columns).toBeUndefined()
+    expect(flat.repeat).toBeUndefined()
+
+    // The composed selector has to resolve against a real page, which is the
+    // only claim here worth making -- the object looking right proves nothing.
+    const api = install()
+    document.body.innerHTML = LIST_HTML
+    const [result] = api.preview(toPreviewFields([flat])) as PreviewResult[]
+    expect(result.value).toEqual([
+      `${location.origin}/a`,
+      `${location.origin}/b`,
+      `${location.origin}/c`,
+    ])
+  })
+
+  it('reads a single value from a column, without the list', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const titleColumn = Object.keys(draft.source!.columns).find((c) =>
+      (draft.source!.columnPreviews[c] ?? []).includes('Alpha'),
+    )!
+    const one = setShape(draft, 'one', [titleColumn])
+
+    expect(one.spec.type.kind).toBe('scalar')
+    expect(one.candidates[0].locator.all).toBeUndefined()
+
+    const api = install()
+    document.body.innerHTML = LIST_HTML
+    const [result] = api.preview(toPreviewFields([one])) as PreviewResult[]
+    expect(result.value).toBe('Alpha')
+  })
+
+  it('narrows to a subset of columns and back, losing nothing', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const all = Object.keys(draft.columns ?? {})
+    expect(all.length).toBeGreaterThan(2)
+
+    const narrowed = setShape(draft, 'rows', all.slice(0, 2))
+    expect(Object.keys(narrowed.columns ?? {})).toEqual(all.slice(0, 2))
+    expect(Object.keys(narrowed.spec.type.columns ?? {})).toEqual(all.slice(0, 2))
+
+    // Round trip: through a flat shape and back to the full table.
+    const restored = setShape(setShape(narrowed, 'values', [all[0]]), 'rows', all)
+    expect(Object.keys(restored.columns ?? {})).toEqual(all)
+    expect(restored.columns).toEqual(draft.columns)
+    expect(restored.repeat).toEqual(draft.repeat)
+    expect(restored.spec.type).toEqual(draft.spec.type)
+  })
+
+  it('compiles a flattened pick into a group with no repeat, and lints clean', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const urlColumn = Object.keys(draft.source!.columnTypes).find(
+      (c) => draft.source!.columnTypes[c].value_type === 'url',
+    )!
+    const flat = { ...setShape(draft, 'values', [urlColumn]), name: 'product_urls' }
+
+    const recipe = itemsToRecipe(emptyRecipe('Listing'), [{ kind: 'field', id: 'f', draft: flat }])
+    const group = recipe.field_groups[0]
+
+    expect(group.repeat).toBeUndefined()
+    expect(group.bindings.product_urls?.length ?? 0).toBeGreaterThan(0)
+    // `lint.ts` errors on a table whose group has no repeat -- which is what
+    // fires if the projection forgets to clear `columns`.
+    expect(lintRecipe(recipe).filter((i) => i.severity === 'error')).toEqual([])
+  })
+
+  it('offers only the shapes this pick can actually express', async () => {
+    document.body.innerHTML = LIST_HTML
+    const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
+    const shapes = availableShapes(draft)
+    expect(shapes.find((s) => s.shape === 'rows')?.enabled).toBe(true)
+    expect(shapes.find((s) => s.shape === 'values')?.enabled).toBe(true)
+
+    // An XPath rows locator cannot be composed with a column selector, so the
+    // flat shapes are withheld with a reason rather than silently wrong.
+    const xpathRows: typeof draft = {
+      ...draft,
+      source: {
+        ...draft.source!,
+        repeat: { ...draft.source!.repeat, rows_locator: { kind: 'xpath', selector: '//li' } },
+      },
+    }
+    const flat = availableShapes(xpathRows).find((s) => s.shape === 'values')!
+    expect(flat.enabled).toBe(false)
+    expect(flat.reason).toBeTruthy()
+  })
+})
+
 describe('a detail pick on a repeating container', () => {
   const SPEC_HTML = `
     <div id="wrap"><table id="spec"><tbody>

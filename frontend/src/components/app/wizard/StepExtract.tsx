@@ -23,7 +23,16 @@ import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
 import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
-import { planGroups, readAttribute, setKeyValue, setReadAttribute, type FieldDraft, type WorkItem } from '@/lib/recipe/fromPick'
+import {
+  availableShapes,
+  planGroups,
+  readAttribute,
+  setReadAttribute,
+  setShape,
+  type FieldDraft,
+  type OutputShape,
+  type WorkItem,
+} from '@/lib/recipe/fromPick'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
 import type { PathHit } from '@/lib/recipe/probe'
@@ -569,6 +578,134 @@ function FieldRow({
  * `spec.transform` would apply to the whole row. That is the shape the Zara
  * example uses for its `variants` columns too.
  */
+/**
+ * What this pick should actually yield.
+ *
+ * The pick is deliberately broad -- clicking a product card finds title,
+ * price, image, link and rating -- because that is the reliable way to point at
+ * data, not a statement of intent. The intent is usually narrower: "the
+ * product URLs", not a six-column table. So it is asked here, once the author
+ * can see real values to choose against, rather than inferred from the click.
+ *
+ * `availableShapes` decides what is offerable and why not; this only renders
+ * it, so a constraint is never restated in two places and cannot drift.
+ */
+function ShapePicker({
+  draft,
+  onPatch,
+}: {
+  draft: FieldDraft
+  onPatch: (next: Partial<FieldDraft>) => void
+}) {
+  const shapes = availableShapes(draft)
+  const current: OutputShape = draft.shape ?? 'rows'
+  const source = draft.source
+  if (!source) return null
+
+  const all = Object.keys(source.columns)
+  const kept = Object.keys(draft.columns ?? {})
+  // A flat shape reads exactly one column, so the kept set is whatever it was
+  // projected from -- recorded on the draft rather than re-derived, since the
+  // projection has already thrown the column list away.
+  const selected = current === 'values' || current === 'one' ? [draft.projectedFrom ?? all[0]] : kept
+  const single = current === 'values' || current === 'one'
+
+  const choose = (shape: OutputShape) => {
+    // Carry the selection across a shape change where it still makes sense: a
+    // flat shape keeps the one column, a table keeps everything chosen so far.
+    const keep = shape === 'values' || shape === 'one' ? [selected[0] ?? all[0]] : selected
+    onPatch(setShape(draft, shape, keep))
+  }
+
+  const toggle = (column: string) => {
+    const next = single
+      ? [column]
+      : selected.includes(column)
+        ? selected.filter((c) => c !== column)
+        : [...all.filter((c) => selected.includes(c) || c === column)]
+    // Never let the last column go: a field bound to nothing can only ever
+    // resolve to nothing, and the lint would call it unresolvable.
+    if (next.length === 0) return
+    onPatch(setShape(draft, current, next))
+  }
+
+  const urlColumns = all.filter((c) => source.columnTypes[c]?.value_type === 'url')
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded border border-dashed border-border p-1.5">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">What you want out</p>
+      <div className="flex flex-wrap gap-1">
+        {shapes.map((s) => (
+          <Button
+            key={s.shape}
+            size="sm"
+            variant={current === s.shape ? 'default' : 'outline'}
+            className="h-6 px-1.5 text-[11px]"
+            disabled={!s.enabled}
+            title={s.enabled ? s.hint : s.reason}
+            onClick={() => choose(s.shape)}
+          >
+            {s.label}
+          </Button>
+        ))}
+      </div>
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        {shapes.find((s) => s.shape === current)?.hint}
+      </p>
+
+      <div className="flex flex-wrap items-center gap-1 border-t border-border pt-1.5">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {single ? 'Which column' : `Keep ${selected.length} of ${all.length}`}
+        </span>
+        {!single && (
+          <>
+            <Button size="sm" variant="ghost" className="h-5 px-1 text-[10px]"
+              onClick={() => onPatch(setShape(draft, current, all))}>
+              All
+            </Button>
+            {urlColumns.length > 0 && (
+              <Button
+                size="sm" variant="ghost" className="h-5 px-1 text-[10px]"
+                title="Keep only the columns that read a URL"
+                onClick={() => onPatch(setShape(draft, current, urlColumns))}
+              >
+                URLs only
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-0.5">
+        {all.map((column) => {
+          const samples = source.columnPreviews[column] ?? []
+          return (
+            <label key={column} className="flex min-w-0 items-center gap-1.5 text-[11px]">
+              <input
+                type={single ? 'radio' : 'checkbox'}
+                name={single ? `shape:${draft.name}` : undefined}
+                className="shrink-0"
+                checked={selected.includes(column)}
+                onChange={() => toggle(column)}
+              />
+              <span className="w-24 shrink-0 truncate font-mono text-[10px]">{column}</span>
+              <span className="w-12 shrink-0 text-[10px] text-muted-foreground">
+                {source.columnTypes[column]?.value_type ?? 'string'}
+              </span>
+              <span
+                className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground"
+                title={samples.join('\n')}
+              >
+                {samples.join(' · ')}
+              </span>
+            </label>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ColumnList({
   draft,
   onPatch,
@@ -631,40 +768,19 @@ function ColumnList({
     })
   }
 
-  // A 2-column table is the only one that *can* be a map, and whether it
-  // should be is a question about the data, not the markup -- so it is asked
-  // here rather than guessed at. `enrich.ts` pre-answers it for the one case
-  // the markup states outright (a `th`/`dt` leading every row).
-  const canBeMap = Object.keys(columns).length === 2
-
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+      <ShapePicker draft={draft} onPatch={onPatch} />
+
+      <p className="pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
         Columns &mdash; each read relative to its own row
       </p>
 
-      {canBeMap && (
-        <label className="flex items-start gap-1.5 rounded border border-dashed border-border p-1.5 text-[11px]">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={draft.keyValue ?? false}
-            onChange={(e) => onPatch(setKeyValue(draft, e.target.checked))}
-          />
-          <span>
-            <span className="font-medium">Read as label &rarr; value</span>
-            <span className="block text-[10px] leading-snug text-muted-foreground">
-              {draft.keyValue
-                ? 'Yields one object keyed by the first column, e.g. {"Brand": "Nike"} — the columns are named name and value.'
-                : 'For a specification table. Yields one object keyed by the first column instead of a list of rows.'}
-            </span>
-          </span>
-        </label>
-      )}
       {Object.entries(columns).map(([name, candidates]) => {
         const expanded = open === name
         const attribute = readAttribute(candidates) ?? 'text'
-        const preview = draft.columnPreviews?.[name]
+        const samples = draft.columnPreviews?.[name] ?? []
+        const preview = samples[0]
         return (
           <div key={name} className="rounded border border-border">
             <div className="flex min-w-0 items-center gap-1.5 p-1.5">
@@ -689,9 +805,12 @@ function ColumnList({
                   {VALUE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
                 </SelectContent>
               </Select>
-              {preview && (
-                <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground" title={preview}>
-                  {preview}
+              {samples.length > 0 && (
+                <span
+                  className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground"
+                  title={samples.join('\n')}
+                >
+                  {samples.join(' · ')}
                 </span>
               )}
               <Button size="sm" variant="ghost" className="h-5 shrink-0 px-1"

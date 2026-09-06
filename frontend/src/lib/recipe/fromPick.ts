@@ -38,6 +38,7 @@ import type {
   RepeatSpec,
   StepOp,
   Transform,
+  TransformOp,
   TypeSpec,
   ValueType,
 } from './types'
@@ -232,14 +233,28 @@ export interface FieldDraft {
   columns?: Record<string, Candidate[]>
   /** How the rows are produced. `dom_rows` for a picked list. */
   repeat?: RepeatSpec
-  /** First-row values per column, so the author can recognise what to name. */
-  columnPreviews?: Record<string, string>
+  /** A few real values per column, so a column is chosen by seeing it. */
+  columnPreviews?: Record<string, string[]>
   /**
    * The rows collapse to one `{label: value}` map rather than staying a list
-   * of row objects. See `setKeyValue`, which is what actually expresses it in
-   * the document.
+   * of row objects. Kept alongside `shape` because the document expresses it
+   * as a `to_object` transform, not as a distinct type.
    */
   keyValue?: boolean
+
+  /** What this yields. Absent means `rows`, the shape a pick starts in. */
+  shape?: OutputShape
+  /**
+   * Which column a flat shape was projected from. Recorded because the
+   * projection throws the column list away, and switching back to a table has
+   * to know which one the author had settled on.
+   */
+  projectedFrom?: string
+  /**
+   * Everything the pick found, before the author narrowed it. `setShape`
+   * rebuilds from here, so narrowing is never destructive.
+   */
+  source?: DraftSource
 }
 
 /** The two columns a key-value table reads: the label, and what it labels. */
@@ -247,7 +262,226 @@ export const KEY_COLUMN = 'name'
 export const VALUE_COLUMN = 'value'
 
 /**
- * Read a 2-column table as a `{label: value}` map, or back as rows.
+ * What a pick actually yields, as distinct from what it found.
+ *
+ * A broad selection is the right way to *point at* data -- the author can see
+ * the whole card, and the picker derives better selectors from a repeating set
+ * than from a lone element. It is a poor way to state intent. Clicking a
+ * product card discovers title, price, image, link, badge and rating; the
+ * reason for clicking it was usually "give me the product URLs".
+ *
+ * So the pick stays broad and the shape is chosen afterwards, against real
+ * values:
+ *
+ * - `rows`   -- every kept column, one object per row. The default, and the
+ *               only shape that keeps values aligned across columns.
+ * - `values` -- one column, flattened to a list. The "just the URLs" case.
+ * - `map`    -- two columns read as `{label: value}`. A specification table.
+ * - `one`    -- one column, first match only. A single value that happened to
+ *               be found by picking its container.
+ */
+export type OutputShape = 'rows' | 'values' | 'map' | 'one'
+
+/**
+ * Everything the pick discovered, kept so narrowing is never destructive.
+ *
+ * `setShape` recomputes from this rather than from the current draft, which is
+ * what makes every transition reversible: an author who tries `values` and
+ * changes their mind gets the full table back instead of having to pick again.
+ */
+export interface DraftSource {
+  columns: Record<string, Candidate[]>
+  columnTypes: Record<string, TypeSpec>
+  /** A few real values per column, so a column is chosen by seeing it. */
+  columnPreviews: Record<string, string[]>
+  repeat: RepeatSpec
+}
+
+/** How many sample values to keep per column. Enough to recognise, not a table. */
+const SAMPLE_ROWS = 3
+
+/** A shape, and whether this particular pick can express it. */
+export interface ShapeOption {
+  shape: OutputShape
+  label: string
+  hint: string
+  enabled: boolean
+  /** Why not, when it is unavailable. Shown rather than left to be guessed at. */
+  reason?: string
+}
+
+/**
+ * A locator is composable into a document-scoped one only if every part of it
+ * is CSS. `document.evaluate` ignores its context node for an absolutely-rooted
+ * XPath, and there is no general way to concatenate two XPath expressions, so
+ * the flat shapes are offered only where the composition is actually sound.
+ */
+function isComposable(source: DraftSource | undefined, column: string | null): boolean {
+  const rows = source?.repeat.rows_locator
+  if (!rows || rows.kind !== 'css' || !rows.selector) return false
+  if (column === null) return Object.keys(source!.columns).some((c) => isComposable(source, c))
+  const first = source!.columns[column]?.[0]
+  return first?.locator.kind === 'css' && !!first.locator.selector
+}
+
+/**
+ * The shapes this draft can take, each with the reason it cannot.
+ *
+ * Centralised so the UI never restates a constraint: an option that is
+ * unavailable says why in the same words everywhere it appears.
+ */
+export function availableShapes(draft: FieldDraft): ShapeOption[] {
+  const source = draft.source
+  const kept = Object.keys(draft.columns ?? {})
+  const flat = isComposable(source, null)
+  const flatReason = source
+    ? 'Needs a CSS selector for both the rows and the column; this pick produced XPath.'
+    : 'Only a pick that found repeating rows can be flattened.'
+
+  return [
+    {
+      shape: 'rows',
+      label: 'Table of rows',
+      hint: 'One object per row, with every column you keep. The only shape that keeps values aligned.',
+      enabled: true,
+    },
+    {
+      shape: 'values',
+      label: 'List of values',
+      hint: 'One column, flattened across every row — a list of URLs, prices or titles.',
+      enabled: flat,
+      reason: flat ? undefined : flatReason,
+    },
+    {
+      shape: 'map',
+      label: 'Label → value',
+      hint: 'Two columns read as one object keyed by the first — a specification table.',
+      enabled: kept.length === 2 || (source ? Object.keys(source.columns).length >= 2 : false),
+      reason: 'Needs exactly two columns kept.',
+    },
+    {
+      shape: 'one',
+      label: 'Single value',
+      hint: 'One column, first match only — for a value that happened to be inside a repeating set.',
+      enabled: flat,
+      reason: flat ? undefined : flatReason,
+    },
+  ]
+}
+
+/**
+ * A column read flat, from the document rather than from within a row.
+ *
+ * Column selectors are stored *row-relative* (`.lnk` inside `li.card`) because
+ * that is what `dom_rows` resolves them against. Reading them without the
+ * row iteration means composing the row selector back in, exactly as
+ * `toHighlightFields` already does to mark a column on the page.
+ *
+ * The container stays as `within`, and it is doing real work: it is what makes
+ * a loose item selector safe, so `.card a` cannot start collecting the page's
+ * other cards.
+ *
+ * One consequence worth stating, because it is a feature here and a bug
+ * elsewhere: a row that lacks the cell contributes nothing, so the list can be
+ * shorter than the row count. For a flat list that is correct. For values that
+ * must line up across columns it is the exact failure `dom_rows` exists to
+ * prevent (`replay.py::_rows_from_dom_rows`), which is why `rows` is the
+ * default and this is opt-in.
+ */
+function projectedCandidates(
+  source: DraftSource,
+  column: string,
+  { all }: { all: boolean },
+): Candidate[] {
+  const rows = source.repeat.rows_locator
+  const attribute = readAttribute(source.columns[column] ?? []) ?? 'text'
+  return (source.columns[column] ?? [])
+    .filter((c) => c.locator.kind === 'css' && c.locator.selector)
+    .map((candidate) => ({
+      ...candidate,
+      locator: {
+        kind: 'css' as const,
+        selector: `${rows?.selector} ${candidate.locator.selector}`,
+        ...(all ? { all: true } : {}),
+        ...(attribute !== 'text' ? { attribute } : {}),
+        ...(rows?.within ? { within: rows.within } : {}),
+      },
+    }))
+}
+
+/**
+ * Narrow a broad pick to the shape and columns actually wanted.
+ *
+ * Always rebuilt from `draft.source`, never from the draft's current state --
+ * so narrowing to one column and back restores the rest, and the function is a
+ * pure function of `(source, shape, keep)` rather than a sequence of edits
+ * whose order matters.
+ */
+export function setShape(draft: FieldDraft, shape: OutputShape, keep?: string[]): FieldDraft {
+  const source = draft.source
+  if (!source) return draft
+
+  const all = Object.keys(source.columns)
+  const chosen = (keep ?? Object.keys(draft.columns ?? {})).filter((c) => all.includes(c))
+  const columns = chosen.length > 0 ? chosen : all
+
+  if (shape === 'values' || shape === 'one') {
+    const column = columns[0]
+    const candidates = projectedCandidates(source, column, { all: shape === 'values' })
+    if (candidates.length === 0) return draft
+    const value_type = source.columnTypes[column]?.value_type ?? 'string'
+    const scalar: TypeSpec = { kind: 'scalar', value_type }
+    return {
+      ...draft,
+      shape,
+      projectedFrom: column,
+      candidates,
+      // Cleared, not merely ignored: a `table` type whose group has no repeat
+      // is a lint error, and `itemsToRecipe` keys off `columns` to decide
+      // whether the group binds by column at all.
+      columns: undefined,
+      columnPreviews: undefined,
+      repeat: undefined,
+      keyValue: false,
+      preview: source.columnPreviews[column]?.[0],
+      spec: {
+        ...draft.spec,
+        type: shape === 'values' ? { kind: 'list', items: scalar } : scalar,
+        transform: transformsWithout(draft.spec.transform, 'to_object'),
+      },
+    }
+  }
+
+  // --- rows / map: back to a table over the kept columns ---
+  const pick = <T,>(record: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(columns.filter((c) => c in record).map((c) => [c, record[c]]))
+
+  const table: FieldDraft = {
+    ...draft,
+    shape: 'rows',
+    projectedFrom: columns[0],
+    candidates: [],
+    columns: pick(source.columns),
+    columnPreviews: pick(source.columnPreviews),
+    repeat: source.repeat,
+    keyValue: false,
+    preview: undefined,
+    spec: {
+      ...draft.spec,
+      type: { kind: 'table', columns: pick(source.columnTypes) },
+      transform: transformsWithout(draft.spec.transform, 'to_object'),
+    },
+  }
+  return shape === 'map' ? asKeyValue(table) : table
+}
+
+function transformsWithout(transforms: Transform[] | undefined, op: TransformOp): Transform[] | undefined {
+  const rest = (transforms ?? []).filter((t) => t.op !== op)
+  return rest.length > 0 ? rest : undefined
+}
+
+/**
+ * Read a 2-column table as a `{label: value}` map.
  *
  * A specification table -- `Brand | Nike`, `Colour | Red` -- is a table on the
  * page and a *map* in the answer. Nobody consuming a product feed wants
@@ -260,13 +494,9 @@ export const VALUE_COLUMN = 'value'
  * shape"). The type stays `table`: the *read* really is two columns of rows,
  * the map is what happens to them afterwards, and keeping it a table is also
  * what lets `validate_document` check both columns are bound.
- *
- * Turning it off leaves the columns named `name`/`value`, which is what they
- * are regardless of whether the map is wanted.
  */
-export function setKeyValue(draft: FieldDraft, on: boolean): FieldDraft {
-  if (!draft.columns) return draft
-  const names = Object.keys(draft.columns)
+function asKeyValue(draft: FieldDraft): FieldDraft {
+  const names = Object.keys(draft.columns ?? {})
   if (names.length !== 2) return draft
 
   const rename = <T,>(record: Record<string, T> | undefined): Record<string, T> | undefined => {
@@ -280,18 +510,15 @@ export function setKeyValue(draft: FieldDraft, on: boolean): FieldDraft {
     )
   }
 
-  const transform = (draft.spec.transform ?? []).filter((t) => t.op !== 'to_object')
-  const spec: FieldSpec = {
-    ...draft.spec,
-    type: { ...draft.spec.type, columns: rename(draft.spec.type.columns) },
-    transform: on ? [...transform, { op: 'to_object' }] : transform,
-  }
-  if (spec.transform?.length === 0) delete spec.transform
-
   return {
     ...draft,
-    keyValue: on,
-    spec,
+    shape: 'map',
+    keyValue: true,
+    spec: {
+      ...draft.spec,
+      type: { ...draft.spec.type, columns: rename(draft.spec.type.columns) },
+      transform: [...(draft.spec.transform ?? []), { op: 'to_object' }],
+    },
     columns: rename(draft.columns),
     columnPreviews: rename(draft.columnPreviews),
   }
@@ -307,11 +534,6 @@ export function setKeyValue(draft: FieldDraft, on: boolean): FieldDraft {
  * emitted as one `all: true` list field per column, with the caller zipping by
  * index. That silently shifted every value below any row that happened to lack
  * a cell, and nothing in the output said it had happened.
- *
- * Row-wise, the columns keep their *row-relative* selectors exactly as the
- * picker derived them: no composing `li.card` onto `.title`, no `all: true`,
- * no container `within` on each column. The row is the scope, supplied by the
- * iteration. Simpler to produce, and correct by construction.
  */
 export function listPickToDrafts(payload: PickPayload): {
   drafts: FieldDraft[]
@@ -338,7 +560,7 @@ export function containerPickToDraft(
   taken: Iterable<string> = [],
 ): FieldDraft | null {
   const columns = payload.data?.columns ?? []
-  const firstRow = payload.data?.items?.[0]
+  const sampleRows = (payload.data?.items ?? []).slice(0, SAMPLE_ROWS)
   const count = payload.count ?? 0
 
   if (!payload.itemSelector || columns.length === 0) return null
@@ -354,7 +576,7 @@ export function containerPickToDraft(
 
   const bindings: Record<string, Candidate[]> = {}
   const typeColumns: Record<string, TypeSpec> = {}
-  const columnPreviews: Record<string, string> = {}
+  const columnPreviews: Record<string, string[]> = {}
   const names: string[] = []
 
   for (const col of columns) {
@@ -371,32 +593,48 @@ export function containerPickToDraft(
 
     bindings[columnName] = candidates
     typeColumns[columnName] = { kind: 'scalar', value_type: mapped.value_type }
-    if (firstRow) columnPreviews[columnName] = String(firstRow[col.id] ?? '')
+    // Several rows, not one. A column is chosen by recognising what is in it,
+    // and one sample is indistinguishable between "every row says this" and
+    // "the first row happened to".
+    columnPreviews[columnName] = sampleRows
+      .map((row) => String(row[col.id] ?? ''))
+      .filter(Boolean)
+      .slice(0, SAMPLE_ROWS)
   }
 
   if (Object.keys(bindings).length === 0) return null
 
   const fieldName = toFieldName(name, taken)
+  const repeat: RepeatSpec = {
+    kind: 'dom_rows',
+    rows_locator: rowsLocator,
+    row_field: fieldName,
+    // Generous but bounded: a results page is tens of rows, and a runaway
+    // selector matching thousands should be reported as truncated rather
+    // than read in full.
+    max_iterations: Math.max(count * 2, 100),
+  }
   const draft: FieldDraft = {
     name: fieldName,
     spec: { type: { kind: 'table', columns: typeColumns }, description: '' },
     candidates: [],
     columns: bindings,
     columnPreviews,
-    repeat: {
-      kind: 'dom_rows',
-      rows_locator: rowsLocator,
-      row_field: fieldName,
-      // Generous but bounded: a results page is tens of rows, and a runaway
-      // selector matching thousands should be reported as truncated rather
-      // than read in full.
-      max_iterations: Math.max(count * 2, 100),
+    repeat,
+    shape: 'rows',
+    // The unnarrowed pick, so choosing a shape or dropping a column can always
+    // be undone without picking again.
+    source: {
+      columns: bindings,
+      columnTypes: typeColumns,
+      columnPreviews,
+      repeat,
     },
   }
 
   // `keyValue` is set by `enrich.ts` only where the markup states it outright.
-  // Every other spec table is a toggle in the wizard, not a guess here.
-  return payload.keyValue ? setKeyValue(draft, true) : draft
+  // Every other spec table is a choice in the wizard, not a guess here.
+  return payload.keyValue ? setShape(draft, 'map') : draft
 }
 
 /**
