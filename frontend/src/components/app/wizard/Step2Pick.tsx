@@ -1,14 +1,10 @@
 import { List, MousePointer2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { LiveViewPanel } from '@/components/app/LiveViewPanel'
 import { PickerControls } from './PickerControls'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import type { PickerMode } from '@/lib/picker/protocol'
 import { cn } from '@/lib/utils'
 
 interface Props {
-  sessionId: string
   mode: Exclude<PickerMode, 'single'>
   onModeChange: (mode: Exclude<PickerMode, 'single'>) => void
   status: PickerStatus
@@ -34,16 +30,13 @@ const MODES: { id: Exclude<PickerMode, 'single'>; label: string; hint: string; i
 ]
 
 /**
- * The picking step: the live page, with the picker driven over it.
+ * The picking controls. The page they act on is the left pane, always visible.
  *
- * There is no separate preview surface and no overlay rendered here. The
- * picker draws its highlight inside the remote page, so the existing
- * screencast already shows it, and `interact` mode already forwards the
- * author's mouse into that page as real input. The studio's contribution is
- * the mode switch and the refine buttons.
+ * Nothing here renders the page or an overlay: the picker draws its highlight
+ * inside the remote page, so the screencast on the left already shows it, and
+ * `interact` mode already forwards the author's mouse into it as real input.
  */
 export function Step2Pick({
-  sessionId,
   mode,
   onModeChange,
   status,
@@ -55,55 +48,50 @@ export function Step2Pick({
   const picking = status !== 'idle'
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <div className="flex items-center gap-1">
-          {MODES.map((m) => (
-            <Button
-              key={m.id}
-              size="sm"
-              variant={mode === m.id ? 'default' : 'outline'}
-              className="h-7"
-              disabled={picking}
-              title={m.hint}
-              onClick={() => onModeChange(m.id)}
-            >
-              <m.icon className="size-3.5" />
-              {m.label}
-            </Button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex items-center gap-2">
-          {fieldCount > 0 && (
-            <Badge variant="success">
-              {fieldCount} field{fieldCount === 1 ? '' : 's'}
-            </Badge>
-          )}
-          <PickerControls
-            status={status}
-            label={mode === 'list' ? 'Pick a list item' : 'Pick a field'}
-            onStart={onStart}
-            onCancel={onCancel}
-            onRefine={onRefine}
-          />
-        </div>
+    <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-1.5">
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            disabled={picking}
+            onClick={() => onModeChange(m.id)}
+            className={cn(
+              'flex items-start gap-2.5 rounded-md border p-2.5 text-left transition-colors',
+              mode === m.id ? 'border-accent bg-accent/10' : 'border-border hover:bg-muted',
+              picking && 'opacity-60',
+            )}
+          >
+            <m.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="text-xs font-medium">{m.label}</span>
+              <span className="text-[11px] leading-snug text-muted-foreground">{m.hint}</span>
+            </span>
+          </button>
+        ))}
       </div>
 
-      <p
-        className={cn(
-          'shrink-0 px-3 py-1.5 text-[11px]',
-          picking ? 'bg-accent/10 text-foreground' : 'text-muted-foreground',
-        )}
-      >
-        {picking
-          ? 'Move the pointer over the page — the highlight follows it, one round trip behind. Use Wider / Narrower to adjust, then Use this.'
-          : MODES.find((m) => m.id === mode)!.hint}
-      </p>
-
-      <div className="min-h-0 flex-1">
-        <LiveViewPanel sessionId={sessionId} />
+      <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-2.5">
+        <PickerControls
+          status={status}
+          label={mode === 'list' ? 'Pick a list item' : 'Pick a field'}
+          onStart={onStart}
+          onCancel={onCancel}
+          onRefine={onRefine}
+        />
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {picking
+            ? 'Move the pointer over the page on the left — the highlight follows it, one round trip behind. Use Wider / Narrower to adjust, then Use this.'
+            : 'Navigate the page on the left to a sample URL first, then start picking.'}
+        </p>
       </div>
+
+      {fieldCount > 0 && (
+        <p className="text-[11px] text-muted-foreground">
+          {fieldCount} field{fieldCount === 1 ? '' : 's'} picked. In single-field mode you can keep
+          picking &mdash; each one is added to the list. Name them on the Fields step.
+        </p>
+      )}
     </div>
   )
 }

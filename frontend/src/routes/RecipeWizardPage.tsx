@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/app/EmptyState'
+import { LiveViewPanel } from '@/components/app/LiveViewPanel'
 import { LintPanel } from '@/components/app/studio/LintPanel'
 import { JsonTab } from '@/components/app/studio/JsonTab'
 import { WizardSteps, type WizardStep } from '@/components/app/wizard/WizardSteps'
@@ -11,6 +12,8 @@ import { Step1Session } from '@/components/app/wizard/Step1Session'
 import { Step2Pick } from '@/components/app/wizard/Step2Pick'
 import { Step3Fields } from '@/components/app/wizard/Step3Fields'
 import { Step4Pagination, type PaginationChoice } from '@/components/app/wizard/Step4Pagination'
+import { StepActions } from '@/components/app/wizard/StepActions'
+import { StepPreview } from '@/components/app/wizard/StepPreview'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
 import { useExecuteSession } from '@/hooks/useExecuteSession'
@@ -21,34 +24,40 @@ import {
   applyDrafts,
   detailPickToDraft,
   listPickToDrafts,
+  toPreviewFields,
   withJsonAlternatives,
   type FieldDraft,
 } from '@/lib/recipe/fromPick'
 import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { PickerMode } from '@/lib/picker/protocol'
-import type { Recipe, Step } from '@/lib/recipe/types'
+import type { PreviewResult } from '@/lib/picker/preview'
+import type { Recipe, Step, StepOp } from '@/lib/recipe/types'
 
 const STEPS: WizardStep[] = [
   { id: 'session', title: 'Page', hint: 'Which pages, and a browser to look at them in' },
   { id: 'pick', title: 'Pick', hint: 'Click what you want out of the page' },
-  { id: 'fields', title: 'Fields', hint: 'Name what you picked and check its fallbacks' },
+  { id: 'fields', title: 'Fields', hint: 'Name the output attributes and check their fallbacks' },
+  { id: 'actions', title: 'Reveal', hint: 'Clicks, scrolls and waits the page needs before it can be read' },
   { id: 'paging', title: 'More', hint: 'How to reach the rest of the results' },
+  { id: 'preview', title: 'Preview', hint: 'Run it on this page and look at the data' },
   { id: 'review', title: 'Review', hint: 'What the recipe says, and what the lint makes of it' },
 ]
 
 /**
- * The guided path to a v2 recipe.
+ * The guided path to a v2 recipe: the page on the left, the work on the right.
  *
- * This is the front door; `RecipeStudioPage` is still there behind it for
- * everything this does not cover -- steps, variants, transform pipelines,
- * per-candidate predicates. The split is the point. The three-pane editor is a
- * good editor and a bad on-ramp: it asks an author to hand-type CSS selectors
- * into a document with seven locator kinds and twenty-seven step ops before
- * they have seen anything work. Here, clicking the page produces a valid
- * document, and the editor is where you go when you need more than that.
+ * The layout is the extension's, and deliberately so. Authoring a recipe is a
+ * conversation with a page -- you name a field by looking at the value it
+ * holds, you check a selector by watching it light up, you decide about
+ * pagination by seeing where the list ends. A stepper that swaps the page out
+ * whenever you are not actively clicking breaks that loop at every step, which
+ * is why the browser here is a fixed pane that never goes away and the steps
+ * move only the panel beside it.
  *
- * Both write through `useRecipeDoc` under the *same* draft key, so "Open in
- * advanced editor" is a navigation, not an export.
+ * This is the front door; `RecipeStudioPage` is still behind it for everything
+ * this does not cover -- steps, variants, transform pipelines, per-candidate
+ * predicates. Both write through `useRecipeDoc` under the *same* draft key, so
+ * "Advanced editor" is a navigation, not an export.
  */
 export function RecipeWizardPage() {
   const { recipeId } = useParams<{ recipeId?: string }>()
@@ -66,6 +75,9 @@ export function RecipeWizardPage() {
   const [drafts, setDrafts] = useState<FieldDraft[]>([])
   const [paging, setPaging] = useState<PaginationChoice>({ mode: 'none', maxPages: 5 })
   const [hits, setHits] = useState<PathHit[] | null>(null)
+  const [reveal, setReveal] = useState<Step[]>([])
+  const [preview, setPreview] = useState<PreviewResult[] | null>(null)
+  const [previewing, setPreviewing] = useState(false)
 
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
@@ -118,13 +130,18 @@ export function RecipeWizardPage() {
         setDrafts(picked)
         toast({
           title: `${picked.length} field${picked.length === 1 ? '' : 's'} from ${count} rows`,
-          description: 'Name them on the next step.',
+          description: 'Name them on the Fields step.',
         })
+        // One list pick yields the whole schema, so there is nothing more to
+        // do here -- move on. A single-field pick is the opposite: the author
+        // almost always wants the next field too, so stay put and let them
+        // keep clicking.
+        goTo(2)
       } else {
         const draft = detailPickToDraft(payload, drafts.map((d) => d.name))
         setDrafts((current) => [...current, draft])
+        setFurthest((f) => Math.max(f, 2))
       }
-      goTo(2)
     } catch {
       // usePagePicker surfaces the message in `picker.error`.
     }
@@ -213,91 +230,110 @@ export function RecipeWizardPage() {
         </div>
       </header>
 
-      <WizardSteps steps={STEPS} current={step} furthest={furthest} onGoTo={setStep} />
-
-      <main className="min-h-0 flex-1 overflow-y-auto border-t border-border">
-        {step === 0 && (
-          <Step1Session
-            sessionId={sessionId}
-            onSessionChange={setSessionId}
-            sampleUrls={doc.sample_urls ?? []}
-            onSampleUrlsChange={(urls) => update((r) => ({ ...r, sample_urls: urls }))}
-            name={doc.name}
-            onNameChange={(name) => update((r) => ({ ...r, name }))}
-          />
-        )}
-
-        {step === 1 &&
-          (sessionId ? (
-            <Step2Pick
-              sessionId={sessionId}
-              mode={pickMode}
-              onModeChange={setPickMode}
-              status={picker.status}
-              fieldCount={drafts.length}
-              onStart={() => void startPick()}
-              onCancel={picker.cancel}
-              onRefine={picker.refine}
-            />
+      {/* The page on the left, the work on the right -- and the page never
+          leaves. `min-w-0` on the left cell is what stops the screencast's
+          intrinsic width from pushing the panel off-screen in a grid. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_26rem]">
+        <section className="flex min-w-0 flex-col border-r border-border bg-black/5">
+          {sessionId ? (
+            <LiveViewPanel sessionId={sessionId} />
           ) : (
             <div className="flex h-full items-center justify-center p-6">
-              <EmptyState title="No session" description="Go back and open one." />
+              <EmptyState
+                title="No page yet"
+                description="Open a browser session on the right, and the page you are building against appears here."
+              />
             </div>
-          ))}
+          )}
+        </section>
 
-        {step === 2 && (
-          <Step3Fields
-            drafts={drafts}
-            onChange={setDrafts}
-            onTestSelector={sessionId ? picker.testSelector : undefined}
-            onFindInJson={findInJson}
-            jsonProbeReady={(hits?.length ?? 0) > 0}
-          />
-        )}
+        <aside className="flex min-h-0 flex-col bg-background">
+          <WizardSteps steps={STEPS} current={step} furthest={furthest} onGoTo={setStep} />
 
-        {step === 3 && (
-          <Step4Pagination
-            value={paging}
-            onChange={setPaging}
-            status={picker.status}
-            onPickButton={() => void pickNextButton()}
-            onCancel={picker.cancel}
-            onRefine={picker.refine}
-          />
-        )}
-
-        {step === 4 && (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-4">
-            <div className="rounded-md border border-border">
-              <LintPanel issues={issues} onJump={() => setStep(2)} />
-            </div>
-            <JsonTab recipe={built} onReplace={(next) => reset(next)} />
+          <div className="border-y border-border px-3 py-1.5">
+            <p className="text-[11px] text-muted-foreground">{STEPS[step].hint}</p>
           </div>
-        )}
-      </main>
 
-      <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
-        {picker.error && <span className="text-xs text-destructive">{picker.error}</span>}
-        <div className="ml-auto flex items-center gap-2">
-          {step > 0 && (
-            <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>
-              Back
-            </Button>
-          )}
-          {step < STEPS.length - 1 && (
-            <Button size="sm" disabled={!canAdvance} onClick={() => goTo(step + 1)}>
-              Next
-              <ArrowRight className="size-3.5" />
-            </Button>
-          )}
-          {step === STEPS.length - 1 && (
-            <Button size="sm" onClick={commitAndOpenEditor}>
-              Open in advanced editor
-              <ArrowRight className="size-3.5" />
-            </Button>
-          )}
-        </div>
-      </footer>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {step === 0 && (
+              <Step1Session
+                sessionId={sessionId}
+                onSessionChange={setSessionId}
+                sampleUrls={doc.sample_urls ?? []}
+                onSampleUrlsChange={(urls) => update((r) => ({ ...r, sample_urls: urls }))}
+                name={doc.name}
+                onNameChange={(name) => update((r) => ({ ...r, name }))}
+              />
+            )}
+
+            {step === 1 && (
+              <Step2Pick
+                mode={pickMode}
+                onModeChange={setPickMode}
+                status={picker.status}
+                fieldCount={drafts.length}
+                onStart={() => void startPick()}
+                onCancel={picker.cancel}
+                onRefine={picker.refine}
+              />
+            )}
+
+            {step === 2 && (
+              <Step3Fields
+                drafts={drafts}
+                onChange={setDrafts}
+                onTestSelector={sessionId ? picker.testSelector : undefined}
+                onFindInJson={findInJson}
+                jsonProbeReady={(hits?.length ?? 0) > 0}
+              />
+            )}
+
+            {step === 3 && (
+              <Step4Pagination
+                value={paging}
+                onChange={setPaging}
+                status={picker.status}
+                onPickButton={() => void pickNextButton()}
+                onCancel={picker.cancel}
+                onRefine={picker.refine}
+              />
+            )}
+
+            {step === 4 && (
+              <div className="flex flex-col gap-3 p-3">
+                <div className="rounded-md border border-border">
+                  <LintPanel issues={issues} onJump={() => setStep(2)} />
+                </div>
+                <JsonTab recipe={built} onReplace={(next) => reset(next)} />
+              </div>
+            )}
+          </div>
+
+          <footer className="flex shrink-0 flex-col gap-1.5 border-t border-border px-3 py-2">
+            {picker.error && <span className="text-[11px] text-destructive">{picker.error}</span>}
+            <div className="flex items-center gap-2">
+              {step > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setStep(step - 1)}>
+                  Back
+                </Button>
+              )}
+              <div className="ml-auto">
+                {step < STEPS.length - 1 ? (
+                  <Button size="sm" disabled={!canAdvance} onClick={() => goTo(step + 1)}>
+                    Next
+                    <ArrowRight className="size-3.5" />
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={commitAndOpenEditor}>
+                    Advanced editor
+                    <ArrowRight className="size-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </footer>
+        </aside>
+      </div>
     </div>
   )
 }

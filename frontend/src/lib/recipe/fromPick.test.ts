@@ -51,9 +51,10 @@ function layoutStub() {
 }
 
 function install(): PickerApi {
-  // oxlint-disable-next-line no-eval -- evaluating the built bundle is the
-  // point: this test exists to prove the artefact installs itself under the
-  // function scope `page.evaluate` imposes. Nothing here is user input.
+  // Evaluating the built bundle is the point: this test exists to prove the
+  // artefact installs itself under the function scope `page.evaluate`
+  // imposes. Nothing here is user input.
+  // eslint-disable-next-line no-eval
   eval(`(function(){ ${fs.readFileSync(BUNDLE, 'utf8')} })()`)
   return (window as unknown as Record<string, PickerApi>)[PICKER_GLOBAL]
 }

@@ -25,6 +25,7 @@
  */
 import { filterPersistableChain } from '@/lib/picker/vendor/shared/selectors/stability'
 import type { PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
+import type { PreviewField } from '@/lib/picker/preview'
 import { SOURCE_PRIORITY } from './document'
 import type {
   Candidate,
@@ -336,6 +337,63 @@ export function applyDrafts(
   }
 
   return next
+}
+
+/**
+ * The attribute a field reads, as one answer rather than per-candidate.
+ *
+ * Every candidate for a field reads the same thing -- they are alternative
+ * routes to one value, not different values -- so the editor treats it as a
+ * property of the field. `null` means the candidates disagree, which only
+ * happens after hand-editing and is worth showing rather than silently
+ * normalising away.
+ */
+export function readAttribute(candidates: Candidate[]): string | null {
+  if (candidates.length === 0) return 'text'
+  const first = candidates[0].locator.attribute ?? 'text'
+  return candidates.every((c) => (c.locator.attribute ?? 'text') === first) ? first : null
+}
+
+/** Set the attribute every candidate of a field reads. */
+export function setReadAttribute(candidates: Candidate[], attribute: string): Candidate[] {
+  return candidates.map((candidate) => ({
+    ...candidate,
+    locator: {
+      ...candidate.locator,
+      // `text` is the reader's default; storing it explicitly is noise in the
+      // exported document, and the structured kinds have no attribute at all.
+      attribute: attribute === 'text' ? undefined : attribute,
+    },
+  }))
+}
+
+/**
+ * Field drafts as the preview evaluator wants them.
+ *
+ * Structured candidates (`json_ld`, `hydration`, `meta`) are dropped rather
+ * than faked: the preview reads the DOM, and a JSON path resolves against
+ * data the reader here does not hold. Silently skipping them keeps the
+ * preview honest -- a field bound only to a JSON path reports `empty` here and
+ * the UI says why, which is better than inventing a value for it.
+ */
+export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
+  return drafts.map((draft) => ({
+    name: draft.name,
+    required: draft.spec.required,
+    candidates: draft.candidates
+      .filter((c) => c.locator.kind === 'css' || c.locator.kind === 'xpath')
+      .map((c) => ({
+        kind: c.locator.kind as 'css' | 'xpath',
+        selector: c.locator.selector ?? '',
+        attribute: c.locator.attribute,
+        all: c.locator.all,
+        index: c.locator.index,
+        within:
+          c.locator.within && (c.locator.within.kind === 'css' || c.locator.within.kind === 'xpath')
+            ? { kind: c.locator.within.kind as 'css' | 'xpath', selector: c.locator.within.selector ?? '' }
+            : undefined,
+      })),
+  }))
 }
 
 /**

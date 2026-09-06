@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EmptyState } from '@/components/app/EmptyState'
 import { CandidateChain } from './CandidateChain'
 import { describeTypeSpec } from '@/lib/recipe/document'
-import type { FieldDraft } from '@/lib/recipe/fromPick'
+import { readAttribute, setReadAttribute, type FieldDraft } from '@/lib/recipe/fromPick'
 import type { Candidate, ValueType } from '@/lib/recipe/types'
 
 interface Props {
@@ -18,6 +18,27 @@ interface Props {
   onFindInJson?: (draft: FieldDraft, index: number) => void
   jsonProbeReady: boolean
 }
+
+/**
+ * What a locator reads off the matched element.
+ *
+ * This is a property of the *read*, not of the value: a link's URL is an
+ * `href` that happens to be a `url`, and a printed price is `text` that
+ * happens to be a `price`. Keeping them separate is what lets an author fix
+ * "I wanted the link, not its label" without touching the type.
+ */
+const READ_ATTRIBUTES: { value: string; label: string; hint: string }[] = [
+  { value: 'text', label: 'Text', hint: 'The element\u2019s text, with any script/style content excluded. Includes text that is in the DOM but not painted.' },
+  { value: 'visible_text', label: 'Visible text', hint: 'Only what is actually rendered \u2014 excludes collapsed or hidden content.' },
+  { value: 'href', label: 'Link (href)', hint: 'The link target. Usually paired with a url_resolve transform, since pages write relative hrefs.' },
+  { value: 'src', label: 'Image (src)', hint: 'The image source URL.' },
+  { value: 'value', label: 'Form value', hint: 'The current value of an input, select or textarea.' },
+  { value: 'html', label: 'HTML', hint: 'The element\u2019s outer HTML. Reach for this only when the markup itself is the data.' },
+  { value: 'title', label: 'title attribute', hint: 'The title attribute \u2014 often the full text when the visible label is truncated.' },
+  { value: 'alt', label: 'alt attribute', hint: 'An image\u2019s alt text.' },
+  { value: 'content', label: 'content attribute', hint: 'The content attribute, as used by meta tags.' },
+  { value: 'datetime', label: 'datetime attribute', hint: 'A <time> element\u2019s machine-readable timestamp.' },
+]
 
 const VALUE_TYPES: ValueType[] = [
   'string', 'text', 'number', 'integer', 'float', 'price', 'boolean', 'url', 'date', 'datetime', 'json',
@@ -64,7 +85,7 @@ export function Step3Fields({ drafts, onChange, onTestSelector, onFindInJson, js
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 p-4">
+    <div className="flex flex-col gap-2 p-3">
       {drafts.map((draft, index) => {
         const open = expanded === index
         const inner = draft.spec.type.kind === 'list' ? draft.spec.type.items : draft.spec.type
@@ -86,8 +107,10 @@ export function Step3Fields({ drafts, onChange, onTestSelector, onFindInJson, js
               <Input
                 value={draft.name}
                 onChange={(e) => patch(index, { name: e.target.value })}
-                className="h-7 w-44 font-mono text-xs"
+                className="h-7 w-40 font-mono text-xs"
                 placeholder="field_name"
+                title="The output attribute name — the key this value appears under in the extracted data"
+                aria-label="Output attribute name"
               />
 
               <Select value={inner?.value_type ?? 'string'} onValueChange={(v) => setValueType(index, v as ValueType)}>
@@ -136,16 +159,42 @@ export function Step3Fields({ drafts, onChange, onTestSelector, onFindInJson, js
             </div>
 
             {open && (
-              <div className="border-t border-border px-2 pb-2 pt-1">
-                <p className="pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Fallback chain &mdash; tried in order until one resolves
+              <div className="flex flex-col gap-2 border-t border-border px-2 pb-2 pt-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Reads
+                  </span>
+                  <Select
+                    value={readAttribute(draft.candidates) ?? 'text'}
+                    onValueChange={(v) => setCandidates(index, setReadAttribute(draft.candidates, v))}
+                  >
+                    <SelectTrigger className="h-7 flex-1 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {READ_ATTRIBUTES.map((a) => (
+                        <SelectItem key={a.value} value={a.value}>
+                          {a.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <p className="text-[10px] leading-snug text-muted-foreground">
+                  {READ_ATTRIBUTES.find((a) => a.value === (readAttribute(draft.candidates) ?? 'text'))?.hint}
                 </p>
-                <CandidateChain
-                  group={`wizard:${index}`}
-                  candidates={draft.candidates}
-                  onChange={(candidates) => setCandidates(index, candidates)}
-                  onTest={onTestSelector}
-                />
+
+                <div>
+                  <p className="pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Fallback chain &mdash; tried in order until one resolves
+                  </p>
+                  <CandidateChain
+                    group={`wizard:${index}`}
+                    candidates={draft.candidates}
+                    onChange={(candidates) => setCandidates(index, candidates)}
+                    onTest={onTestSelector}
+                  />
+                </div>
               </div>
             )}
           </div>

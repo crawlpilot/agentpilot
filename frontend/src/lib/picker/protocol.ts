@@ -138,4 +138,9 @@ export interface PickerApi {
   showHighlights(elements: unknown[]): void
   clearHighlights(): void
   testSelector(selector: string): number
+  /**
+   * Resolve fields against the live page, mirroring the replay engine.
+   * See `preview.ts` -- values are pre-transform.
+   */
+  preview(fields: unknown[]): unknown[]
 }

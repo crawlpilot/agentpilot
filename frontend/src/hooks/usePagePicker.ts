@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeSession } from '@/lib/api/sessions'
 import { useAuth } from '@/lib/auth/AuthContext'
 import pickerBundle from '@/lib/picker/generated/picker.iife.js?raw'
+import type { PreviewField, PreviewResult } from '@/lib/picker/preview'
 import {
   PICKER_GLOBAL,
   PICKER_VERSION,
@@ -80,6 +81,8 @@ export interface UsePagePicker {
   refine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
   /** Flash a selector's matches in the page; resolves with the match count. */
   testSelector: (selector: string) => Promise<number>
+  /** Resolve fields against the live page, exactly as replay would. */
+  preview: (fields: PreviewField[]) => Promise<PreviewResult[]>
 }
 
 export function usePagePicker(sessionId: string | null): UsePagePicker {
@@ -130,6 +133,17 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     async (selector: string): Promise<number> => {
       const count = await run(`window.${PICKER_GLOBAL}.testSelector(${JSON.stringify(selector)})`)
       return typeof count === 'number' ? count : 0
+    },
+    [run],
+  )
+
+  const preview = useCallback(
+    async (fields: PreviewField[]): Promise<PreviewResult[]> => {
+      // The fields travel as a JSON literal inside the expression rather than
+      // being interpolated as source, so a selector containing a quote is data
+      // rather than syntax -- the same discipline `evaluate.py` uses.
+      const out = await run(`window.${PICKER_GLOBAL}.preview(${JSON.stringify(fields)})`)
+      return Array.isArray(out) ? (out as PreviewResult[]) : []
     },
     [run],
   )
@@ -188,5 +202,5 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
-  return { status, error, pick, cancel, refine, testSelector }
+  return { status, error, pick, cancel, refine, testSelector, preview }
 }

@@ -105,7 +105,18 @@ export function RecipeStudioPage() {
         </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)_34rem]">
+      {/* The page on the left, the document on the right.
+          It used to sit in the middle, with the output schema to its left and
+          the editor tabs to its right -- which put the two things you edit
+          together on opposite sides of the one thing you look at, and left the
+          page narrower than either. Every authoring action is a conversation
+          with the page, so the page gets one uninterrupted side and everything
+          that edits the document is stacked on the other. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_20rem_34rem]">
+        <main className="min-w-0 border-r border-border">
+          <PagePane selectedField={selectedField} onAddCandidate={addCandidateToSelected} />
+        </main>
+
         <aside className="min-h-0 border-r border-border">
           <SchemaPane
             recipe={doc}
@@ -114,10 +125,6 @@ export function RecipeStudioPage() {
             onSelectField={setSelectedField}
           />
         </aside>
-
-        <main className="min-h-0 border-r border-border">
-          <PagePane selectedField={selectedField} onAddCandidate={addCandidateToSelected} />
-        </main>
 
         <aside className="flex min-h-0 flex-col">
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">

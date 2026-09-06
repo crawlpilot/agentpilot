@@ -62,9 +62,10 @@ function install(): PickerApi {
   // Direct `eval` rather than appending a `<script>`: the jsdom environment
   // does not execute injected script tags. What matters for the contract is
   // the *function scope* the wrapper imposes, which this reproduces exactly.
-  // oxlint-disable-next-line no-eval -- evaluating the built bundle is the
-  // point: this test exists to prove the artefact installs itself under the
-  // function scope `page.evaluate` imposes. Nothing here is user input.
+  // Evaluating the built bundle is the point: this test exists to prove the
+  // artefact installs itself under the function scope `page.evaluate`
+  // imposes. Nothing here is user input.
+  // eslint-disable-next-line no-eval
   const version = eval(wrap(fs.readFileSync(BUNDLE, 'utf8')))
   expect(version).toBe(PICKER_VERSION)
   return (window as unknown as Record<string, PickerApi>)[PICKER_GLOBAL]

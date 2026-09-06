@@ -55,7 +55,7 @@ const OPTIONS: { id: PaginationMode; title: string; hint: string; icon: typeof C
  */
 export function Step4Pagination({ value, onChange, status, onPickButton, onCancel, onRefine }: Props) {
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 p-6">
+    <div className="flex flex-col gap-2 p-3">
       {OPTIONS.map((option) => {
         const selected = value.mode === option.id
         return (
