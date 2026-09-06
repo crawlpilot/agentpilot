@@ -611,3 +611,40 @@ export interface RecipeVersionsResponse {
 export interface RecipeCodegenRequest {
   language: RecipeCodegenLanguage
 }
+
+
+// --- saving an authored v2 document (routes/recipes.py) ---
+
+export type TemplateVisibility = 'private' | 'tenant' | 'public'
+
+export interface RecipeSaveRequest {
+  /** The full v2 document. */
+  recipe: unknown
+  schedule_interval_seconds?: number | null
+  /** `pdp` | `plp` | `category` | `search` | `article` | ... free text. */
+  page_type?: string | null
+  template_visibility?: TemplateVisibility
+}
+
+export interface RecipeSaveResponse {
+  success: boolean
+  recipe_id: string
+  version: number
+  /** Lint findings that did not block the save. */
+  warnings: string[]
+}
+
+export interface TemplateOut {
+  recipe_id: string
+  name: string
+  domain: string | null
+  page_type: string | null
+  field_names: string[]
+  version: number
+  health_status: string
+  updated_at: string
+}
+
+export interface TemplatesResponse {
+  templates: TemplateOut[]
+}

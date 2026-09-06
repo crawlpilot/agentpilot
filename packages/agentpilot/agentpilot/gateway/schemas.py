@@ -458,6 +458,31 @@ class RecipeSaveRequest(BaseModel):
     recipe: dict[str, Any]
     """The full v2 document -- see `docs/schemas/recipe-v2.schema.json`."""
     schedule_interval_seconds: float | None = None
+    page_type: str | None = None
+    """What kind of page this reads: `pdp`, `plp`, `category`, `search`,
+    `article`, ... Free text, because the taxonomy will grow and a closed enum
+    would make every addition a schema change."""
+    template_visibility: Literal["private", "tenant", "public"] = "private"
+    """Who may see this as a marketplace template. `private` by default: a
+    tenant's recipe is their data, and appearing in a shared catalogue must be
+    a choice rather than something that happens to them."""
+
+
+class TemplateOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipe_id: str
+    name: str
+    domain: str | None
+    page_type: str | None
+    field_names: list[str]
+    version: int
+    health_status: str
+    updated_at: str
+
+
+class TemplatesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    templates: list[TemplateOut]
 
 
 class RecipeSaveResponse(BaseModel):

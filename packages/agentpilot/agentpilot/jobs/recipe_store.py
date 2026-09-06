@@ -187,6 +187,8 @@ class PostgresRecipeStore:
         document: dict[str, Any],
         recipe_id: str | None = None,
         schedule_interval_seconds: float | None = None,
+        page_type: str | None = None,
+        template_visibility: str = "private",
     ) -> tuple[str, int]:
         """Persist a hand-authored v2 document, as a new recipe or a new version.
 
@@ -219,6 +221,9 @@ class PostgresRecipeStore:
         matchers = (document.get("target") or {}).get("match") or []
         url_pattern = str(matchers[0].get("pattern", "")) if matchers else ""
         name = str(document.get("name") or "")
+        # Derived, not asked for twice: the domain a recipe is *for* is the
+        # host of the pages it was authored against.
+        domain = _domain_of(document.get("sample_urls") or []) or _domain_of([url_pattern])
         field_schema = document.get("fields") or {}
         global_setup = document.get("global_setup") or []
         field_groups = document.get("field_groups") or []
@@ -232,13 +237,16 @@ class PostgresRecipeStore:
                     INSERT INTO recipes (
                         recipe_id, tenant, name, url_pattern, field_schema, version,
                         global_setup, field_groups, document, health_status,
+                        domain, page_type, template_visibility,
                         schedule_interval_seconds, next_due_at, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'degraded', %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'degraded',
+                            %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         new_id, tenant, name, url_pattern, Jsonb(field_schema), version,
                         Jsonb(global_setup), Jsonb(field_groups), Jsonb(document),
+                        domain, page_type, template_visibility,
                         schedule_interval_seconds,
                         _next_due_at(now, schedule_interval_seconds), now, now,
                     ),
@@ -258,10 +266,12 @@ class PostgresRecipeStore:
                 await conn.execute(
                     "UPDATE recipes SET name = %s, url_pattern = %s, field_schema = %s, "
                     "version = %s, global_setup = %s, field_groups = %s, document = %s, "
+                    "domain = %s, page_type = %s, template_visibility = %s, "
                     "updated_at = %s WHERE recipe_id = %s AND tenant = %s",
                     (
                         name, url_pattern, Jsonb(field_schema), version,
                         Jsonb(global_setup), Jsonb(field_groups), Jsonb(document),
+                        domain, page_type, template_visibility,
                         now, recipe_id, tenant,
                     ),
                 )
@@ -279,6 +289,47 @@ class PostgresRecipeStore:
             )
 
         return recipe_id, version
+
+    async def list_templates(
+        self,
+        *,
+        tenant: str,
+        domain: str | None = None,
+        page_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Recipes offered as prebuilt scraper templates.
+
+        Visibility is enforced in SQL rather than filtered afterwards: `tenant`
+        templates are visible only to their own tenant, `public` ones to
+        everyone, and `private` ones never appear here at all. Doing that in
+        Python would mean a query that reads other tenants' rows first, which
+        is the kind of thing that is one refactor away from leaking.
+        """
+
+        from psycopg.rows import dict_row
+
+        clauses = ["(template_visibility = 'public' OR "
+                   "(template_visibility = 'tenant' AND tenant = %s))"]
+        params: list[Any] = [tenant]
+        if domain:
+            clauses.append("domain = %s")
+            params.append(domain)
+        if page_type:
+            clauses.append("page_type = %s")
+            params.append(page_type)
+        params.append(limit)
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT recipe_id, name, domain, page_type, field_schema, version, "
+                    "health_status, updated_at FROM recipes WHERE "
+                    + " AND ".join(clauses)
+                    + " ORDER BY domain NULLS LAST, page_type NULLS LAST, name LIMIT %s",
+                    tuple(params),
+                )
+                return list(await cur.fetchall())
 
     async def get_recipe(self, recipe_id: str, tenant: str) -> RecipeOut | None:
         from psycopg.rows import dict_row
@@ -611,6 +662,21 @@ class PostgresRecipeStore:
                 "WHERE recipe_id = %s",
                 (interval_seconds, recipe_id),
             )
+
+
+def _domain_of(urls: list[str]) -> str | None:
+    """The host a recipe targets, from the first URL that has one."""
+
+    from urllib.parse import urlparse
+
+    for url in urls:
+        try:
+            host = urlparse(str(url)).hostname
+        except ValueError:
+            continue
+        if host:
+            return host.lower().removeprefix("www.")
+    return None
 
 
 def _next_due_at(now: datetime, schedule_interval_seconds: float | None) -> datetime | None:

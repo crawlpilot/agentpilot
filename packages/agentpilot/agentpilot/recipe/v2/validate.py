@@ -74,7 +74,9 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
             bound.add(name)
             spec = fields.get(name)
             if spec is None:
-                errors.append(f"{where}.{name}: group collects a field the schema does not declare")
+                errors.append(
+                    f"{where}.{name}: group collects a field the schema does not declare"
+                )
                 continue
 
             # A `table` field is bound one COLUMN at a time: `field_names`
@@ -93,7 +95,9 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
 
             unbound = [k for k in keys if not bindings.get(k)]
             if len(unbound) == len(keys):
-                errors.append(f"{where}.{name}: no candidates bound -- this field can never resolve")
+                errors.append(
+                    f"{where}.{name}: no candidates bound -- this field can never resolve"
+                )
                 continue
             for key in unbound:
                 errors.append(f'{where}.{name}.{key}: column "{key}" has no candidates bound')
@@ -107,7 +111,9 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
                         continue
                     variant = candidate.get("variant_id")
                     if variant and variant not in variant_ids:
-                        errors.append(f'{at}: scoped to variant "{variant}", which no variant declares')
+                        errors.append(
+                            f'{at}: scoped to variant "{variant}", which no variant declares'
+                        )
 
         repeat = group.get("repeat")
         if repeat:

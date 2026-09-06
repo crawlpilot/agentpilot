@@ -27,8 +27,12 @@ from agentpilot.gateway.schemas import (
     RecipeRunOut,
     RecipeRunQueuedResponse,
     RecipeRunResponse,
+    RecipeSaveRequest,
+    RecipeSaveResponse,
     RecipeVersionOut,
     RecipeVersionsResponse,
+    TemplateOut,
+    TemplatesResponse,
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
@@ -36,6 +40,7 @@ from agentpilot.jobs.recipe_store import RecipeOut as RecipeRow
 from agentpilot.jobs.recipe_store import RecipeRunOut as RecipeRunRow
 from agentpilot.observability.metrics import requests_total
 from agentpilot.recipe.config import RecipeConfig
+from agentpilot.recipe.v2.validate import validate_document
 
 router = APIRouter(tags=["recipes"])
 
@@ -133,6 +138,42 @@ async def list_recipes(
     )
 
 
+@router.get("/templates", response_model=TemplatesResponse)
+async def list_templates(
+    domain: str | None = None,
+    page_type: str | None = None,
+    limit: int = 100,
+    wiring: Wiring = Depends(get_wiring),
+    auth: AuthedTenant = Depends(require_tenant_auth),
+) -> TemplatesResponse:
+    """The scraper marketplace: recipes published as prebuilt templates.
+
+    Declared BEFORE `/{recipe_id}` on purpose -- FastAPI matches in
+    declaration order, so a later literal path would be swallowed by the
+    parameterised one and "templates" would be looked up as a recipe id.
+    """
+
+    store = _require_recipe_store(wiring)
+    rows = await store.list_templates(
+        tenant=auth.tenant, domain=domain, page_type=page_type, limit=min(limit, 200)
+    )
+    return TemplatesResponse(
+        templates=[
+            TemplateOut(
+                recipe_id=row["recipe_id"],
+                name=row["name"],
+                domain=row.get("domain"),
+                page_type=row.get("page_type"),
+                field_names=sorted((row.get("field_schema") or {}).keys()),
+                version=row["version"],
+                health_status=row["health_status"],
+                updated_at=row["updated_at"].isoformat(),
+            )
+            for row in rows
+        ]
+    )
+
+
 @router.get("/{recipe_id}", response_model=RecipeGetResponse)
 async def get_recipe(
     recipe_id: str,
@@ -144,6 +185,84 @@ async def get_recipe(
     if recipe is None:
         raise HTTPException(status_code=404, detail=f"no recipe {recipe_id!r}")
     return RecipeGetResponse(success=True, data=_recipe_out(recipe))
+
+
+@router.post("/v2", response_model=RecipeSaveResponse)
+async def save_recipe_v2(
+    req: RecipeSaveRequest,
+    wiring: Wiring = Depends(get_wiring),
+    auth: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeSaveResponse:
+    """Persist a hand-authored v2 document as a NEW recipe.
+
+    The counterpart to `POST /v1/recipes`, and deliberately not the same thing:
+    that one takes a name and a URL and queues an agent *build*. This takes a
+    finished document that a person authored and previewed against a live page,
+    and stores it as-is. Queueing a build here would replace their work with
+    the agent's answer, which is the opposite of what saving means.
+    """
+
+    store = _require_recipe_store(wiring)
+    recipe_id, version, warnings = await _save(store, auth.tenant, req, recipe_id=None)
+    requests_total.labels(route="recipes.save_v2", status="200").inc()
+    return RecipeSaveResponse(
+        success=True, recipe_id=recipe_id, version=version, warnings=warnings
+    )
+
+
+@router.put("/{recipe_id}", response_model=RecipeSaveResponse)
+async def update_recipe(
+    recipe_id: str,
+    req: RecipeSaveRequest,
+    wiring: Wiring = Depends(get_wiring),
+    auth: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeSaveResponse:
+    """Replace a recipe's document, as a new version.
+
+    `recipe_versions` is append-only, so this is additive and reversible --
+    the same guarantee build and heal already rely on. Until this existed, a
+    recipe with one wrong selector had to be rebuilt from scratch.
+    """
+
+    store = _require_recipe_store(wiring)
+    existing = await store.get_recipe(recipe_id, auth.tenant)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="no such recipe")
+    saved_id, version, warnings = await _save(store, auth.tenant, req, recipe_id=recipe_id)
+    requests_total.labels(route="recipes.update", status="200").inc()
+    return RecipeSaveResponse(
+        success=True, recipe_id=saved_id, version=version, warnings=warnings
+    )
+
+
+async def _save(
+    store: PostgresRecipeStore,
+    tenant: str,
+    req: RecipeSaveRequest,
+    *,
+    recipe_id: str | None,
+) -> tuple[str, int, list[str]]:
+    """Validate, then write. Shared so create and update cannot diverge."""
+
+    errors, warnings = validate_document(req.recipe)
+    if errors:
+        # 422, not 400: the document is well-formed JSON and structurally
+        # wrong. The full list goes back, because fixing one error at a time
+        # through a round trip each is a miserable way to author anything.
+        raise HTTPException(status_code=422, detail={"errors": errors, "warnings": warnings})
+
+    # The tenant is the caller's, never the document's -- a recipe that names
+    # someone else's tenant must not be able to write into it.
+    document = {**req.recipe, "tenant": tenant}
+    saved_id, version = await store.save_document(
+        tenant=tenant,
+        document=document,
+        recipe_id=recipe_id,
+        schedule_interval_seconds=req.schedule_interval_seconds,
+        page_type=req.page_type,
+        template_visibility=req.template_visibility,
+    )
+    return saved_id, version, warnings
 
 
 @router.post("/{recipe_id}/run", response_model=RecipeRunQueuedResponse)

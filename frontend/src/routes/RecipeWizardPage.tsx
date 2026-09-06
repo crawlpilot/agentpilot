@@ -5,18 +5,18 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/app/EmptyState'
 import { LiveViewPanel } from '@/components/app/LiveViewPanel'
-import { LintPanel } from '@/components/app/studio/LintPanel'
-import { JsonTab } from '@/components/app/studio/JsonTab'
 import { WizardSteps, type WizardStep } from '@/components/app/wizard/WizardSteps'
 import { Step1Session } from '@/components/app/wizard/Step1Session'
 import { StepExtract } from '@/components/app/wizard/StepExtract'
 import { Step4Pagination, type PaginationChoice } from '@/components/app/wizard/Step4Pagination'
 import { StepPreview } from '@/components/app/wizard/StepPreview'
+import { StepSave } from '@/components/app/wizard/StepSave'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
 import { useExecuteSession } from '@/hooks/useExecuteSession'
+import { useSaveRecipe } from '@/hooks/useRecipes'
 import { useToast } from '@/components/ui/toast'
-import { emptyRecipe } from '@/lib/recipe/document'
+import { emptyRecipe, toExport } from '@/lib/recipe/document'
 import { lintRecipe } from '@/lib/recipe/lint'
 import {
   detailPickToDraft,
@@ -34,6 +34,7 @@ import {
 import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { PickerMode } from '@/lib/picker/protocol'
 import type { PreviewResult, PreviewRowsResult } from '@/lib/picker/preview'
+import type { TemplateVisibility } from '@/lib/api/types'
 import type { Recipe, Step, StepOp } from '@/lib/recipe/types'
 
 const STEPS: WizardStep[] = [
@@ -45,7 +46,7 @@ const STEPS: WizardStep[] = [
   },
   { id: 'paging', title: 'More', hint: 'How to reach the rest of the results' },
   { id: 'preview', title: 'Preview', hint: 'Run it on this page and look at the data' },
-  { id: 'review', title: 'Review', hint: 'What the recipe says, and what the lint makes of it' },
+  { id: 'save', title: 'Save', hint: 'Check the lint, say what this recipe is for, and keep it' },
 ]
 
 /**
@@ -71,7 +72,7 @@ export function RecipeWizardPage() {
   const { toast } = useToast()
 
   const seed = useMemo<Recipe>(() => emptyRecipe(''), [])
-  const { doc, update, reset } = useRecipeDoc(draftKey, seed)
+  const { doc, update, reset, markSaved } = useRecipeDoc(draftKey, seed)
 
   const [step, setStep] = useState(0)
   const [furthest, setFurthest] = useState(0)
@@ -84,6 +85,12 @@ export function RecipeWizardPage() {
   const [previewRows, setPreviewRows] = useState<PreviewRowsResult[]>([])
   const [previewing, setPreviewing] = useState(false)
   const [applyReveal, setApplyReveal] = useState(true)
+  const [pageType, setPageType] = useState('')
+  const [visibility, setVisibility] = useState<TemplateVisibility>('private')
+  // The id the first save returns, so a second save is an update rather than a
+  // duplicate recipe.
+  const [savedId, setSavedId] = useState<string | null>(recipeId ?? null)
+  const [saved, setSaved] = useState<{ recipeId: string; version: number; warnings: string[] } | null>(null)
 
   // Fields and reveal steps are two readings of the same ordered list; the
   // order between them is the thing that matters, so it is stored once.
@@ -98,6 +105,7 @@ export function RecipeWizardPage() {
 
   const picker = usePagePicker(sessionId)
   const execute = useExecuteSession()
+  const save = useSaveRecipe()
 
   /**
    * Keep the page marked with what has already been taken.
@@ -343,6 +351,27 @@ export function RecipeWizardPage() {
   const issues = useMemo(() => lintRecipe(built), [built])
   const errors = issues.filter((i) => i.severity === 'error').length
 
+  function saveRecipe() {
+    setSaved(null)
+    save.mutate(
+      {
+        recipeId: savedId,
+        recipe: toExport(built),
+        page_type: pageType.trim() || null,
+        template_visibility: visibility,
+      },
+      {
+        onSuccess: (res) => {
+          setSavedId(res.recipe_id)
+          setSaved({ recipeId: res.recipe_id, version: res.version, warnings: res.warnings })
+          // The document is now what the server holds, so the draft is no
+          // longer unsaved work.
+          markSaved(built)
+        },
+      },
+    )
+  }
+
   function commitAndOpenEditor() {
     reset(built)
     navigate(recipeId ? `/recipes/${recipeId}/studio` : '/recipes/new/studio')
@@ -452,12 +481,20 @@ export function RecipeWizardPage() {
             )}
 
             {step === 4 && (
-              <div className="flex flex-col gap-3 p-3">
-                <div className="rounded-md border border-border">
-                  <LintPanel issues={issues} onJump={() => setStep(1)} />
-                </div>
-                <JsonTab recipe={built} onReplace={(next) => reset(next)} />
-              </div>
+              <StepSave
+                recipe={built}
+                issues={issues}
+                onReplace={(next) => reset(next)}
+                onJump={() => setStep(1)}
+                pageType={pageType}
+                onPageTypeChange={setPageType}
+                visibility={visibility}
+                onVisibilityChange={setVisibility}
+                onSave={saveRecipe}
+                saving={save.isPending}
+                saved={saved}
+                error={save.error ? save.error.message : null}
+              />
             )}
           </div>
 
@@ -476,9 +513,9 @@ export function RecipeWizardPage() {
                     <ArrowRight className="size-3.5" />
                   </Button>
                 ) : (
-                  <Button size="sm" onClick={commitAndOpenEditor}>
+                  <Button size="sm" variant="outline" onClick={commitAndOpenEditor}>
+                    <SlidersHorizontal className="size-3.5" />
                     Advanced editor
-                    <ArrowRight className="size-3.5" />
                   </Button>
                 )}
               </div>

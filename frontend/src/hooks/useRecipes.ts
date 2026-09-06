@@ -8,10 +8,17 @@ import {
   listRecipes,
   listRecipeVersions,
   runRecipe,
+  saveRecipeV2,
+  updateRecipe,
 } from '@/lib/api/recipes'
 import { queryKeys } from '@/lib/query/queryClient'
 import { useAuth } from '@/lib/auth/AuthContext'
-import type { RecipeCodegenLanguage, RecipeCreateRequest, RunStatus } from '@/lib/api/types'
+import type {
+  RecipeCodegenLanguage,
+  RecipeCreateRequest,
+  RecipeSaveRequest,
+  RunStatus,
+} from '@/lib/api/types'
 
 const TERMINAL_STATUSES: RunStatus[] = ['completed', 'failed', 'cancelled']
 
@@ -98,5 +105,24 @@ export function useCodegenRecipe(recipeId: string) {
   return useMutation({
     mutationFn: (language: RecipeCodegenLanguage) => codegenRecipe(apiKey!, recipeId, language),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.recipe(recipeId) }),
+  })
+}
+
+
+/**
+ * Save an authored v2 document -- new recipe, or a new version of one.
+ *
+ * The branch is on `recipeId` rather than on two hooks because the wizard does
+ * not know which it is doing until the first save returns an id.
+ */
+export function useSaveRecipe() {
+  const { apiKey } = useAuth()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recipeId, ...req }: RecipeSaveRequest & { recipeId?: string | null }) =>
+      recipeId ? updateRecipe(apiKey!, recipeId, req) : saveRecipeV2(apiKey!, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.recipes })
+    },
   })
 }

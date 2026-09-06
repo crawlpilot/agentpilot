@@ -7,11 +7,39 @@ import type {
   RecipeListResponse,
   RecipeRunQueuedResponse,
   RecipeRunResponse,
+  RecipeSaveRequest,
+  RecipeSaveResponse,
   RecipeVersionsResponse,
+  TemplatesResponse,
 } from './types'
 
 export function createRecipe(token: string, req: RecipeCreateRequest) {
   return apiRequest<RecipeCreateResponse>('/v1/recipes', { method: 'POST', body: req, token })
+}
+
+/**
+ * Save an authored v2 document as a NEW recipe.
+ *
+ * Not `createRecipe`: that posts a name and a URL and starts an agent *build*.
+ * This stores a finished document that was authored and previewed against a
+ * live page, without queueing anything.
+ */
+export function saveRecipeV2(token: string, req: RecipeSaveRequest) {
+  return apiRequest<RecipeSaveResponse>('/v1/recipes/v2', { method: 'POST', body: req, token })
+}
+
+/** Replace a recipe's document, as a new append-only version. */
+export function updateRecipe(token: string, recipeId: string, req: RecipeSaveRequest) {
+  return apiRequest<RecipeSaveResponse>(`/v1/recipes/${recipeId}`, {
+    method: 'PUT',
+    body: req,
+    token,
+  })
+}
+
+/** The scraper marketplace: recipes published as prebuilt templates. */
+export function listTemplates(token: string, params: { domain?: string; page_type?: string } = {}) {
+  return apiRequest<TemplatesResponse>('/v1/recipes/templates', { token, query: params })
 }
 
 export function listRecipes(token: string, after?: string, limit?: number) {
