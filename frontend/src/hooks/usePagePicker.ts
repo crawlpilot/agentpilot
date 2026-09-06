@@ -74,8 +74,14 @@ function script(expression: string): string {
 export interface UsePagePicker {
   status: PickerStatus
   error: string | null
-  /** Start picking; resolves with the payload, or null if cancelled. */
-  pick: (mode: PickerMode) => Promise<PickPayload | null>
+  /**
+   * Start picking; resolves with the payload, or null if cancelled.
+   *
+   * `action` is the strategy's *preference*, not what the picker does: an
+   * `extract` pick reads the element, a `click` pick is choosing a control to
+   * act on later. It reaches `ISelectionStrategy.preferredAction`.
+   */
+  pick: (mode: PickerMode, action?: 'extract' | 'click') => Promise<PickPayload | null>
   /** Stop an in-flight pick. */
   cancel: () => void
   /** ↑ / ↓ / Enter, from the panel's own buttons. */
@@ -176,14 +182,16 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
   )
 
   const pick = useCallback(
-    async (mode: PickerMode): Promise<PickPayload | null> => {
+    async (mode: PickerMode, action?: 'extract' | 'click'): Promise<PickPayload | null> => {
       setError(null)
       setStatus('installing')
       active.current = true
 
       try {
-        const action = mode === 'single' ? 'click' : 'extract'
-        await run(`window.${PICKER_GLOBAL}.start(${JSON.stringify(mode)}, ${JSON.stringify(action)})`)
+        const preferred = action ?? (mode === 'single' ? 'click' : 'extract')
+        await run(
+          `window.${PICKER_GLOBAL}.start(${JSON.stringify(mode)}, ${JSON.stringify(preferred)})`,
+        )
       } catch (err) {
         active.current = false
         setStatus('idle')

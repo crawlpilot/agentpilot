@@ -23,6 +23,7 @@ import {
   itemsToRecipe,
   listPickToDrafts,
   stepsToHighlightFields,
+  toLocator,
   toHighlightFields,
   toPreviewFields,
   withJsonAlternatives,
@@ -197,13 +198,15 @@ export function RecipeWizardPage() {
   /**
    * Pick the element a reveal step acts on.
    *
-   * `single` mode rather than `detail`: this is pointing at a control, not
-   * reading a value, so the pagination-grade selector generator is the right
-   * one -- it insists on uniqueness and rejects selectors with a page number
-   * baked into them.
+   * `detail` mode with a `click` preference, which is what the extension's
+   * "Add Click Action" uses. NOT `single`: that is the *pagination* strategy,
+   * and it does two things that are right for a next-button and wrong here --
+   * it auto-scrolls off hunting for something that looks like one, and its
+   * generator rejects any selector containing a digit, so an accordion toggle
+   * on `[data-index="2"]` comes back with no usable selector at all.
    */
   async function pickStepTarget(op: StepOp) {
-    const payload = await picker.pick('single')
+    const payload = await picker.pick('detail', 'click')
     if (!payload) return
     const selector = payload.itemSelectors?.[0]?.selector ?? payload.containerSelector
     if (!selector) return
@@ -214,7 +217,7 @@ export function RecipeWizardPage() {
         id: `a-${Date.now()}`,
         step: {
           op,
-          target: { kind: 'css', selector },
+          target: toLocator(selector),
           // A reveal step is usually optional by nature -- the cookie banner
           // that is not always there, the accordion already open. Failing the
           // whole run because one did not apply is the wrong default.
@@ -314,7 +317,7 @@ export function RecipeWizardPage() {
     if (paging.mode === 'next' && paging.selector) {
       setup.push({
         op: 'click',
-        target: { kind: 'css', selector: paging.selector },
+        target: toLocator(paging.selector),
         // Pagination is best-effort by nature: the last page has no next
         // button, and that must not fail the run.
         on_error: 'continue',

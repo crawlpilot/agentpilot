@@ -37,6 +37,27 @@ const css = (selector: string, extra: Partial<PreviewField['candidates'][0]> = {
 beforeAll(() => {
   if (!fs.existsSync(BUNDLE)) throw new Error(`Missing ${BUNDLE}. Run \`npm run build:picker\`.`)
   Element.prototype.scrollIntoView = () => {}
+  // Two jsdom gaps, both purely environmental -- a real browser needs neither.
+  //
+  // 1. There is no `PointerEvent`, and `clickElementRobust` dispatches the
+  //    full pointer sequence.
+  // 2. jsdom's `MouseEvent` brand-checks `view` and rejects vitest's `window`
+  //    object, so every event in the sequence throws before it is dispatched.
+  //
+  // Dropping `view` and aliasing `PointerEvent` restores the behaviour a
+  // browser would give. Without this the test cannot tell a genuinely broken
+  // click from an unsupported constructor.
+  const RealMouseEvent = globalThis.MouseEvent
+  class ShimMouseEvent extends RealMouseEvent {
+    constructor(type: string, init: MouseEventInit = {}) {
+      const { view: _view, ...rest } = init as MouseEventInit & { view?: unknown }
+      super(type, rest)
+    }
+  }
+  const g = globalThis as unknown as Record<string, unknown>
+  g.MouseEvent = ShimMouseEvent
+  g.PointerEvent = ShimMouseEvent
+  window.scrollTo = () => {}
 })
 
 describe('preview reader', () => {
@@ -172,6 +193,29 @@ describe('reveal step rehearsal', () => {
   async function apply(steps: PreviewStep[]): Promise<StepOutcome[]> {
     return (await install().applySteps(steps)) as StepOutcome[]
   }
+
+  it('dispatches the whole pointer sequence, not a bare click', async () => {
+    // A bare `el.click()` fires one untrusted `click` and nothing else, which
+    // a great many real controls ignore -- anything listening on pointerdown
+    // or mousedown, and most component libraries. That was the bug behind
+    // "the click step does not click".
+    document.body.innerHTML = `<button id="b">go</button>`
+    const seen: string[] = []
+    for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+      document.getElementById('b')!.addEventListener(type, () => seen.push(type))
+    }
+    await apply([{ op: 'click', selector: '#b', kind: 'css' }])
+    expect(seen).toEqual(['pointerdown', 'mousedown', 'mouseup', 'click'])
+  })
+
+  it('scrolls the page for an untargeted scroll step', async () => {
+    document.body.innerHTML = `<div>x</div>`
+    let scrolled = false
+    window.scrollTo = () => { scrolled = true }
+    const outcomes = await apply([{ op: 'scroll' }])
+    expect(outcomes[0].status).toBe('ok')
+    expect(scrolled).toBe(true)
+  })
 
   it('clicks a target and reveals what it controls', async () => {
     document.body.innerHTML = `

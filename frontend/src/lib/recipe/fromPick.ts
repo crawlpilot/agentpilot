@@ -40,7 +40,7 @@ import type {
 } from './types'
 
 /** An XPath, as the vendored generators write them. */
-function isXPath(selector: string): boolean {
+export function isXPath(selector: string): boolean {
   const s = selector.trim()
   return s.startsWith('/') || s.startsWith('(') || s.startsWith('./') || s.startsWith('id(')
 }
@@ -511,6 +511,11 @@ export function itemsToRecipe(recipe: Recipe, items: WorkItem[]): Recipe {
   })
 
   return next
+}
+
+/** A picked selector string as a `Locator`, with its kind detected. */
+export function toLocator(selector: string): Locator {
+  return { kind: isXPath(selector) ? 'xpath' : 'css', selector }
 }
 
 /**
