@@ -537,11 +537,27 @@ export interface RecipeRepeatSpec {
   array_field: string
 }
 
+/**
+ * One group, in whichever shape the recipe was written in.
+ *
+ * `field_groups` is a single JSON column carrying two different schemas. An
+ * agent-*built* recipe writes the v1 shape (`field_locators` + `reveal_steps`);
+ * one authored in the studio writes the v2 shape (`bindings` + `steps`), and
+ * `save_document` stores that document's groups verbatim. Nothing converts
+ * between them, so every reader has to expect either -- typing these as
+ * required is what let a v2 recipe crash the detail page on
+ * `reveal_steps.length`.
+ */
 export interface RecipeFieldGroup {
   group_id: string
   field_names: string[]
-  reveal_steps: Record<string, unknown>[]
-  field_locators: Record<string, unknown>
+  // --- v1, from an agent build ---
+  reveal_steps?: Record<string, unknown>[]
+  field_locators?: Record<string, unknown>
+  // --- v2, from the studio. `bindings` is keyed by field name, or by COLUMN
+  // name for a table field, which is why it is not `Record<fieldName, ...>`.
+  bindings?: Record<string, unknown>
+  steps?: Record<string, unknown>[]
   repeat?: RecipeRepeatSpec | null
 }
 
@@ -647,4 +663,69 @@ export interface TemplateOut {
 
 export interface TemplatesResponse {
   templates: TemplateOut[]
+}
+
+
+// --- extraction jobs: a marketplace recipe applied to submitted urls ---
+//
+// `TemplatesResponse` above is the browse half of the marketplace; this is the
+// use half. A job is one submission of N urls; each url is one run.
+
+export interface RecipeJobRequest {
+  urls: string[]
+  /** Addressable from the recipe as `{{meta.*}}` in step args and transforms. */
+  metadata?: Record<string, unknown> | null
+}
+
+/**
+ * `partial` is a real outcome for a batch, not a rounding of `failed`: some
+ * URLs yielded and some did not, and the ones that did are still usable.
+ */
+export type RecipeJobStatus = 'running' | 'completed' | 'partial' | 'failed'
+
+export interface RecipeJobOut {
+  job_id: string
+  recipe_id: string
+  recipe_name: string
+  /** Which version answered -- a recipe is healed and re-versioned under it. */
+  recipe_version: number
+  status: RecipeJobStatus
+  total: number
+  queued: number
+  running: number
+  completed: number
+  failed: number
+  created_at: string
+  finished_at: string | null
+}
+
+/** The v2 engine's per-field verdict. A run can complete and still lose a field. */
+export type RecipeFieldStatus = 'resolved' | 'fallback' | 'suspect' | 'empty' | 'failed'
+
+export interface RecipeJobResultOut {
+  run_id: string
+  url: string
+  status: RunStatus
+  data: Record<string, unknown> | null
+  field_status: Record<string, RecipeFieldStatus> | null
+  outcome: string | null
+  error: string | null
+  finished_at: string | null
+}
+
+export interface RecipeJobQueuedResponse {
+  success: boolean
+  job_id: string
+  queued: number
+}
+
+export interface RecipeJobResponse {
+  success: boolean
+  job: RecipeJobOut
+  results: RecipeJobResultOut[]
+}
+
+export interface RecipeJobsResponse {
+  success: boolean
+  jobs: RecipeJobOut[]
 }

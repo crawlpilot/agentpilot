@@ -25,7 +25,9 @@ export function RecipeFieldGroupsList({ groups }: { groups: RecipeFieldGroup[] }
 
   return (
     <div className="flex flex-col gap-2">
-      {groups.map((group) => (
+      {groups.map((group) => {
+        const steps = group.steps ?? group.reveal_steps ?? []
+        return (
         <details key={group.group_id} className="rounded-md border border-border p-3">
           <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 text-sm">
             <span className="font-mono text-xs text-muted-foreground">{group.group_id}</span>
@@ -34,15 +36,21 @@ export function RecipeFieldGroupsList({ groups }: { groups: RecipeFieldGroup[] }
                 {name}
               </Badge>
             ))}
-            {group.repeat && <Badge variant="accent">array</Badge>}
+            {group.repeat && <Badge variant="accent">rows</Badge>}
           </summary>
           <div className="mt-3 flex flex-col gap-3">
-            <JsonBlock label="Field locators" value={group.field_locators} />
-            {group.reveal_steps.length > 0 && <JsonBlock label="Reveal steps" value={group.reveal_steps} />}
+            {/* Either shape, and never assume the other one's keys exist --
+                see `RecipeFieldGroup`. A studio-authored recipe has
+                `bindings`/`steps`; an agent-built one has
+                `field_locators`/`reveal_steps`. */}
+            {group.bindings && <JsonBlock label="Bindings" value={group.bindings} />}
+            {group.field_locators && <JsonBlock label="Field locators" value={group.field_locators} />}
+            {steps.length > 0 && <JsonBlock label="Reveal steps" value={steps} />}
             {group.repeat && <JsonBlock label="Repeat spec" value={group.repeat} />}
           </div>
         </details>
-      ))}
+        )
+      })}
     </div>
   )
 }
