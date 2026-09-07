@@ -40,6 +40,37 @@ def _iter_elements(node: EnhancedDOMTreeNode) -> Iterator[EnhancedDOMTreeNode]:
         yield from _iter_elements(child)
 
 
+def find_node(root: EnhancedDOMTreeNode, ref: str) -> EnhancedDOMTreeNode | None:
+    """The element addressed by an `e<backendNodeId>` ref, or None.
+
+    Used when capturing an agent's dispatched action: the action carries a ref,
+    and the recipe needs the node behind it to describe the same element in a
+    way that survives a page load.
+    """
+
+    if _is_element(root) and node_ref(root) == ref:
+        return root
+    for child in root.children_and_shadow_roots:
+        found = find_node(child, ref)
+        if found is not None:
+            return found
+    return None
+
+
+def find_parent(
+    root: EnhancedDOMTreeNode, ref: str, parent: EnhancedDOMTreeNode | None = None
+) -> EnhancedDOMTreeNode | None:
+    """The parent of the element addressed by `ref`, or None."""
+
+    if _is_element(root) and node_ref(root) == ref:
+        return parent
+    for child in root.children_and_shadow_roots:
+        found = find_parent(child, ref, root)
+        if found is not None:
+            return found
+    return None
+
+
 def node_text(node: EnhancedDOMTreeNode) -> str:
     """The node's visible text: its accessible name when it has one, otherwise
     the concatenation of its descendant text nodes."""

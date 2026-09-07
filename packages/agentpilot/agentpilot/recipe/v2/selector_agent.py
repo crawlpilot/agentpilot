@@ -283,29 +283,79 @@ def dedupe_locators(locators: list[Locator]) -> list[Locator]:
     return out
 
 
+_NUMERIC = ("number", "float", "price", "integer")
+
+
+def _scalar_cleanup(value_type: str, *, structured: bool) -> list[dict[str, Any]]:
+    """The cleanup one scalar value needs, given where it was read from."""
+
+    if value_type in _NUMERIC:
+        if structured:
+            return [{"op": "cast", "to": value_type}]
+        return [
+            {"op": "regex_extract", "pattern": r"([\d.,]+)"},
+            {"op": "regex_replace", "pattern": ",", "repl": ""},
+            {"op": "cast", "to": value_type},
+        ]
+    if value_type == "url":
+        # Relative hrefs are the commonest broken output there is: `/p/123`
+        # read off a page and handed to a caller who has no idea what it was
+        # relative to. `url_resolve` joins against the page URL, and applies to
+        # structured sources too -- JSON-LD carries relative URLs just as often
+        # as the DOM does.
+        return [{"op": "url_resolve"}]
+    if value_type in ("date", "datetime"):
+        # Structured dates are usually already ISO-8601, and `cast` is a no-op
+        # on those; a DOM date needs the surrounding text trimmed first.
+        return (
+            [{"op": "cast", "to": value_type}]
+            if structured
+            else [{"op": "trim"}, {"op": "collapse_ws"}, {"op": "cast", "to": value_type}]
+        )
+    if value_type in ("string", "text") and not structured:
+        # Rendered text arrives with the page's indentation in it.
+        return [{"op": "trim"}, {"op": "collapse_ws"}]
+    return []
+
+
 def infer_transform(spec: FieldSpec, locator: Locator) -> list[Transform] | None:
     """A per-candidate transform for the cases where the source implies the
     cleanup, so the model does not have to get it right.
 
     The motivating pair is real: Zara's JSON-LD gives `"9550"` while its DOM
     gives `"₹ 9,550.00"`. One field-level pipeline cannot serve both without
-    being written for the worse case and mangling the better one -- so a
-    numeric field reading from structured data gets a bare cast, and the same
-    field reading from the DOM gets the digit-extraction it actually needs.
+    being written for the worse case and mangling the better one -- so a numeric
+    field reading from structured data gets a bare cast, and the same field
+    reading from the DOM gets the digit-extraction it actually needs. That split
+    is *why* this is per-candidate rather than per-field, and it generalises:
+    every branch below asks the same question of a different type.
+
+    A `table` field gets nothing, because it has no value of its own -- its
+    columns are separate leaf fields with their own specs, and each one comes
+    back through here.
     """
 
-    if spec.type.kind != "scalar":
-        return None
-    value_type = spec.type.value_type
-    if value_type not in ("number", "float", "price", "integer"):
-        return None
-    if locator.is_structured:
-        return parse_transforms([{"op": "cast", "to": value_type}])
-    return parse_transforms([
-        {"op": "regex_extract", "pattern": r"([\d.,]+)"},
-        {"op": "regex_replace", "pattern": ",", "repl": ""},
-        {"op": "cast", "to": value_type},
-    ])
+    kind = spec.type.kind
+    structured = locator.is_structured
+
+    if kind == "scalar":
+        ops = _scalar_cleanup(spec.type.value_type, structured=structured)
+        return parse_transforms(ops) if ops else None
+
+    if kind == "list":
+        item_type = spec.type.items.value_type if spec.type.items else "string"
+        # Scalar ops map over a list element-wise (`_apply_one`), so the item
+        # cleanup is written once and applies to each member. `filter_empty`
+        # last: a list read off the DOM routinely carries blank entries from
+        # layout elements caught by the same selector, and a caller asked for
+        # the values, not the gaps.
+        ops = [
+            *_scalar_cleanup(item_type, structured=structured),
+            {"op": "filter_empty"},
+        ]
+        return parse_transforms(ops)
+
+    return None
 
 
 async def verify_locators(
@@ -335,6 +385,97 @@ async def verify_locators(
     return [], last_error or "no proposed candidate resolved to a value"
 
 
+_DOM_KINDS = frozenset({"css", "xpath", "ax_role", "text"})
+
+_DOM_FALLBACK_INSTRUCTION = """\
+For each field below you already have a locator that reads it out of the page's \
+JSON. Now propose a SECOND way to read the same value, from the RENDERED DOM \
+ONLY -- a css, xpath or ax_role locator. Do not propose another json_ld, \
+hydration or meta path for these; a JSON path is what they already have.
+
+This is the fallback for the day the site renames a key in its hydration state. \
+The rendered value survives that; the path does not, and a field bound only to \
+JSON goes silently empty while the page still shows the value to a human.\
+"""
+
+
+def needs_dom_fallback(candidates: list[Candidate]) -> bool:
+    """Whether a field is bound only to structured sources.
+
+    A JSON-backed field is the *right* answer -- `SOURCE_PRIORITY` ranks
+    `json_ld` at 10 against `css` at 60 because a value in JSON-LD survives a
+    redesign that destroys every class name on the page. But the failure modes
+    are not symmetric. A CSS selector breaking is loud and common, and the
+    candidate chain is built for it. A hydration key being renamed is silent and
+    total: nothing resolves, the field is simply absent, and the page still
+    renders the value perfectly to anyone who looks.
+
+    So the chain wants one of each, not the best of one.
+    """
+
+    if not candidates:
+        return False
+    return all(c.locator.is_structured for c in candidates)
+
+
+async def _add_dom_fallbacks(
+    verified: dict[str, list[Candidate]],
+    fields: dict[str, FieldSpec],
+    *,
+    snapshot_text: str,
+    structured_data: dict[str, Any],
+    llm_config: LLMConfig,
+    verify: Verifier,
+    verified_on: int,
+) -> None:
+    """One extra call for the fields that resolved only out of JSON.
+
+    Mutates `verified` in place. Best-effort throughout: a field that already
+    has a working JSON locator is not made worse by failing to find a DOM one,
+    so nothing here raises and nothing is removed.
+    """
+
+    wanted = {
+        name: fields[name]
+        for name, candidates in verified.items()
+        if name in fields and needs_dom_fallback(candidates)
+    }
+    if not wanted:
+        return
+
+    proposals = await propose_locators(
+        wanted,
+        snapshot_text=snapshot_text,
+        structured_data=structured_data,
+        llm_config=llm_config,
+        failures={name: _DOM_FALLBACK_INSTRUCTION for name in wanted},
+    )
+    for name, locators in proposals.items():
+        dom_only = [loc for loc in locators if loc.kind in _DOM_KINDS]
+        if not dom_only:
+            continue
+        resolving, _reason = await verify_locators(dedupe_locators(dom_only), verify=verify)
+        if not resolving:
+            continue
+        spec = wanted[name]
+        existing = verified[name]
+        # Ranked from the end of the existing chain so the JSON candidate keeps
+        # winning: the fallback is for when the primary stops resolving, not a
+        # competitor for the common case.
+        fallbacks = [
+            Candidate(
+                locator=c.locator,
+                priority=c.priority,
+                verified_on=verified_on,
+                transform=infer_transform(spec, c.locator),
+            )
+            for c in rank_candidates(resolving, verified_on=verified_on)
+        ]
+        verified[name] = sorted(
+            [*existing, *fallbacks], key=lambda c: c.priority
+        )[:MAX_CANDIDATES_PER_FIELD]
+
+
 async def propose_and_verify(
     fields: dict[str, FieldSpec],
     *,
@@ -344,17 +485,31 @@ async def propose_and_verify(
     verify: Verifier,
     max_retries: int = 1,
     verified_on: int = 1,
+    dom_fallbacks: bool = True,
+    failures: dict[str, str] | None = None,
 ) -> dict[str, list[Candidate]]:
-    """Propose -> verify -> (on total failure) retry with the failure fed back.
+    """Propose -> verify -> (on total failure) retry with the failure fed back,
+    then top up any JSON-only field with a DOM fallback.
 
     Fields that could not be located are simply absent from the result. That is
     not an error: the caller keeps them and tries again on a later exploration
     step, once the page has been interacted with further.
+
+    `dom_fallbacks` costs one extra call on pages that publish their data as
+    JSON, and buys a chain that survives a renamed hydration key. See
+    `needs_dom_fallback` for why that asymmetry is worth paying for.
+
+    `failures` seeds the feedback the first attempt is given, for callers that
+    already know something was wrong with the previous answer. A repair round
+    passes the judge's rejection here -- "this is the breadcrumb trail, the
+    product title is in the h1 below it" -- so the model is told what it got
+    wrong in the same place it is normally told what did not resolve, and no
+    second prompt has to exist.
     """
 
     verified: dict[str, list[Candidate]] = {}
     remaining = dict(fields)
-    failures: dict[str, str] | None = None
+    failures = dict(failures) if failures else None
 
     for _attempt in range(max_retries + 1):
         if not remaining:
@@ -393,5 +548,16 @@ async def propose_and_verify(
         failures = next_failures
         if not failures:
             break
+
+    if dom_fallbacks and verified:
+        await _add_dom_fallbacks(
+            verified,
+            fields,
+            snapshot_text=snapshot_text,
+            structured_data=structured_data,
+            llm_config=llm_config,
+            verify=verify,
+            verified_on=verified_on,
+        )
 
     return verified

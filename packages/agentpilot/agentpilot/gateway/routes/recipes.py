@@ -31,6 +31,8 @@ from agentpilot.gateway.schemas import (
     RecipeJobResultOut,
     RecipeJobsResponse,
     RecipeListResponse,
+    RecipeOnboardRequest,
+    RecipeOnboardResponse,
     RecipeOut,
     RecipeRunOut,
     RecipeRunQueuedResponse,
@@ -217,6 +219,56 @@ async def save_recipe_v2(
     return RecipeSaveResponse(
         success=True, recipe_id=recipe_id, version=version, warnings=warnings
     )
+
+
+@router.post("/onboard", response_model=RecipeOnboardResponse)
+async def onboard_recipe_route(
+    req: RecipeOnboardRequest,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeOnboardResponse:
+    """Build a v2 recipe from a URL plus a description of the wanted data.
+
+    Queues the work rather than doing it: onboarding drives a real browser
+    through up to `build_max_steps` agent steps against a live site, which is
+    minutes, not a request. Poll `GET /v1/recipes/{id}/runs/{run_id}`.
+
+    The recipe row is created immediately so the caller has something to watch,
+    and stays a `draft` until a human reviews it -- the agent's output is a
+    proposal, not a published scraper.
+    """
+
+    if not req.fields and not (req.description or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="give either `fields` (a v2 field map) or `description` "
+            "(plain English) -- there is nothing to look for otherwise",
+        )
+    if not req.url.strip():
+        raise HTTPException(status_code=400, detail="`url` is required to build against")
+
+    requests_total.labels(tenant=authed.tenant, route="onboard_recipe").inc()
+    store = _require_recipe_store(wiring)
+
+    recipe = await store.create_recipe(
+        tenant=authed.tenant,
+        name=req.name,
+        url_pattern=req.url,
+        # Empty when the caller described the data instead of declaring it --
+        # the worker resolves the description and writes the real schema back.
+        field_schema=req.fields or {},
+        schedule_interval_seconds=None,
+    )
+    run_id = await store.queue_run(
+        recipe_id=recipe.recipe_id,
+        tenant=authed.tenant,
+        kind="onboard",
+        params={
+            "description": req.description or "",
+            "sample_urls": [req.url, *req.sample_urls],
+        },
+    )
+    return RecipeOnboardResponse(success=True, recipe_id=recipe.recipe_id, run_id=run_id)
 
 
 @router.put("/{recipe_id}", response_model=RecipeSaveResponse)

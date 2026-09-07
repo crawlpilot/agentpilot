@@ -445,6 +445,40 @@ class RecipeCreateRequest(BaseModel):
     `replay` run automatically every N seconds via `RecipeSchedulerLoop`."""
 
 
+class RecipeOnboardRequest(BaseModel):
+    """Build a v2 recipe from a URL and a description of the wanted data.
+
+    The difference from `RecipeCreateRequest` is the contract it produces, not
+    the trigger: that one starts a v1 build, whose output has no v2 `document`
+    and so can never run in the marketplace or be opened in the studio. This
+    one produces the document.
+
+    Either `fields` or `description` must be given. `fields` is the v2 field map
+    and is used as-is; `description` is plain English and is turned into one by
+    `recipe/v2/contract.py`. Supplying both uses `fields` -- an explicit
+    contract is not something to second-guess with a model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    url: str
+    """The page to build against. Also the first sample URL when none are given."""
+    description: str | None = None
+    """e.g. "product name, price, sizes in stock, and all the image URLs"."""
+    fields: dict[str, Any] | None = None
+    """A v2 `fields` object, when the caller already has one."""
+    sample_urls: list[str] = []
+    """More pages of the same kind. Two or more sharpen the derived
+    `target.match` from a guess into the URLs' actual shared shape."""
+
+
+class RecipeOnboardResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    recipe_id: str
+    run_id: str
+
+
 class RecipeSaveRequest(BaseModel):
     """A v2 recipe document, authored by hand rather than by an agent.
 

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from agentpilot.recipe.v2.models import Locator
+from agentpilot.recipe.v2.models import Candidate, Locator
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec, parse_fields
 from agentpilot.recipe.v2.selector_agent import (
     SOURCE_PRIORITY,
@@ -138,11 +138,51 @@ def test_numeric_field_gets_source_appropriate_cleanup() -> None:
     assert len(from_dom) > len(from_json)
 
 
-def test_non_numeric_fields_get_no_inferred_transform() -> None:
-    assert infer_transform(FIELDS["name"], Locator(kind="css", selector="h1")) is None
+def test_a_string_read_from_the_dom_is_whitespace_cleaned() -> None:
+    """Rendered text arrives with the page's own indentation in it."""
+
+    got = infer_transform(FIELDS["name"], Locator(kind="css", selector="h1"))
+    assert apply_transforms("\n   Ribbed  top\n ", got, TransformContext()) == "Ribbed top"
+
+
+def test_a_string_read_from_json_is_left_alone() -> None:
+    """It was not rendered, so there is no layout whitespace to strip -- and a
+    transform that does nothing is still a transform someone has to read."""
+
+    assert infer_transform(FIELDS["name"], Locator(kind="json_ld", path="[0].name")) is None
+
+
+def test_a_url_field_is_resolved_against_the_page() -> None:
+    """Relative hrefs are the commonest broken output there is: `/p/123` handed
+    to a caller with no idea what it was relative to."""
+
+    spec = FieldSpec(name="link", type=TypeSpec(kind="scalar", value_type="url"))
+    ctx = TransformContext(url="https://shop.test/c/shoes")
+    for locator in (Locator(kind="css", selector="a"), Locator(kind="json_ld", path="url")):
+        got = infer_transform(spec, locator)
+        assert apply_transforms("/p/123", got, ctx) == "https://shop.test/p/123"
+
+
+def test_a_list_of_urls_is_resolved_element_wise_and_compacted() -> None:
+    """Scalar ops map over a list, so the item cleanup is written once. A DOM
+    list routinely carries blanks from layout elements the selector also
+    caught, and the caller asked for the values, not the gaps."""
+
+    spec = FieldSpec(
+        name="images",
+        type=TypeSpec(kind="list", items=TypeSpec(kind="scalar", value_type="url")),
+    )
+    got = infer_transform(spec, Locator(kind="css", selector="img", all=True))
+    out = apply_transforms(
+        ["/a.jpg", "", "/b.jpg"], got, TransformContext(url="https://shop.test/p/1")
+    )
+    assert out == ["https://shop.test/a.jpg", "https://shop.test/b.jpg"]
 
 
 def test_table_fields_get_no_inferred_transform() -> None:
+    """A table has no value of its own -- its columns are separate leaf fields
+    with their own specs, and each comes back through here."""
+
     spec = FieldSpec(name="rows", type=TypeSpec(kind="table", columns={}))
     assert infer_transform(spec, Locator(kind="css", selector="tr")) is None
 
@@ -283,3 +323,118 @@ def test_prompt_carries_the_field_types_and_requirements() -> None:
     })
     msg = build_user_message(fields, snapshot_text="", structured_data={})
     assert "expected type: price" in msg and "[REQUIRED]" in msg
+
+
+# --- the DOM fallback behind a JSON-only field ------------------------------
+
+
+def test_a_json_only_chain_is_flagged_for_a_fallback() -> None:
+    from agentpilot.recipe.v2.selector_agent import needs_dom_fallback
+
+    json_only = [
+        Candidate(locator=Locator(kind="hydration", path="a")),
+        Candidate(locator=Locator(kind="json_ld", path="b")),
+    ]
+    assert needs_dom_fallback(json_only) is True
+
+
+def test_a_chain_that_already_reaches_the_dom_is_not() -> None:
+    from agentpilot.recipe.v2.selector_agent import needs_dom_fallback
+
+    mixed = [
+        Candidate(locator=Locator(kind="hydration", path="a")),
+        Candidate(locator=Locator(kind="css", selector=".p")),
+    ]
+    assert needs_dom_fallback(mixed) is False
+    assert needs_dom_fallback([]) is False
+
+
+@pytest.mark.asyncio
+async def test_a_json_only_field_gets_a_dom_fallback_added(monkeypatch) -> None:
+    """A hydration key rename is silent and total: nothing resolves, the field
+    is simply absent, and the page still renders the value perfectly to anyone
+    who looks. A CSS break is loud and the chain is already built for it -- so
+    the chain wants one of each, not the best of one.
+    """
+
+    stub = StubLLM([
+        # First pass: the model finds it in the page's JSON, and only there.
+        {"fields": [{"field": "price", "candidates": [{"kind": "hydration", "path": "p.price"}]}]},
+        # The follow-up asks for a rendered-DOM reading of the same value.
+        {"fields": [{"field": "price", "candidates": [{"kind": "css", "selector": ".price"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={"hydration": {}},
+        llm_config=None,
+        verify=fake_page({("hydration", "p.price"): "9550", ("css", ".price"): "9,550.00"}),
+    )
+
+    kinds = [c.locator.kind for c in got["price"]]
+    assert kinds == ["hydration", "css"]
+    # The JSON candidate still wins: the fallback is for when the primary stops
+    # resolving, not a competitor for the common case.
+    assert got["price"][0].priority < got["price"][1].priority
+    # And the follow-up said what it wanted, so the model is not guessing.
+    assert "RENDERED DOM ONLY" in stub.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_is_verified_like_any_other_candidate(monkeypatch) -> None:
+    """A proposed fallback that does not actually resolve is worse than none:
+    it costs a page read on every run and then reports empty."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "price", "candidates": [{"kind": "hydration", "path": "p.price"}]}]},
+        {"fields": [{"field": "price", "candidates": [{"kind": "css", "selector": ".nope"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={},
+        llm_config=None,
+        verify=fake_page({("hydration", "p.price"): "9550"}),
+    )
+    assert [c.locator.kind for c in got["price"]] == ["hydration"]
+
+
+@pytest.mark.asyncio
+async def test_no_second_call_when_the_chain_already_reaches_the_dom(monkeypatch) -> None:
+    """It costs a model call per build; a field that already has both sources
+    has nothing to gain from one."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "price", "candidates": [
+            {"kind": "hydration", "path": "p.price"},
+            {"kind": "css", "selector": ".price"},
+        ]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={},
+        llm_config=None,
+        verify=fake_page({("hydration", "p.price"): "9550", ("css", ".price"): "9550"}),
+    )
+    assert len(stub.prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_pass_can_be_turned_off(monkeypatch) -> None:
+    stub = StubLLM([
+        {"fields": [{"field": "price", "candidates": [{"kind": "hydration", "path": "p.price"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={},
+        llm_config=None,
+        verify=fake_page({("hydration", "p.price"): "9550"}),
+        dom_fallbacks=False,
+    )
+    assert len(stub.prompts) == 1

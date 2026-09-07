@@ -212,7 +212,9 @@ class RecipeWorkerLoop:
                 data=None,
                 field_failures=None,
                 error=(
-                    "this recipe has no URL of its own to run against; submit URLs "
+                    "onboarding needs a URL to build the recipe against"
+                    if run.kind == "onboard"
+                    else "this recipe has no URL of its own to run against; submit URLs "
                     "to it as a job, or give it a target matcher to make it schedulable"
                 ),
             )
@@ -224,7 +226,9 @@ class RecipeWorkerLoop:
         # pinned to a site this run never visits.
         session = await self._open_warm_session(run, _domain_from_url(target_url))
         try:
-            if run.kind == "build":
+            if run.kind == "onboard":
+                await self._process_onboard(run, session, target_url)
+            elif run.kind == "build":
                 await self._process_build(run, session)
             elif run.kind == "replay":
                 await self._process_replay(run, session)
@@ -308,6 +312,154 @@ class RecipeWorkerLoop:
             proxy_pinner=self._proxy_pinner,
             vault=None,
             lease_ttl_seconds=self._lease_ttl_seconds,
+        )
+
+    async def _process_onboard(
+        self, run: ClaimedRecipeRun, session: InteractiveSession, url: str
+    ) -> None:
+        """The v2 build: a contract and a URL in, a saved v2 document out.
+
+        Unlike `_process_build` this writes `document`, which is the whole
+        point -- a recipe without one is refused by `_process_job_run` and
+        cannot be opened by the studio, so the v1 build could never produce
+        something the marketplace would run.
+
+        The recipe is left as a `draft`: the judge and a human review it before
+        it is publishable. Fields the agent could not locate are reported
+        rather than dropped, and are what the assist loop will ask about.
+        """
+
+        from agentpilot.recipe.v2.assertions import propose_assertions, with_assertions
+        from agentpilot.recipe.v2.contract import fields_from_description
+        from agentpilot.recipe.v2.onboard import BlockedError, onboard_recipe
+        from agentpilot.recipe.v2.review import merge_field_values, verify_and_judge
+        from agentpilot.recipe.v2.schema import fields_to_dict, parse_fields
+        from agentpilot.recipe.v2.validate import validate_document
+
+        params: dict[str, Any] = run.params or {}
+        llm_config = LLMConfig.from_env()
+        cfg = RecipeConfig.from_env()
+
+        declared = run.recipe.field_schema or {}
+        try:
+            fields = (
+                parse_fields(declared)
+                if declared
+                else await fields_from_description(
+                    str(params.get("description") or ""), llm_config=llm_config, url=url
+                )
+            )
+        except ValueError as exc:
+            await self._store.complete_run(
+                run.run_id, run.lock, data=None, field_failures=None, error=str(exc)
+            )
+            return
+
+        sample_urls = [str(u) for u in (params.get("sample_urls") or []) if u] or [url]
+
+        try:
+            recipe, outcome = await onboard_recipe(
+                recipe_id=run.recipe_id,
+                tenant=run.tenant,
+                name=run.recipe.name,
+                url=url,
+                fields=fields,
+                sample_urls=sample_urls,
+                session=session,
+                registry=self._registry,
+                driver=self._driver,
+                llm_config=llm_config,
+                max_steps=self._build_max_steps,
+            )
+        except BlockedError as exc:
+            # Distinct from "nothing resolved" on purpose: a wall needs a
+            # different identity or a proxy, not a different schema, and
+            # `classify.py` exists so the two are never confused again.
+            await self._store.complete_run(
+                run.run_id, run.lock, data=None, field_failures=None,
+                error=f"blocked before anything could be built: {exc}",
+            )
+            return
+
+        # Stages 6 and 7: run what was built, judge what it collected, repair
+        # what the judge rejected. A draft reaches a human only once the judge
+        # passes -- their time is the scarce resource this whole gate protects.
+        recipe, review = await verify_and_judge(
+            recipe,
+            sample_urls=sample_urls,
+            session=session,
+            registry=self._registry,
+            driver=self._driver,
+            llm_config=llm_config,
+            max_repairs=cfg.max_judge_repairs,
+            sample_limit=cfg.onboard_sample_runs,
+        )
+
+        # The model-proposed assertions, now that real values exist to justify a
+        # bound. The mechanical ones were attached during the build; these are
+        # the ones that need to know what the value means.
+        collected = merge_field_values(review.runs)
+        if collected:
+            recipe.fields = with_assertions(
+                recipe.fields,
+                await propose_assertions(
+                    recipe.fields, samples=collected, llm_config=llm_config
+                ),
+            )
+
+        document = recipe.to_dict()
+        errors, warnings = validate_document(document)
+        if errors:
+            # The agent is held to the same lint as a human author. Saving a
+            # document the studio would reject leaves a recipe nobody can edit
+            # and the marketplace cannot run.
+            await self._store.complete_run(
+                run.run_id, run.lock, data=None,
+                field_failures={"unresolved": outcome.unresolved},
+                error="the built recipe did not validate: " + "; ".join(errors),
+            )
+            return
+
+        await self._store.apply_recipe_update(
+            run.recipe_id,
+            version=run.recipe.version + 1,
+            # The v1 columns are left empty rather than filled with v2-shaped
+            # data. A v2 group has `bindings`/`steps` and a v1 reader expects
+            # `field_locators`/`reveal_steps`; writing one into the other is the
+            # exact shape confusion that crashed the recipe detail page. Empty
+            # says "this recipe has no v1 representation", which is true.
+            global_setup=[],
+            field_groups=[],
+            health_status=recipe.health_status,
+            diff_summary="onboarding build",
+            heal_attempts="reset",
+            document=document,
+            field_schema=fields_to_dict(fields),
+        )
+        await self._store.complete_run(
+            run.run_id,
+            run.lock,
+            data={
+                "recipe_id": run.recipe_id,
+                "version": run.recipe.version + 1,
+                # What the draft actually collected, per sample URL, plus the
+                # judge's verdict. This is what the studio shows the reviewer:
+                # a draft is worth looking at because it ran, not because it
+                # parsed.
+                "review": review.to_dict(),
+                "ready_for_review": review.ready_for_review,
+            },
+            field_failures={
+                "unresolved": outcome.unresolved,
+                # Judged wrong and not repairable. Distinct from `unresolved`,
+                # which is "never found" -- these resolved to something, it was
+                # just the wrong thing, and the two need different questions put
+                # to a human.
+                "rejected": review.unrepaired,
+                "warnings": warnings,
+                "landed_url": outcome.landed_url,
+                "steps_taken": outcome.steps_taken,
+            },
         )
 
     async def _process_build(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:

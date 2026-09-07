@@ -778,22 +778,51 @@ class PostgresRecipeStore:
         health_status: str,
         diff_summary: str | None = None,
         heal_attempts: str = "keep",
+        document: dict[str, Any] | None = None,
+        field_schema: dict[str, Any] | None = None,
     ) -> None:
-        """Called by the worker after a `build`/`heal` run completes --
-        updates the current recipe row and appends an audit entry to
+        """Called by the worker after a `build`/`heal`/`onboard` run completes
+        -- updates the current recipe row and appends an audit entry to
         `recipe_versions`, in one transaction.
 
         `last_verified_at` advances ONLY when the result is `healthy` (a
         degraded heal must not overstate freshness). `heal_attempts` is
         `reset` (0), `increment` (+1), or `keep` -- the worker resets on build
         / healthy heal and increments on a heal that didn't restore health, so
-        the streak drives the `max_heal_attempts` cutoff."""
+        the streak drives the `max_heal_attempts` cutoff.
+
+        `document` is the full v2 document, and passing it is what makes an
+        agent-built recipe usable anywhere but a scheduled replay. Everything
+        downstream keys off that column: `_process_job_run` refuses a recipe
+        without one ("this recipe has no v2 document, so it can only run
+        against the URL pattern it was built for"), the studio reads
+        `bindings`/`steps` rather than the v1 `field_locators`/`reveal_steps`,
+        and codegen reads it to emit a script. Omitting it -- which is what
+        this method did for its whole life -- produces a recipe the marketplace
+        rejects and the studio cannot open.
+
+        It stays optional so the v1 build and heal paths keep working unchanged
+        until they are retired; `None` leaves any existing document in place
+        rather than clearing it, because a heal that only knows how to rewrite
+        the v1 columns must not silently discard the v2 half of the recipe.
+
+        `field_schema` is optional for the same reason and exists for one case:
+        onboarding derives the field map from a plain-English description, so
+        the row created at request time has an empty schema and only the worker
+        knows the real one. Passing it keeps the v1 column coherent with the
+        document's `fields` instead of leaving the row half-described.
+        """
 
         from psycopg.types.json import Jsonb
+
+        doc = Jsonb(document) if document is not None else None
+        schema = Jsonb(field_schema) if field_schema is not None else None
 
         async with self._pool.connection() as conn, conn.transaction():
             await conn.execute(
                 "UPDATE recipes SET version = %s, global_setup = %s, field_groups = %s, "
+                "document = COALESCE(%s, document), "
+                "field_schema = COALESCE(%s, field_schema), "
                 "health_status = %s, updated_at = now(), "
                 "last_verified_at = CASE WHEN %s = 'healthy' THEN now() ELSE last_verified_at END, "
                 "heal_attempts = CASE WHEN %s = 'reset' THEN 0 "
@@ -803,6 +832,8 @@ class PostgresRecipeStore:
                     version,
                     Jsonb(global_setup),
                     Jsonb(field_groups),
+                    doc,
+                    schema,
                     health_status,
                     health_status,
                     heal_attempts,
@@ -810,11 +841,25 @@ class PostgresRecipeStore:
                     recipe_id,
                 ),
             )
+            # The audit row carries the document too, so a rollback restores the
+            # whole recipe and not just the two columns this update touched --
+            # the reason `0011` added the column to `recipe_versions` as well.
+            # Read back from `recipes` when the caller passed none, so a v1 heal
+            # does not append a version that appears to have deleted the v2 half.
             await conn.execute(
                 "INSERT INTO recipe_versions "
-                "(recipe_id, version, global_setup, field_groups, diff_summary) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (recipe_id, version, Jsonb(global_setup), Jsonb(field_groups), diff_summary),
+                "(recipe_id, version, global_setup, field_groups, document, diff_summary) "
+                "SELECT %s, %s, %s, %s, COALESCE(%s, r.document), %s "
+                "FROM recipes r WHERE r.recipe_id = %s",
+                (
+                    recipe_id,
+                    version,
+                    Jsonb(global_setup),
+                    Jsonb(field_groups),
+                    doc,
+                    diff_summary,
+                    recipe_id,
+                ),
             )
 
     async def mark_replay_result(self, recipe_id: str, *, health_status: str) -> None:

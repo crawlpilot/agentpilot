@@ -52,6 +52,25 @@ def _tenant() -> str:
 SCHEMA = {"price": {"type": "scalar", "description": "the price"}}
 
 
+async def _audit_document(store: PostgresRecipeStore, recipe_id: str, version: int):
+    """The `document` on a `recipe_versions` row.
+
+    Read directly rather than through `list_versions`, which selects only
+    `version`/`diff_summary`/`created_at` on purpose -- it backs a listing, and
+    a recipe document runs to hundreds of lines, so returning fifty of them per
+    page would be the wrong shape for that endpoint.
+    """
+
+    async with store._pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT document FROM recipe_versions WHERE recipe_id = %s AND version = %s",
+                (recipe_id, version),
+            )
+            row = await cur.fetchone()
+    return row[0] if row else None
+
+
 async def test_create_and_get_recipe_round_trips(store: PostgresRecipeStore) -> None:
     tenant = _tenant()
     recipe = await store.create_recipe(
@@ -276,6 +295,88 @@ async def test_apply_recipe_update_bumps_version_and_writes_a_version_row(
     assert len(versions) == 1
     assert versions[0]["version"] == 1
     assert versions[0]["diff_summary"] == "initial build"
+
+
+async def test_apply_recipe_update_persists_the_v2_document(
+    store: PostgresRecipeStore,
+) -> None:
+    """The wall between the agent and the marketplace.
+
+    This method is the only path a build writes through, and for its whole life
+    it wrote `global_setup`/`field_groups` and nothing else -- so every
+    agent-built recipe had `document IS NULL`, and `_process_job_run` refuses
+    exactly those: "this recipe has no v2 document, so it can only run against
+    the URL pattern it was built for". The agent could not produce a recipe the
+    marketplace would accept.
+    """
+
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    document = {
+        "name": "n",
+        "version": 1,
+        "fields": {"price": {"type": {"kind": "scalar", "value_type": "price"}}},
+        "field_groups": [
+            {
+                "group_id": "g0",
+                "field_names": ["price"],
+                "bindings": {
+                    "price": [{"locator": {"kind": "css", "selector": "#p"}, "priority": 60}]
+                },
+            }
+        ],
+    }
+
+    await store.apply_recipe_update(
+        recipe.recipe_id, version=2, global_setup=[], field_groups=[],
+        health_status="healthy", diff_summary="onboard", document=document,
+    )
+
+    fetched = await store.get_recipe(recipe.recipe_id, tenant)
+    assert fetched is not None
+    assert fetched.document == document
+
+    # The audit row carries it too, or a rollback would restore a recipe with
+    # its v2 half deleted -- which is why `0011` put the column on both tables.
+    assert await _audit_document(store, recipe.recipe_id, 2) == document
+
+
+async def test_apply_recipe_update_without_a_document_keeps_the_stored_one(
+    store: PostgresRecipeStore,
+) -> None:
+    """A v1 heal only knows how to rewrite the v1 columns. If passing no
+    document meant writing NULL, one heal of a studio-authored recipe would
+    silently delete the half of it that the marketplace and the studio read --
+    turning a working recipe into one that can only run against its own URL
+    pattern, with nothing in the version history saying what happened."""
+
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    document = {"name": "n", "version": 1, "fields": {}, "field_groups": []}
+    await store.apply_recipe_update(
+        recipe.recipe_id, version=2, global_setup=[], field_groups=[],
+        health_status="healthy", document=document,
+    )
+
+    await store.apply_recipe_update(
+        recipe.recipe_id, version=3, global_setup=[], field_groups=[],
+        health_status="degraded", diff_summary="v1 heal",
+    )
+
+    fetched = await store.get_recipe(recipe.recipe_id, tenant)
+    assert fetched is not None
+    assert fetched.version == 3
+    assert fetched.document == document
+
+    # And the version row written by that heal carries it forward rather than
+    # recording an apparent deletion.
+    assert await _audit_document(store, recipe.recipe_id, 3) == document
 
 
 async def test_mark_replay_result_updates_health_and_timestamps(
