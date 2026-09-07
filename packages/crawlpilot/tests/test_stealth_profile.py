@@ -157,3 +157,34 @@ def test_block_detection_is_opt_out_for_long_lived_sessions() -> None:
     # Everything that helps *avoid* a block is unchanged.
     assert off.warmup is True
     assert (off.user_agent, off.init_script) == (on.user_agent, on.init_script)
+
+
+def test_the_akamai_handshake_is_not_gated_on_block_detection() -> None:
+    """Avoidance and reaction are different questions, and were one flag.
+
+    `_abck` only becomes valid after 2-3 accepted sensor POSTs, which the
+    warm-up's scrolls are what produce. Gating the *wait* on `detect_blocks`
+    meant the interactive path -- every agent run, every recipe -- did the
+    scrolls and then read anyway while the cookie was still unsolved, so
+    Akamai answered Access Denied on hm.com and cos.com. The wait belongs to
+    the tier that already paid for the warm-up.
+    """
+
+    off = stealth_profile.resolve(IDENTITY, "stealth", detect_blocks=False)
+    assert off.warmup is True
+    # The whole point: reaction off, avoidance still complete.
+    assert off.detect_blocks is False
+    assert off.wait_abck is True
+
+    # An unprotected tier runs no warm-up, so there is nothing to wait for.
+    basic = stealth_profile.resolve(IDENTITY, "basic", detect_blocks=False)
+    assert basic.warmup is False
+    assert basic.wait_abck is False
+
+
+def test_the_wait_reaches_the_driver_as_its_own_kwarg() -> None:
+    # `as_open_kwargs` is splatted straight into `driver.open`, so a field that
+    # does not survive it is a field the driver never sees.
+    kwargs = stealth_profile.resolve(IDENTITY, "stealth", detect_blocks=False).as_open_kwargs()
+    assert kwargs["wait_abck"] is True
+    assert kwargs["detect_blocks"] is False

@@ -35,6 +35,7 @@ class BrowserDriver(Protocol):
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        wait_abck: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
@@ -50,12 +51,15 @@ class BrowserDriver(Protocol):
         happens to run as). `None` leaves Chrome's own defaults untouched,
         so existing interactive/test callers are unaffected.
 
-        `warmup` runs a human pre-read routine (scroll burst + dwell, and an
-        `_abck` wait when `detect_blocks`) after each navigation, so an
-        Akamai-style sensor cookie has a chance to validate before content is
-        read. `detect_blocks` inspects the navigated page's body (not just its
+        `warmup` runs a human pre-read routine (scroll burst + dwell) after
+        each navigation, so an Akamai-style sensor cookie has a chance to
+        validate before content is read. `wait_abck` then waits for that
+        cookie to actually flip valid -- without it the warm-up scrolls and
+        reads anyway, while `_abck` is still unsolved, which is what Akamai
+        answers with Access Denied. `detect_blocks` is the separate,
+        *reactive* half: it inspects the navigated page's body (not just its
         status) and raises `ChallengeDetected` on a bot wall -- including the
-        HTTP-200 "Access Denied" pages Akamai serves. Both default off, so
+        HTTP-200 "Access Denied" pages Akamai serves. All three default off, so
         interactive/test callers pay nothing and behave exactly as before.
 
         `user_agent` overrides the context UA; `init_script` is JS added to

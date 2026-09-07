@@ -101,8 +101,8 @@ async def test_the_session_id_stays_unique(opener) -> None:
 async def test_two_runs_on_a_domain_reuse_the_same_small_pool(opener) -> None:
     """Across many runs the names must repeat, or nothing ever warms up.
 
-    This is the regression: 807 distinct profile directories accumulated on one
-    dev worker, none of them reused.
+    This is the regression: a distinct ~90 MB profile directory per run, none
+    of them ever reused or cleaned up.
     """
 
     o = opener()

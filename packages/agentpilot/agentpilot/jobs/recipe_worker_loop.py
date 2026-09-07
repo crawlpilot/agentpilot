@@ -57,7 +57,8 @@ def _domain_from_url(url: str) -> str:
 # `session/ephemeral.py` says so outright: a throwaway identity is "a
 # cookie-less, first-visit browser every time, which is itself a bot signal to
 # WAFs like Akamai" -- which is what Walmart and Zara run. It also leaked a
-# profile directory per run, forever: 807 of them on one dev worker.
+# profile directory per run, forever, at ~90 MB of Chrome profile each -- so a
+# single 500-URL marketplace job would have left 45 GB behind it.
 #
 # A *single* stable name would warm perfectly and then serialise everything --
 # `Registry.acquire` raises `LeaseConflict` when an identity already holds an

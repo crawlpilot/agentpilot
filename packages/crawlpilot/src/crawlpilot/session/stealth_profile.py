@@ -32,6 +32,7 @@ class StealthProfile:
     timezone_id: str | None = None
     warmup: bool = False
     detect_blocks: bool = False
+    wait_abck: bool = False
     user_agent: str | None = None
     init_script: str | None = None
     extra_http_headers: dict[str, str] | None = None
@@ -65,8 +66,9 @@ def resolve(
     fingerprint's own geo fills any locale/timezone the caller did not pin --
     an explicit request value still wins.
 
-    `detect_blocks=False` keeps the block *avoidance* (fingerprint, warm-up)
-    while dropping the block *reaction*. A one-shot scrape has an escalation
+    `detect_blocks=False` keeps the block *avoidance* (fingerprint, warm-up,
+    and the `_abck` wait that makes the warm-up count) while dropping the block
+    *reaction*. A one-shot scrape has an escalation
     ladder to act on a `ChallengeDetected` -- retry on a higher tier with a
     fresh identity -- so raising is useful there. A long-lived session has no
     ladder: raising mid-run just converts the situation into a failed run. It
@@ -91,6 +93,12 @@ def resolve(
         timezone_id=timezone_id or fp.geo.timezone_id,
         warmup=policy.warmup,
         detect_blocks=detect_blocks,
+        # Follows the tier, NOT `detect_blocks`. A protected tier already pays
+        # for the warm-up scrolls; skipping the `_abck` wait afterwards throws
+        # away what they bought, because Akamai only validates the cookie after
+        # the sensor POSTs those scrolls trigger. That is why a stealth-tier
+        # session could still land on Access Denied at hm.com and cos.com.
+        wait_abck=policy.warmup,
         user_agent=fp.user_agent,
         init_script=fp.init_script(),
         # Pin the Client-Hint headers to the same Chrome build as the UA, so

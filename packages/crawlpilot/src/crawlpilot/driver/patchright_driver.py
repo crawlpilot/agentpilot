@@ -639,6 +639,25 @@ class _Context:
     """Opt-in per-open flag: inspect the navigated page body and raise
     `ChallengeDetected` on a bot wall (incl. HTTP-200 Access Denied). Off by
     default so the general driver never pays the extra `content()` fetch."""
+    wait_abck: bool = False
+    """Whether the warm-up waits for Akamai's `_abck` to flip valid before the
+    caller reads.
+
+    Separate from `detect_blocks`, and it has to be. `_abck` only becomes valid
+    after 2-3 accepted sensor POSTs, so without the wait a protected-tier open
+    scrolls like a human and then reads anyway, while the cookie is still in
+    its `~-1~` unsolved state -- and Akamai serves Access Denied. That is
+    *avoidance*, which every protected tier wants; `detect_blocks` is
+    *reaction* (classify the page, raise `ChallengeDetected`), which a
+    long-lived session explicitly does not want and which
+    `test_block_detection_is_opt_out_for_long_lived_sessions` guards.
+
+    Gating both on one flag meant a session could not have the first without
+    the second, so `interactive.py` -- every agent run, every recipe -- did the
+    warm-up scrolls and then skipped the one wait that made them count.
+
+    Cheap where it does not apply: `warm_up` short-circuits when the page has
+    no Akamai cookie, and caps the wait at 8s when it does."""
     page_changed: bool = False
     """Set when `_on_new_page` auto-focuses a new tab (see multi-tab plan's
     "New-tab focus" decision: real-browser semantics, matching a prior
@@ -810,6 +829,7 @@ class PatchrightDriver:
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        wait_abck: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
@@ -949,6 +969,7 @@ class PatchrightDriver:
             ),
             warmup=warmup,
             detect_blocks=detect_blocks,
+            wait_abck=wait_abck,
             delay_policy=(
                 humanize.by_name(interact_profile) if interact_profile else humanize.DEFAULT
             ),
@@ -1989,7 +2010,7 @@ class PatchrightDriver:
             # STEALTH timing: warm-up only runs for protected targets. Never
             # let the flourish fail the navigation it follows.
             with contextlib.suppress(Exception):
-                await warmup.warm_up(live.page, humanize.STEALTH, wait_abck=cctx.detect_blocks)
+                await warmup.warm_up(live.page, humanize.STEALTH, wait_abck=cctx.wait_abck)
 
         if cctx.detect_blocks:
             html: str | None = None

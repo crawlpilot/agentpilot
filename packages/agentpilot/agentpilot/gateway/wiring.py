@@ -524,6 +524,11 @@ class Wiring:
             # publish the redis route so a gateway can proxy to it.
             sessions=self.sessions,
             placer=live_route_placer,
+            # Same omission as the recipe loop had: without these an agent run
+            # opens on a stock `BrowserConfig` and can never seed a fresh
+            # identity from the prototype catalog.
+            browser_config=self.browser_config,
+            prototype_provider=self.prototype_provider,
         )
         self.agent_worker_loop.start()
 
@@ -541,6 +546,13 @@ class Wiring:
             self.profiles_root,
             self.proxy_pinner,
             lease_ttl_seconds=self.lease_ttl_seconds,
+            # Both were being left to their defaults, which are `DEFAULTS` and
+            # `NullPrototypes` -- so every recipe run fingerprinted against a
+            # stock browser config and no fresh identity was ever seeded from
+            # the prototype catalog. The loop already accepts them; nothing was
+            # passing them in.
+            browser_config=self.browser_config,
+            prototype_provider=self.prototype_provider,
         )
         self.recipe_worker_loop.start()
 

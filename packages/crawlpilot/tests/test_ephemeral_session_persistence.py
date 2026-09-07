@@ -75,6 +75,7 @@ class _FakeDriver:
         timezone_id: str | None = None,
         warmup: bool = False,
         detect_blocks: bool = False,
+        wait_abck: bool = False,
         user_agent: str | None = None,
         init_script: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
