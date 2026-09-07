@@ -25,9 +25,10 @@
  */
 import { filterPersistableChain } from '@/lib/picker/vendor/shared/selectors/stability'
 import type { HighlightField, PickColumn, PickPayload, PickSelector } from '@/lib/picker/protocol'
-import type { PreviewField, PreviewLocator, PreviewRowsField } from '@/lib/picker/preview'
+import type { PreviewField, PreviewLocator, PreviewResult, PreviewRowsField } from '@/lib/picker/preview'
 import { SOURCE_PRIORITY } from './document'
-import { hitToLocator, type PathHit } from './probe'
+import { hitToLocator, resolveStructuredLocator, type PathHit, type ProbeResult } from './probe'
+import { STRUCTURED_KINDS } from './types'
 import type {
   Candidate,
   FieldGroup,
@@ -1135,12 +1136,13 @@ export function setReadAttribute(candidates: Candidate[], attribute: string): Ca
 }
 
 /**
- * Scalar field drafts as the preview evaluator wants them.
+ * Scalar field drafts as the in-page preview evaluator wants them.
  *
- * Structured candidates (`json_ld`, `hydration`, `meta`) are dropped rather
- * than faked: the preview reads the DOM, and a JSON path resolves against data
- * the reader here does not hold. A field bound only to a JSON path reports
- * `empty` and the UI says why, which beats inventing a value for it.
+ * Structured candidates (`json_ld`, `hydration`, `meta`) are not here because
+ * the in-page reader resolves against the DOM and a JSON path does not. They
+ * are resolved separately and merged by `withStructuredPreview`, against the
+ * page data the probe already fetched -- so a field bound only to a JSON path
+ * shows its real value rather than a blank.
  */
 export function toPreviewFields(drafts: FieldDraft[]): PreviewField[] {
   // Table drafts read row-wise instead -- see `toPreviewRowsFields`.
@@ -1226,4 +1228,68 @@ export function withJsonAlternatives(candidates: Candidate[], alternatives: Loca
     note: 'same value found in page JSON',
   }))
   return [...structured, ...candidates].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+}
+
+
+/**
+ * Fill in the fields the DOM reader cannot answer for.
+ *
+ * A recipe built entirely from page JSON -- which is the *recommended* shape,
+ * since `SOURCE_PRIORITY` ranks `hydration` above `css` precisely because a
+ * path outlives a redesign -- previewed as four blank rows and validated the
+ * same way. The reader reads the DOM; these fields are not in the DOM. Nothing
+ * was broken, and nothing was shown either, which made the studio's own advice
+ * look like it produced a recipe that returns nothing.
+ *
+ * Candidate order is honoured rather than assumed: a structured candidate wins
+ * only if it outranks every DOM candidate that yielded, which is the rule
+ * `resolve_field` applies at replay (lower `priority` first). So a field with a
+ * JSON path *and* a CSS fallback previews as whichever one would really answer.
+ */
+export function withStructuredPreview(
+  results: PreviewResult[],
+  // Not `FieldDraft[]`: validation carries plain `{name, candidates}` pairs
+  // compiled from the saved document, and it needs the same merge.
+  drafts: { name: string; candidates: Candidate[] }[],
+  probe: ProbeResult | null,
+): PreviewResult[] {
+  if (!probe) return results
+  const byName = new Map(drafts.map((d) => [d.name, d]))
+
+  return results.map((result) => {
+    const draft = byName.get(result.name)
+    if (!draft) return result
+
+    // The best DOM candidate that actually yielded, by priority.
+    const domCandidates = draft.candidates.filter(
+      (c) => c.locator.kind === 'css' || c.locator.kind === 'xpath',
+    )
+    const wonDom =
+      result.candidate !== null && result.status !== 'empty' && result.status !== 'failed'
+        ? domCandidates[result.candidate - 1]
+        : undefined
+
+    for (const candidate of [...draft.candidates].sort(
+      (a, b) => (a.priority ?? 0) - (b.priority ?? 0),
+    )) {
+      if (!STRUCTURED_KINDS.includes(candidate.locator.kind)) continue
+      // A DOM candidate already answered and outranks this one.
+      if (wonDom && (wonDom.priority ?? 0) <= (candidate.priority ?? 0)) break
+
+      const value = resolveStructuredLocator(probe, candidate.locator)
+      if (value === null || value === undefined || value === '') continue
+
+      return {
+        ...result,
+        status: 'resolved',
+        // Scalars as text, structures as JSON -- the same distinction the
+        // output panel makes, so what is shown is what a caller receives.
+        value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+        matches: 1,
+        source: candidate.locator.kind,
+        error: undefined,
+      }
+    }
+    return result
+  })
 }

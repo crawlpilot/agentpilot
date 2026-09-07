@@ -139,3 +139,43 @@ describe('structuredOnlyFields', () => {
     expect(structuredOnlyFields(r)).toEqual(['a'])
   })
 })
+
+describe('structured candidates in the plan', () => {
+  const jsonRecipe = (): Recipe => ({
+    ...emptyRecipe('zara'),
+    fields: {
+      name: { type: { kind: 'scalar', value_type: 'string' }, description: '' },
+      title: { type: { kind: 'scalar', value_type: 'string' }, description: '' },
+    },
+    field_groups: [
+      {
+        group_id: 'core',
+        field_names: ['name', 'title'],
+        bindings: {
+          name: [
+            {
+              priority: 15,
+              locator: { kind: 'hydration', path: '__NEXT_DATA__.props.name', path_lang: 'simple' },
+              verified_on: 1,
+            },
+          ],
+          title: [{ priority: 60, locator: { kind: 'css', selector: 'h1' }, verified_on: 1 }],
+        },
+      },
+    ],
+  })
+
+  it('carries a JSON-bound field so validation can resolve it', () => {
+    // `fields` is filtered to what the in-page reader handles, which is the
+    // DOM -- so a hydration-only field is absent there and validated blank.
+    const [group] = buildValidationPlan(jsonRecipe())
+
+    expect(group.fields.find((f) => f.name === 'name')?.candidates).toEqual([])
+    expect(group.scalarCandidates.map((c) => c.name)).toEqual(['name'])
+  })
+
+  it('does not carry a field the DOM reader can already answer for', () => {
+    const [group] = buildValidationPlan(jsonRecipe())
+    expect(group.scalarCandidates.some((c) => c.name === 'title')).toBe(false)
+  })
+})

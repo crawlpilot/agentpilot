@@ -129,3 +129,89 @@ def test_neither_dialect_can_express_unanchored_descent() -> None:
     )
     assert anchored.startswith("Dove")
     assert ad.startswith("St. Ives")
+
+
+# --- the contract the recipe studio's path proposals depend on --------------
+#
+# The studio proposes a path by walking the *same* payload replay resolves
+# against (`ExtractAction(format="structured_data")`), and addresses it with
+# the `simple` dialect. Both halves of that agreement are pinned here, because
+# a drift in either makes every JSON-bound field silently empty at run time --
+# the studio offers a path, replay resolves nothing, and no error is raised.
+
+
+def test_json_ld_is_a_flat_list_of_entities_and_paths_index_it_directly() -> None:
+    """`_flatten_json_ld` unwraps `@graph`, so a path is `[N].key`.
+
+    This is what the studio's probe has to mirror. It did not: it kept each
+    `<script>` body whole and proposed `[0].@graph[2].name` for a value that
+    lives at `[2].name` here -- so on any `@graph` page (Yoast, Shopify, most
+    CMSs) every JSON-LD field resolved to nothing.
+    """
+
+    from crawlpilot.extraction.structured_data import extract_structured_data
+
+    html = """
+    <html><head>
+      <script type="application/ld+json">
+        {"@context":"https://schema.org","@graph":[
+          {"@type":"WebSite","name":"Shop"},
+          {"@type":"Product","name":"Midi dress","offers":{"price":"49.90"}}
+        ]}
+      </script>
+    </head><body></body></html>
+    """
+    data = extract_structured_data(html)
+
+    assert [e.get("@type") for e in data["json_ld"]] == ["WebSite", "Product"]
+    assert resolve_path(data["json_ld"], "[1].name") == "Midi dress"
+    assert resolve_path(data["json_ld"], "[1].offers.price") == "49.90"
+    # The un-flattened shape the old probe assumed resolves to nothing.
+    assert resolve_path(data["json_ld"], "[0].@graph[1].name") is None
+
+
+def test_a_top_level_json_ld_array_is_spread_too() -> None:
+    from crawlpilot.extraction.structured_data import extract_structured_data
+
+    html = """
+    <html><head><script type="application/ld+json">
+      [{"@type":"Product","name":"A"},{"@type":"Product","name":"B"}]
+    </script></head><body></body></html>
+    """
+    data = extract_structured_data(html)
+    assert resolve_path(data["json_ld"], "[1].name") == "B"
+
+
+def test_a_duplicated_meta_key_becomes_a_list_and_is_indexed() -> None:
+    """`_set_meta_value` lists duplicates, so the path is `key[0]`, not `key`."""
+
+    from crawlpilot.extraction.structured_data import extract_structured_data
+
+    html = """
+    <html><head>
+      <meta property="og:locale:alternate" content="en_GB">
+      <meta property="og:locale:alternate" content="fr_FR">
+      <meta property="og:title" content="Midi dress">
+    </head><body></body></html>
+    """
+    meta = extract_structured_data(html)["metadata"]
+
+    assert resolve_path(meta, "og:locale:alternate[0]") == "en_GB"
+    assert resolve_path(meta, "og:locale:alternate[1]") == "fr_FR"
+    # A colon is not a path delimiter, so a scalar key resolves whole.
+    assert resolve_path(meta, "og:title") == "Midi dress"
+
+
+def test_hydration_is_keyed_by_the_container_the_path_starts_with() -> None:
+    from crawlpilot.extraction.structured_data import extract_structured_data
+
+    html = """
+    <html><body><script id="__NEXT_DATA__" type="application/json">
+      {"props":{"pageProps":{"initialData":{"name":"Midi dress"}}}}
+    </script></body></html>
+    """
+    hydration = extract_structured_data(html)["hydration"]
+
+    assert resolve_path(
+        hydration, "__NEXT_DATA__.props.pageProps.initialData.name"
+    ) == "Midi dress"

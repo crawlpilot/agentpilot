@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { PICKER_GLOBAL, type PickerApi, type PickPayload } from '@/lib/picker/protocol'
 import type { PreviewResult, PreviewRowsResult } from '@/lib/picker/preview'
+import type { ProbeResult } from '@/lib/recipe/probe'
 import {
   chainToCandidates,
   toHighlightFields,
@@ -17,7 +18,9 @@ import {
   readAttribute,
   setShape,
   toFieldName,
+  withStructuredPreview,
   withJsonAlternatives,
+  type FieldDraft,
   type WorkItem,
 } from './fromPick'
 import { emptyRecipe, SOURCE_PRIORITY } from './document'
@@ -830,6 +833,96 @@ describe('list extraction, end to end', () => {
     for (const mark of marks) {
       expect(document.querySelector(mark.selectors[0].value), mark.name).not.toBeNull()
     }
+  })
+})
+
+/**
+ * A recipe built entirely from page JSON is the shape the studio *recommends*
+ * -- `SOURCE_PRIORITY` ranks `hydration` above `css` because a path outlives a
+ * redesign. It also previewed as blank rows, because the in-page reader reads
+ * the DOM and these fields are not in the DOM.
+ */
+describe('previewing a field bound to page JSON', () => {
+  const probe: ProbeResult = {
+    json_ld: [],
+    metadata: {},
+    hydration: {
+      __NEXT_DATA__: { props: { pageProps: { initialData: { name: 'Midi dress' } } } },
+    },
+  }
+
+  const jsonDraft = (name: string, path: string, priority = 15): FieldDraft => ({
+    name,
+    spec: { type: { kind: 'scalar', value_type: 'string' }, description: '' },
+    candidates: [
+      { priority, locator: { kind: 'hydration', path, path_lang: 'simple' }, verified_on: 1 },
+    ],
+  })
+
+  const emptyResult = (name: string): PreviewResult => ({
+    name, status: 'empty', value: null, candidate: null, matches: 0,
+  })
+
+  it('resolves the value the DOM reader could not', () => {
+    const draft = jsonDraft('name', '__NEXT_DATA__.props.pageProps.initialData.name')
+    const [out] = withStructuredPreview([emptyResult('name')], [draft], probe)
+
+    expect(out.status).toBe('resolved')
+    expect(out.value).toBe('Midi dress')
+    // Where it came from, so a green row is not mistaken for a DOM read.
+    expect(out.source).toBe('hydration')
+  })
+
+  it('leaves a genuinely missing path empty rather than inventing one', () => {
+    const draft = jsonDraft('name', '__NEXT_DATA__.props.pageProps.nope.name')
+    const [out] = withStructuredPreview([emptyResult('name')], [draft], probe)
+    expect(out.status).toBe('empty')
+    expect(out.value).toBeNull()
+  })
+
+  it('is a no-op before the page has been probed', () => {
+    const draft = jsonDraft('name', '__NEXT_DATA__.props.pageProps.initialData.name')
+    const results = [emptyResult('name')]
+    expect(withStructuredPreview(results, [draft], null)).toEqual(results)
+  })
+
+  it('lets a higher-priority DOM candidate keep the answer', () => {
+    // `resolve_field` takes the first candidate that yields, in priority
+    // order. A CSS candidate that outranks the JSON one must still win here,
+    // or the preview shows a value replay would not return.
+    const draft: FieldDraft = {
+      ...jsonDraft('name', '__NEXT_DATA__.props.pageProps.initialData.name', 60),
+      candidates: [
+        { priority: 10, locator: { kind: 'css', selector: 'h1' }, verified_on: 1 },
+        {
+          priority: 60,
+          locator: { kind: 'hydration', path: '__NEXT_DATA__.props.pageProps.initialData.name' },
+          verified_on: 1,
+        },
+      ],
+    }
+    const domWon: PreviewResult = {
+      name: 'name', status: 'resolved', value: 'From the DOM', candidate: 1, matches: 1,
+    }
+    const [out] = withStructuredPreview([domWon], [draft], probe)
+    expect(out.value).toBe('From the DOM')
+    expect(out.source).toBeUndefined()
+  })
+
+  it('outranks a DOM candidate that lost, which is the recommended shape', () => {
+    const draft: FieldDraft = {
+      ...jsonDraft('name', '__NEXT_DATA__.props.pageProps.initialData.name', 15),
+      candidates: [
+        {
+          priority: 15,
+          locator: { kind: 'hydration', path: '__NEXT_DATA__.props.pageProps.initialData.name' },
+          verified_on: 1,
+        },
+        { priority: 60, locator: { kind: 'css', selector: 'h1' }, verified_on: 1 },
+      ],
+    }
+    const [out] = withStructuredPreview([emptyResult('name')], [draft], probe)
+    expect(out.value).toBe('Midi dress')
   })
 })
 

@@ -32,10 +32,11 @@ import {
   toPreviewFields,
   toPreviewRowsFields,
   withJsonAlternatives,
+  withStructuredPreview,
   type FieldDraft,
   type WorkItem,
 } from '@/lib/recipe/fromPick'
-import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
+import { STRUCTURED_DATA_ACTION, findPaths, flattenProbe, hitToLocator, parseProbe, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { PickerMode } from '@/lib/picker/protocol'
 import type { PreviewResult, PreviewRowsResult } from '@/lib/picker/preview'
 import type { TemplateVisibility } from '@/lib/api/types'
@@ -90,6 +91,9 @@ export function RecipeWizardPage() {
   const [justPicked, setJustPicked] = useState<string | null>(null)
   const [paging, setPaging] = useState<PaginationChoice>({ mode: 'none', maxPages: 5 })
   const [hits, setHits] = useState<PathHit[] | null>(null)
+  // The probe payload itself, not just its flattened hits: the preview needs
+  // it to resolve a field bound to a JSON path, which the DOM reader cannot.
+  const [probe, setProbe] = useState<ProbeResult | null>(null)
   const [preview, setPreview] = useState<PreviewResult[] | null>(null)
   const [previewRows, setPreviewRows] = useState<PreviewRowsResult[]>([])
   const [previewing, setPreviewing] = useState(false)
@@ -175,14 +179,15 @@ export function RecipeWizardPage() {
   const probeJson = useCallback(() => {
     if (!sessionId || hits) return
     execute.mutate(
-      { sessionId, actions: [{ type: 'execute_js', script: PROBE_JS }] },
+      { sessionId, actions: [{ ...STRUCTURED_DATA_ACTION }] },
       {
         onSuccess: (result) => {
-          const raw = result.js_returns[0] as ProbeResult | null
-          if (!raw || typeof raw !== 'object') return
-          setHits(
-            flattenProbe({ json_ld: raw.json_ld ?? [], meta: raw.meta ?? {}, hydration: raw.hydration ?? {} }),
-          )
+          // `extracts[0]`, not `js_returns` -- the same payload
+          // `PageReader.structured_data()` parses, so a path offered here is
+          // one replay can resolve.
+          const parsed = parseProbe(result.extracts?.[0])
+          setProbe(parsed)
+          setHits(flattenProbe(parsed))
         },
         // A page with no embedded JSON is a normal outcome, not an error --
         // it just means every candidate here will be a DOM one.
@@ -302,7 +307,10 @@ export function RecipeWizardPage() {
         picker.preview(toPreviewFields(drafts)),
         picker.previewRows(toPreviewRowsFields(drafts)),
       ])
-      setPreview(scalars)
+      // The DOM reader cannot answer for a field bound to page JSON, and a
+      // JSON-first recipe is the shape the studio recommends -- so those are
+      // resolved here, against the data the probe already holds.
+      setPreview(withStructuredPreview(scalars, drafts, probe))
       setPreviewRows(tables)
     } catch (err) {
       toast({

@@ -1,4 +1,5 @@
 import type { PreviewField, PreviewRowsField, PreviewStep } from '@/lib/picker/preview'
+import { STRUCTURED_KINDS } from './types'
 import type { Candidate, Locator, Recipe, Step } from './types'
 
 /**
@@ -34,6 +35,17 @@ export interface ValidationGroup {
   fields: PreviewField[]
   /** Table fields this group collects, read row-wise. */
   rowFields: PreviewRowsField[]
+  /**
+   * Every scalar field's *full* candidate list, structured ones included.
+   *
+   * `fields` above is filtered to what the in-page reader can resolve, which
+   * is the DOM. A field bound to a JSON path is not in the DOM, so without
+   * this it validated as blank -- and a JSON-first recipe, the shape the
+   * studio recommends, validated as entirely blank. The merge needs the whole
+   * list rather than just the structured part, because whether a JSON path
+   * wins depends on the DOM candidates it is ranked against.
+   */
+  scalarCandidates: { name: string; candidates: Candidate[] }[]
 }
 
 function toPreviewStep(step: Step): PreviewStep | null {
@@ -80,6 +92,7 @@ export function buildValidationPlan(recipe: Recipe): ValidationGroup[] {
 
     const fields: PreviewField[] = []
     const rowFields: PreviewRowsField[] = []
+    const scalarCandidates: { name: string; candidates: Candidate[] }[] = []
 
     for (const name of group.field_names) {
       const spec = recipe.fields[name]
@@ -114,9 +127,14 @@ export function buildValidationPlan(recipe: Recipe): ValidationGroup[] {
         required: spec.required,
         candidates: toLocators(candidates),
       })
+      // Only worth carrying when there is actually something the DOM reader
+      // cannot answer for; a purely-CSS field needs no second pass.
+      if (candidates.some((c) => STRUCTURED_KINDS.includes(c.locator.kind))) {
+        scalarCandidates.push({ name, candidates })
+      }
     }
 
-    return { groupId: group.group_id, steps, fields, rowFields }
+    return { groupId: group.group_id, steps, fields, rowFields, scalarCandidates }
   })
 }
 

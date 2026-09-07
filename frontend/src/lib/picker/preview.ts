@@ -52,6 +52,8 @@ export interface PreviewResult {
   /** How many nodes the winning selector matched. */
   matches: number
   error?: string
+  /** Set when the value came from page JSON rather than the DOM. */
+  source?: string
 }
 
 /**

@@ -4,6 +4,8 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import type { UsePagePicker } from '@/hooks/usePagePicker'
 import type { PreviewResult, PreviewRowsResult, StepOutcome } from '@/lib/picker/preview'
 import type { ValidationGroup } from '@/lib/recipe/validatePlan'
+import { withStructuredPreview } from '@/lib/recipe/fromPick'
+import { STRUCTURED_DATA_ACTION, parseProbe } from '@/lib/recipe/probe'
 
 export interface GroupValidation {
   groupId: string
@@ -108,7 +110,28 @@ export function useRecipeValidation(
             group.fields.length > 0 ? picker.preview(group.fields) : Promise.resolve([]),
             group.rowFields.length > 0 ? picker.previewRows(group.rowFields) : Promise.resolve([]),
           ])
-          groups.push({ groupId: group.groupId, steps, fields, rowFields })
+
+          // A field bound to page JSON is not in the DOM, so the reader above
+          // returns nothing for it. Read the structured data for *this* page
+          // -- not the one the author was picking against, which is a
+          // different URL and would report values that are not here.
+          let merged = fields
+          if (group.scalarCandidates.length > 0) {
+            try {
+              const extracted = await executeSession(apiKey, sessionId, {
+                actions: [{ ...STRUCTURED_DATA_ACTION }],
+              })
+              merged = withStructuredPreview(
+                fields,
+                group.scalarCandidates,
+                parseProbe(extracted.extracts?.[0]),
+              )
+            } catch {
+              // A page with no embedded JSON is a normal outcome, not a failed
+              // validation -- those fields simply stay empty.
+            }
+          }
+          groups.push({ groupId: group.groupId, steps, fields: merged, rowFields })
         }
         setResult({ url, groups })
       } catch (err) {

@@ -12,7 +12,7 @@ import { usePagePicker } from '@/hooks/usePagePicker'
 import { PickerControls } from '@/components/app/wizard/PickerControls'
 import { detailPickToDraft } from '@/lib/recipe/fromPick'
 import { useToast } from '@/components/ui/toast'
-import { PROBE_JS, findPaths, flattenProbe, hitToLocator, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
+import { STRUCTURED_DATA_ACTION, findPaths, flattenProbe, hitToLocator, parseProbe, type PathHit, type ProbeResult } from '@/lib/recipe/probe'
 import type { Locator } from '@/lib/recipe/types'
 
 interface Props {
@@ -130,22 +130,24 @@ function StructuredDataProbe({
 
   function probe() {
     execute.mutate(
-      { sessionId, actions: [{ type: 'execute_js', script: PROBE_JS }] },
+      { sessionId, actions: [{ ...STRUCTURED_DATA_ACTION }] },
       {
         onSuccess: (result) => {
-          const raw = result.js_returns[0] as ProbeResult | null
-          if (!raw || typeof raw !== 'object') {
+          // `extracts[0]`, not `js_returns` -- the same payload
+          // `PageReader.structured_data()` parses, so a path offered here is
+          // one replay can resolve.
+          const probeResult: ProbeResult = parseProbe(result.extracts?.[0])
+          const found =
+            probeResult.json_ld.length +
+            Object.keys(probeResult.metadata).length +
+            Object.keys(probeResult.hydration).length
+          if (found === 0) {
             toast({ title: 'Probe returned nothing', description: 'Is a page loaded in this session?' })
             return
           }
-          const probeResult: ProbeResult = {
-            json_ld: raw.json_ld ?? [],
-            meta: raw.meta ?? {},
-            hydration: raw.hydration ?? {},
-          }
           setCounts({
             json_ld: probeResult.json_ld.length,
-            meta: Object.keys(probeResult.meta).length,
+            meta: Object.keys(probeResult.metadata).length,
             hydration: Object.keys(probeResult.hydration).length,
           })
           setHits(flattenProbe(probeResult))
