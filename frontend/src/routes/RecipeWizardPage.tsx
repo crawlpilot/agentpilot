@@ -83,6 +83,11 @@ export function RecipeWizardPage() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [pickMode, setPickMode] = useState<Exclude<PickerMode, 'single'>>('list')
   const [items, setItems] = useState<WorkItem[]>([])
+  // The field just added, so it opens on its refinement controls. Choosing the
+  // shape is the intended next action after a broad pick, and making an author
+  // find a chevron to discover that is most of why per-column editing goes
+  // unused.
+  const [justPicked, setJustPicked] = useState<string | null>(null)
   const [paging, setPaging] = useState<PaginationChoice>({ mode: 'none', maxPages: 5 })
   const [hits, setHits] = useState<PathHit[] | null>(null)
   const [preview, setPreview] = useState<PreviewResult[] | null>(null)
@@ -198,17 +203,21 @@ export function RecipeWizardPage() {
           toast({ title: 'Nothing readable in that item', description: 'Try a wider selection.' })
           return
         }
+        const ids = picked.map((_, i) => `f-${Date.now()}-${i}`)
         setItems((current) => [
           ...current.filter((i) => i.kind !== 'field'),
-          ...picked.map((draft, i) => ({ kind: 'field' as const, id: `f-${Date.now()}-${i}`, draft })),
+          ...picked.map((draft, i) => ({ kind: 'field' as const, id: ids[i], draft })),
         ])
+        setJustPicked(ids[0])
         toast({
           title: `${picked.length} field${picked.length === 1 ? '' : 's'} from ${count} rows`,
           description: 'Name them on the Fields step.',
         })
       } else {
         const draft = detailPickToDraft(payload, drafts.map((d) => d.name))
-        setItems((current) => [...current, { kind: 'field', id: `f-${Date.now()}`, draft }])
+        const id = `f-${Date.now()}`
+        setItems((current) => [...current, { kind: 'field', id, draft }])
+        setJustPicked(id)
       }
     } catch {
       // usePagePicker surfaces the message in `picker.error`.
@@ -466,6 +475,7 @@ export function RecipeWizardPage() {
               <StepExtract
                 items={items}
                 onChange={setItems}
+                autoExpandId={justPicked}
                 pickMode={pickMode}
                 onPickModeChange={setPickMode}
                 status={picker.status}

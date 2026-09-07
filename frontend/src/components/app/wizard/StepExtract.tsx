@@ -42,6 +42,8 @@ import { cn } from '@/lib/utils'
 interface Props {
   items: WorkItem[]
   onChange: (items: WorkItem[]) => void
+  /** A field to open on arrival -- the one just picked. */
+  autoExpandId?: string | null
   pickMode: Exclude<PickerMode, 'single'>
   onPickModeChange: (mode: Exclude<PickerMode, 'single'>) => void
   status: PickerStatus
@@ -110,6 +112,7 @@ const READ_ATTRIBUTES: { value: string; label: string; hint: string }[] = [
 export function StepExtract({
   items,
   onChange,
+  autoExpandId,
   pickMode,
   onPickModeChange,
   status,
@@ -127,6 +130,13 @@ export function StepExtract({
   onAddJsonField,
 }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  // Follow the picker, but never fight the author: once they collapse or open
+  // something else, `expanded` diverges and this stops taking over.
+  const [followed, setFollowed] = useState<string | null>(null)
+  if (autoExpandId && autoExpandId !== followed) {
+    setFollowed(autoExpandId)
+    setExpanded(autoExpandId)
+  }
   const picking = status !== 'idle'
 
   const fieldCount = items.filter((i) => i.kind === 'field').length

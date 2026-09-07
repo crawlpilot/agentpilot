@@ -14,6 +14,7 @@ import {
   planGroups,
   listPickToDrafts,
   availableShapes,
+  readAttribute,
   setShape,
   toFieldName,
   withJsonAlternatives,
@@ -321,8 +322,9 @@ describe('narrowing a broad pick', () => {
   it('flattens one column into a list of values, and it really reads', async () => {
     document.body.innerHTML = LIST_HTML
     const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
-    const urlColumn = Object.keys(draft.source!.columnTypes).find(
-      (c) => draft.source!.columnTypes[c].value_type === 'url',
+    // By what it *reads*, not by value_type: an image column is also `url`.
+    const urlColumn = Object.keys(draft.source!.columns).find(
+      (c) => readAttribute(draft.source!.columns[c]) === 'href',
     )!
     const flat = setShape(draft, 'values', [urlColumn])
 
@@ -336,11 +338,9 @@ describe('narrowing a broad pick', () => {
     const api = install()
     document.body.innerHTML = LIST_HTML
     const [result] = api.preview(toPreviewFields([flat])) as PreviewResult[]
-    expect(result.value).toEqual([
-      `${location.origin}/a`,
-      `${location.origin}/b`,
-      `${location.origin}/c`,
-    ])
+    // Three rows, one value each, in document order. Pre-transform, so the
+    // relative href is what the page gave -- `url_resolve` runs server-side.
+    expect(result.value).toEqual(['/a', '/b', '/c'])
   })
 
   it('reads a single value from a column, without the list', async () => {
@@ -381,8 +381,8 @@ describe('narrowing a broad pick', () => {
   it('compiles a flattened pick into a group with no repeat, and lints clean', async () => {
     document.body.innerHTML = LIST_HTML
     const draft = listPickToDrafts(await pick('list', 'li.card')).drafts[0]
-    const urlColumn = Object.keys(draft.source!.columnTypes).find(
-      (c) => draft.source!.columnTypes[c].value_type === 'url',
+    const urlColumn = Object.keys(draft.source!.columns).find(
+      (c) => readAttribute(draft.source!.columns[c]) === 'href',
     )!
     const flat = { ...setShape(draft, 'values', [urlColumn]), name: 'product_urls' }
 

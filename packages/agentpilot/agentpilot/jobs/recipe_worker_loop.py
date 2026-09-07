@@ -35,6 +35,7 @@ from crawlpilot.session.interactive import (
 )
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi.driver import BrowserDriver
+from crawlpilot.spi.errors import LeaseConflict
 
 log = structlog.get_logger(__name__)
 
@@ -43,6 +44,28 @@ _NO_PROTOTYPES = NullPrototypes()
 
 def _domain_from_url(url: str) -> str:
     return urlparse(url).hostname or url
+
+
+# How many warm identities a recipe run may cycle between, per (tenant, domain).
+#
+# The identity is `{tenant}/{domain}/{name}`, and `name` decides whether a run
+# gets a *warm* browser profile or a brand-new one. This loop used to pass
+# `recipe-run-{run_id}` -- unique per run -- which meant every single run opened
+# a cookie-less, history-less, first-visit Chrome behind a freshly picked proxy.
+#
+# That is not a neutral default, it is the thing WAFs look for.
+# `session/ephemeral.py` says so outright: a throwaway identity is "a
+# cookie-less, first-visit browser every time, which is itself a bot signal to
+# WAFs like Akamai" -- which is what Walmart and Zara run. It also leaked a
+# profile directory per run, forever: 807 of them on one dev worker.
+#
+# A *single* stable name would warm perfectly and then serialise everything --
+# `Registry.acquire` raises `LeaseConflict` when an identity already holds an
+# active lease, so two concurrent runs on the same domain would collide. A
+# small pool is the middle: each slot is reused across runs (warm profile, warm
+# Chrome, sticky proxy), and there are enough slots that concurrent runs get
+# their own. Sized above `max_concurrent` so the common case never contends.
+_IDENTITY_SLOTS = 8
 
 
 def _to_recipe_model(recipe_out: RecipeOut) -> Recipe:
@@ -194,28 +217,11 @@ class RecipeWorkerLoop:
             )
             return
 
-        session = await open_interactive_session(
-            browser_config=self._browser_config,
-            prototype_provider=self._prototype_provider,
-            session_id=f"recipe-run-{run.run_id}",
-            scope=run.tenant,
-            # For a submitted run, the domain is the *submitted URL's* -- the
-            # profile, the proxy pin and the cookie jar are all domain-scoped,
-            # so taking them from the recipe's own `url_pattern` would open a
-            # session pinned to a site this run never visits.
-            domain=_domain_from_url(target_url),
-            name=f"recipe-run-{run.run_id}",
-            tier="auto",
-            headful=False,
-            block_popups=True,
-            enable_cdp=False,
-            registry=self._registry,
-            driver=self._driver,
-            profiles_root=self._profiles_root,
-            proxy_pinner=self._proxy_pinner,
-            vault=None,
-            lease_ttl_seconds=self._lease_ttl_seconds,
-        )
+        # For a submitted run, the domain is the *submitted URL's* -- the
+        # profile, the proxy pin and the cookie jar are all domain-scoped, so
+        # taking them from the recipe's own `url_pattern` would open a session
+        # pinned to a site this run never visits.
+        session = await self._open_warm_session(run, _domain_from_url(target_url))
         try:
             if run.kind == "build":
                 await self._process_build(run, session)
@@ -232,6 +238,76 @@ class RecipeWorkerLoop:
                 )
             except Exception:
                 log.warning("recipe_worker_loop.release_failed", run_id=run.run_id)
+
+    async def _open_warm_session(
+        self, run: ClaimedRecipeRun, domain: str
+    ) -> InteractiveSession:
+        """A session on a *reused* identity, so the browser is not a stranger.
+
+        See `_IDENTITY_SLOTS`. The slot is claimed by trying to open one and
+        moving on if it is taken, rather than by counting: two worker processes
+        share a registry and neither can know what the other holds, so the only
+        reliable claim is the acquire itself.
+
+        Starting the scan at a per-run offset keeps concurrent runs from all
+        queueing behind slot 0 -- without it, three parallel runs would each
+        collide on 0, then on 1, doing the work of six opens to reach three.
+        """
+
+        start = hash(run.run_id) % _IDENTITY_SLOTS
+        for offset in range(_IDENTITY_SLOTS):
+            slot = (start + offset) % _IDENTITY_SLOTS
+            try:
+                return await open_interactive_session(
+                    browser_config=self._browser_config,
+                    prototype_provider=self._prototype_provider,
+                    # Unique: this names the *session*, not the identity, and
+                    # it is what live-view and the logs address.
+                    session_id=f"recipe-run-{run.run_id}",
+                    scope=run.tenant,
+                    domain=domain,
+                    # Stable: this names the *identity*, and decides whether
+                    # the profile is warm.
+                    name=f"recipe-{slot}",
+                    tier="auto",
+                    headful=True,
+                    block_popups=True,
+                    enable_cdp=False,
+                    registry=self._registry,
+                    driver=self._driver,
+                    profiles_root=self._profiles_root,
+                    proxy_pinner=self._proxy_pinner,
+                    vault=None,
+                    lease_ttl_seconds=self._lease_ttl_seconds,
+                )
+            except LeaseConflict:
+                continue
+
+        # Every slot busy. A cold identity still runs, and is far more likely
+        # to be blocked -- but a run that executes and reports being blocked
+        # beats one that never starts, and `classify.py` can tell the two
+        # apart in the result.
+        log.warning(
+            "recipe_worker_loop.no_warm_identity", run_id=run.run_id, domain=domain
+        )
+        return await open_interactive_session(
+            browser_config=self._browser_config,
+            prototype_provider=self._prototype_provider,
+            session_id=f"recipe-run-{run.run_id}",
+            scope=run.tenant,
+            domain=domain,
+            name=f"recipe-run-{run.run_id}",
+            tier="auto",
+            headful=False,
+            block_popups=True,
+            enable_cdp=False,
+            registry=self._registry,
+            driver=self._driver,
+            profiles_root=self._profiles_root,
+            proxy_pinner=self._proxy_pinner,
+            vault=None,
+            lease_ttl_seconds=self._lease_ttl_seconds,
+        )
 
     async def _process_build(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
         recipe, result = await build_recipe(
