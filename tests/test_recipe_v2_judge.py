@@ -8,8 +8,6 @@ was going to catch anyway. It leans toward accepting.
 
 from __future__ import annotations
 
-import pytest
-
 from agentpilot.recipe.v2 import judge as judge_mod
 from agentpilot.recipe.v2.judge import (
     DataVerdict,
