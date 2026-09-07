@@ -56,6 +56,13 @@ class SampleRun:
     data: dict[str, Any] = field(default_factory=dict)
     field_status: dict[str, str] = field(default_factory=dict)
     provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    step_trace: list[dict[str, Any]] = field(default_factory=list)
+    """What each step actually did. Carried because an empty field behind a
+    reveal click is unattributable without it: the selector may be wrong, or
+    the click may never have run. Every reveal step is `optional: true,
+    on_error: continue` by construction, so a step that matched nothing is
+    otherwise silent."""
+
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +70,7 @@ class SampleRun:
             "url": self.url,
             "outcome": self.outcome,
             "field_status": self.field_status,
+            "step_trace": self.step_trace,
             "error": self.error,
         }
 
@@ -87,6 +95,16 @@ class ReviewResult:
         if self.verdict is None:
             return False
         return self.verdict.passed or self.verdict.errored
+
+    @property
+    def step_trace(self) -> list[dict[str, Any]]:
+        """The trace from the first run that actually executed, for showing a
+        person why a field may be empty."""
+
+        for run in self.runs:
+            if run.step_trace:
+                return run.step_trace
+        return []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +176,7 @@ async def run_samples(
                 data=dict(result.data),
                 field_status=dict(result.field_status),
                 provenance=dict(result.provenance),
+                step_trace=[s.to_dict() for s in result.step_trace],
                 error=result.error,
             )
         )

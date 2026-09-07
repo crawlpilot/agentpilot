@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from agentpilot.auth.models import AuthedTenant
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.schemas import (
+    RecipeAssistRequest,
+    RecipeAssistResponse,
     RecipeCodegenRequest,
     RecipeCreateRequest,
     RecipeCreateResponse,
@@ -51,6 +53,7 @@ from agentpilot.jobs.recipe_store import RecipeOut as RecipeRow
 from agentpilot.jobs.recipe_store import RecipeRunOut as RecipeRunRow
 from agentpilot.observability.metrics import requests_total
 from agentpilot.recipe.config import RecipeConfig
+from agentpilot.recipe.v2.assist import PendingAsk, parse_resolutions
 from agentpilot.recipe.v2.validate import validate_document
 
 router = APIRouter(tags=["recipes"])
@@ -97,6 +100,7 @@ def _run_out(run: RecipeRunRow) -> RecipeRunOut:
         created_at=run.created_at.isoformat(),
         started_at=run.started_at.isoformat() if run.started_at else None,
         finished_at=run.finished_at.isoformat() if run.finished_at else None,
+        pending_asks=run.pending_asks,
     )
 
 
@@ -417,6 +421,70 @@ async def get_recipe_run(
     if run is None or run.recipe_id != recipe_id:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
     return RecipeRunResponse(success=True, data=_run_out(run))
+
+
+@router.post("/{recipe_id}/runs/{run_id}/assist", response_model=RecipeAssistResponse)
+async def submit_assist(
+    recipe_id: str,
+    run_id: str,
+    req: RecipeAssistRequest,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeAssistResponse:
+    """Answer what a parked onboarding run is waiting for.
+
+    The run's worker is still holding a live browser session on the page it got
+    stuck on -- that is why the answers can be element picks rather than
+    descriptions. Accepting them flips the run back to `running`; the worker
+    picks them up on its next poll, verifies any picked locator like it would
+    its own, and finishes the build.
+
+    Only a run in `needs_input` can be answered. A run whose park already
+    expired has resumed without the answers, and reporting success for an
+    update that changed nothing would leave the caller believing otherwise.
+    """
+
+    requests_total.labels(tenant=authed.tenant, route="submit_assist").inc()
+    store = _require_recipe_store(wiring)
+
+    run = await store.get_run(run_id, authed.tenant)
+    if run is None or run.recipe_id != recipe_id:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
+
+    asks = [PendingAsk.from_dict(a) for a in (run.pending_asks or [])]
+    resolutions = parse_resolutions([r.model_dump() for r in req.resolutions], asks)
+    if not resolutions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "no usable resolutions: each must name a field this run is actually "
+                "waiting on, and carry what its action needs (`pick` needs locators, "
+                "`describe` needs a hint)"
+            ),
+        )
+
+    accepted = await store.submit_assist(
+        run_id,
+        authed.tenant,
+        [
+            {
+                "field": r.field,
+                "action": r.action,
+                "locators": [loc.to_dict() for loc in r.locators],
+                "hint": r.hint,
+            }
+            for r in resolutions.values()
+        ],
+    )
+    if not accepted:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"run {run_id!r} is not waiting for input (status: {run.status}) -- "
+                "it may have already resumed on its own"
+            ),
+        )
+    return RecipeAssistResponse(success=True, accepted=sorted(resolutions))
 
 
 # --- extraction jobs --------------------------------------------------------

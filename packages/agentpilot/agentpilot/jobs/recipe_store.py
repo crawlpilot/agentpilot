@@ -108,6 +108,9 @@ class RecipeRunOut:
     finished_at: datetime | None
     job_id: str | None = None
     url: str | None = None
+    pending_asks: list[dict[str, Any]] | None = None
+    """While `status` is `needs_input`: what this run is waiting for a person
+    to settle. Cleared the moment it resumes."""
 
 
 def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
@@ -146,6 +149,7 @@ def _run_from_row(row: dict[str, Any]) -> RecipeRunOut:
         finished_at=row["finished_at"],
         job_id=row.get("job_id"),
         url=row.get("url"),
+        pending_asks=row.get("pending_asks"),
     )
 
 
@@ -157,7 +161,7 @@ _RECIPE_COLUMNS = (
 
 _RUN_COLUMNS = (
     "run_id, recipe_id, tenant, kind, status, data, field_failures, error, "
-    "created_at, started_at, finished_at, job_id, url"
+    "created_at, started_at, finished_at, job_id, url, pending_asks"
 )
 
 # A job plus its rollup, counted from the runs in one pass. `finished_at` is
@@ -699,14 +703,128 @@ class PostgresRecipeStore:
         return claimed
 
     async def renew_lock(self, run_id: str, lock: str) -> bool:
+        # `needs_input` renews too: a parked run's worker is alive and still
+        # holding its browser session open on the page the human is being asked
+        # about. It is not stale, it is waiting -- and refusing to renew would
+        # spam a warning every heartbeat for the whole park.
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     "UPDATE recipe_runs SET locked_at = now() "
-                    "WHERE run_id = %s AND lock = %s AND status = 'running'",
+                    "WHERE run_id = %s AND lock = %s "
+                    "AND status IN ('running', 'needs_input')",
                     (run_id, lock),
                 )
                 return cur.rowcount > 0
+
+    async def park_run(
+        self,
+        run_id: str,
+        lock: str,
+        *,
+        pending_asks: list[dict[str, Any]],
+        parked_until: datetime,
+    ) -> bool:
+        """Stop the run and wait for a person.
+
+        `needs_input` is a distinct status rather than a flag on `running`
+        because `reclaim_stale_runs` requeues any `running` row whose lock has
+        gone quiet, and a run waiting on a human is quiet by definition -- it
+        would be restarted from the top every `stale_after_seconds`, forever,
+        and the answer would arrive for a run that no longer exists.
+        """
+
+        from psycopg.types.json import Jsonb
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE recipe_runs SET status = 'needs_input', pending_asks = %s, "
+                    "parked_until = %s, locked_at = now() "
+                    "WHERE run_id = %s AND lock = %s AND status = 'running'",
+                    (Jsonb(pending_asks), parked_until, run_id, lock),
+                )
+                return cur.rowcount > 0
+
+    async def submit_assist(
+        self, run_id: str, tenant: str, resolutions: list[dict[str, Any]]
+    ) -> bool:
+        """A person's answers. Flips the run back to `running` for the worker
+        that is still holding it.
+
+        Only from `needs_input`: answering a run that already resumed (its park
+        expired, say) would silently do nothing, and the caller needs to be told
+        that rather than shown a success.
+        """
+
+        from psycopg.types.json import Jsonb
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE recipe_runs "
+                    "SET params = COALESCE(params, '{}'::jsonb) || %s, "
+                    "    status = 'running', pending_asks = NULL, "
+                    "    parked_until = NULL, locked_at = now() "
+                    "WHERE run_id = %s AND tenant = %s AND status = 'needs_input'",
+                    (Jsonb({"assist_resolutions": resolutions}), run_id, tenant),
+                )
+                return cur.rowcount > 0
+
+    async def poll_assist(self, run_id: str, lock: str) -> list[dict[str, Any]] | None:
+        """The answers, once they arrive. `None` while still parked.
+
+        Read back from the row rather than passed in memory because the answer
+        is written by a different process -- the gateway handling the person's
+        request, not the worker holding the browser.
+        """
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT status, params FROM recipe_runs WHERE run_id = %s AND lock = %s",
+                    (run_id, lock),
+                )
+                row = await cur.fetchone()
+        if row is None or row["status"] == "needs_input":
+            return None
+        return list((row["params"] or {}).get("assist_resolutions") or [])
+
+    async def resume_run(self, run_id: str, lock: str) -> None:
+        """Give up waiting and carry on without the answers."""
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE recipe_runs SET status = 'running', pending_asks = NULL, "
+                "parked_until = NULL, locked_at = now() "
+                "WHERE run_id = %s AND lock = %s AND status = 'needs_input'",
+                (run_id, lock),
+            )
+
+    async def reclaim_expired_parks(self, grace_seconds: float = 120.0) -> int:
+        """Fail parks whose worker went away.
+
+        A live worker resumes its own park when the timeout expires, so a row
+        still parked well past `parked_until` means the process holding it is
+        gone -- and with it the browser session the whole park existed to keep
+        open. Re-queueing would silently restart the build from nothing, so
+        this fails with a reason instead.
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE recipe_runs SET status = 'failed', finished_at = now(), "
+                    "pending_asks = NULL, parked_until = NULL, "
+                    "error = 'the worker holding this run went away while it was "
+                    "waiting for input; start a new build' "
+                    "WHERE status = 'needs_input' AND parked_until IS NOT NULL "
+                    "AND parked_until < now() - %s * INTERVAL '1 second'",
+                    (grace_seconds,),
+                )
+                return cur.rowcount
 
     async def reclaim_stale_runs(self, stale_after_seconds: float) -> int:
         async with self._pool.connection() as conn:

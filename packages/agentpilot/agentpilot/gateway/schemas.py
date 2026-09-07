@@ -479,6 +479,34 @@ class RecipeOnboardResponse(BaseModel):
     run_id: str
 
 
+class RecipeResolutionIn(BaseModel):
+    """One answer to one thing a parked onboarding run is stuck on."""
+
+    model_config = ConfigDict(extra="forbid")
+    field: str
+    action: Literal["pick", "describe", "skip"]
+    locators: list[dict[str, Any]] = []
+    """`pick`: what the person clicked, as v2 locators. The studio's existing
+    picker already produces these -- the run is parked on a live session, so
+    they are looking at the same page the agent gave up on."""
+    hint: str = ""
+    """`describe`: e.g. "it's inside the Details accordion, open that first".
+    Fed to the selector agent as feedback rather than used as a selector."""
+
+
+class RecipeAssistRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    resolutions: list[RecipeResolutionIn]
+
+
+class RecipeAssistResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    accepted: list[str]
+    """The fields whose answers were understood. A resolution naming a field the
+    run is not waiting on, or missing what its action needs, is not in here."""
+
+
 class RecipeSaveRequest(BaseModel):
     """A v2 recipe document, authored by hand rather than by an agent.
 
@@ -648,14 +676,20 @@ class RecipeRunOut(BaseModel):
     run_id: str
     recipe_id: str
     tenant: str
-    kind: Literal["build", "replay", "heal", "codegen"]
-    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    kind: Literal["build", "replay", "heal", "codegen", "onboard"]
+    status: Literal[
+        "queued", "running", "completed", "failed", "cancelled", "needs_input"
+    ]
     data: dict[str, Any] | None
     field_failures: dict[str, Any] | None
     error: str | None
     created_at: str
     started_at: str | None
     finished_at: str | None
+    pending_asks: list[dict[str, Any]] | None = None
+    """Set only while `status` is `needs_input`: what the run is waiting for a
+    person to settle, each with the reason and the step trace that explains
+    why it may have failed."""
 
 
 class RecipeRunResponse(BaseModel):

@@ -106,6 +106,7 @@ class RecipeWorkerLoop:
         build_max_steps: int = DEFAULT_BUILD_MAX_STEPS,
         browser_config: BrowserConfig = DEFAULTS,
         prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
+        assist_poll_seconds: float = 3.0,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -120,6 +121,11 @@ class RecipeWorkerLoop:
         self._poll_interval_seconds = poll_interval_seconds
         self._stale_after_seconds = stale_after_seconds
         self._build_max_steps = build_max_steps
+        # How often a parked run checks whether a person has answered. The
+        # answer is written by the gateway, not passed in memory, so this is a
+        # database poll -- cheap, and a few seconds of latency is nothing next
+        # to how long a person takes to look at a page.
+        self._assist_poll_seconds = assist_poll_seconds
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -143,6 +149,11 @@ class RecipeWorkerLoop:
 
     async def tick(self) -> None:
         await self._store.reclaim_stale_runs(self._stale_after_seconds)
+        # A live worker resumes its own park on time. A row still parked well
+        # past its deadline means the process holding it died -- and with it the
+        # browser session the park existed to keep open, so there is nothing to
+        # resume into.
+        await self._store.reclaim_expired_parks()
         claimed = await self._store.claim_runs_batch(self._batch_size)
         if not claimed:
             return
@@ -330,6 +341,7 @@ class RecipeWorkerLoop:
         """
 
         from agentpilot.recipe.v2.assertions import propose_assertions, with_assertions
+        from agentpilot.recipe.v2.assist import build_asks
         from agentpilot.recipe.v2.contract import fields_from_description
         from agentpilot.recipe.v2.onboard import BlockedError, onboard_recipe
         from agentpilot.recipe.v2.review import merge_field_values, verify_and_judge
@@ -394,6 +406,23 @@ class RecipeWorkerLoop:
             max_repairs=cfg.max_judge_repairs,
             sample_limit=cfg.onboard_sample_runs,
         )
+
+        # Anything the agent could not find, and anything the judge rejected
+        # that repair could not fix, now goes to a person -- on the page the run
+        # is still sitting on. See `assist.py` for why the session staying open
+        # is the whole point.
+        asks = build_asks(
+            outcome.unresolved, review.unrepaired, step_trace=review.step_trace
+        )
+        if asks and cfg.assist_timeout_s > 0:
+            recipe, unsettled = await self._await_assist(
+                run, recipe, asks, session=session, url=url,
+                llm_config=llm_config, timeout_s=cfg.assist_timeout_s,
+            )
+            outcome.unresolved = {**outcome.unresolved, **unsettled}
+            review.unrepaired = {
+                k: v for k, v in review.unrepaired.items() if k in unsettled
+            }
 
         # The model-proposed assertions, now that real values exist to justify a
         # bound. The mechanical ones were attached during the build; these are
@@ -461,6 +490,83 @@ class RecipeWorkerLoop:
                 "steps_taken": outcome.steps_taken,
             },
         )
+
+    async def _await_assist(
+        self,
+        run: ClaimedRecipeRun,
+        recipe: Any,
+        asks: list[Any],
+        *,
+        session: InteractiveSession,
+        url: str,
+        llm_config: LLMConfig,
+        timeout_s: float,
+    ) -> tuple[Any, dict[str, str]]:
+        """Park, wait for a person, apply what they said.
+
+        The browser session is deliberately **not** released around this wait.
+        That is the entire value of the mechanism: the person sees the page the
+        agent gave up on, with whatever accordion the run had opened still open,
+        and picks the element directly. Releasing and re-opening would lose that
+        state and reduce the ask to a guess from a description.
+
+        The cost is real and is why the wait is bounded: this holds a worker
+        slot (`max_concurrent`), one of `_IDENTITY_SLOTS` warm identities, a
+        browser and a proxy pin for the duration.
+        """
+
+        from datetime import UTC, datetime, timedelta
+
+        from agentpilot.recipe.v2.assist import apply_resolutions, parse_resolutions
+
+        deadline = datetime.now(UTC) + timedelta(seconds=timeout_s)
+        parked = await self._store.park_run(
+            run.run_id,
+            run.lock,
+            pending_asks=[a.to_dict() for a in asks],
+            parked_until=deadline,
+        )
+        if not parked:
+            # The row was not `running` any more -- cancelled, or reclaimed.
+            # Carrying on would write results for a run somebody else owns.
+            log.info("recipe_worker_loop.park_refused", run_id=run.run_id)
+            return recipe, {a.field: a.reason for a in asks}
+
+        log.info(
+            "recipe_worker_loop.parked",
+            run_id=run.run_id, fields=[a.field for a in asks], timeout_s=timeout_s,
+        )
+
+        raw: list[dict[str, Any]] | None = None
+        while datetime.now(UTC) < deadline:
+            await asyncio.sleep(self._assist_poll_seconds)
+            raw = await self._store.poll_assist(run.run_id, run.lock)
+            if raw is not None:
+                break
+
+        if raw is None:
+            # Nobody answered. Resuming beats holding the slot indefinitely, and
+            # the fields are reported unresolved exactly as they would have been
+            # without an assist loop at all.
+            await self._store.resume_run(run.run_id, run.lock)
+            log.info("recipe_worker_loop.park_expired", run_id=run.run_id)
+            return recipe, {a.field: a.reason for a in asks}
+
+        resolutions = parse_resolutions(raw, asks)
+        recipe, unsettled = await apply_resolutions(
+            recipe,
+            resolutions,
+            url=url,
+            session=session,
+            registry=self._registry,
+            driver=self._driver,
+            llm_config=llm_config,
+        )
+        # An ask nobody answered stays unresolved.
+        for ask in asks:
+            if ask.field not in resolutions:
+                unsettled.setdefault(ask.field, ask.reason)
+        return recipe, unsettled
 
     async def _process_build(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
         recipe, result = await build_recipe(
