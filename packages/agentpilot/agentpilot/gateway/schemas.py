@@ -438,8 +438,9 @@ class RecipeCreateRequest(BaseModel):
     name: str
     url: str
     field_schema: dict[str, Any]
-    """The caller's data contract -- `{field_name: {type: "scalar"|"array",
-    description, item_schema?}}`, see `agentpilot.recipe.schema.FieldSpec`."""
+    """The caller's data contract, as a v2 `fields` object -- see
+    `agentpilot.recipe.v2.schema.FieldSpec`. `POST /v1/recipes/onboard` is the
+    friendlier door: it also accepts a JSON Schema or plain English."""
     schedule_interval_seconds: float | None = None
     """`None` (the default) means on-demand only -- set to enqueue a
     `replay` run automatically every N seconds via `RecipeSchedulerLoop`."""

@@ -135,8 +135,13 @@ async def create_recipe(
         field_schema=req.field_schema,
         schedule_interval_seconds=req.schedule_interval_seconds,
     )
+    # `onboard`, not `build`. The v1 build engine is gone: it wrote
+    # `field_groups`, a column the studio, the marketplace and codegen all stopped
+    # reading, so its output was a recipe that replayed to `{}`. This endpoint
+    # keeps its shape -- name, url, field_schema -- and now produces a v2
+    # document like every other path.
     build_run_id = await store.queue_run(
-        recipe_id=recipe.recipe_id, tenant=req.tenant, kind="build"
+        recipe_id=recipe.recipe_id, tenant=req.tenant, kind="onboard"
     )
     return RecipeCreateResponse(success=True, recipe_id=recipe.recipe_id, build_run_id=build_run_id)
 

@@ -1,10 +1,20 @@
-"""The recipe-run processing loop: claims queued `recipe_runs` rows (any of
-`build`/`replay`/`heal`/`codegen`) and dispatches to
-`agentpilot.recipe`'s corresponding stage. Folded into the existing
+"""The recipe-run processing loop: claims queued `recipe_runs` rows and
+dispatches each to `agentpilot.recipe.v2`. Folded into the existing
 `AGENTPILOT_ROLE=worker` process next to `CrawlWorkerLoop`/`AgentWorkerLoop`,
-same claim/lock/retry shape. `codegen` needs no browser session at all (a
-pure LLM call over the already-built recipe); the other three kinds open one
+same claim/lock/retry shape. `codegen` needs no browser session at all (a pure
+LLM call over the already-built document); every other kind opens one
 `InteractiveSession` per run, mirroring `AgentWorkerLoop`.
+
+**One engine.** `build`, `heal` and `onboard` are all "work out where these
+fields live on this page", so they are one code path that differs only in
+whether a document already exists to take the field list from. `replay` and
+`codegen` read that document.
+
+The v1 engine this loop used to dispatch to is gone. It read `global_setup`
+and `field_groups` -- columns nothing has written since the studio shipped, and
+which `_process_onboard` writes as `[]` on purpose. Sending a real recipe to it
+replayed zero field groups and reported success with `data = {}`, so every
+"the recipe returns nulls" report traced back to that one branch.
 """
 
 from __future__ import annotations
@@ -17,14 +27,10 @@ from urllib.parse import urlparse
 
 import structlog
 
-from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore, RecipeOut
+from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore
 from agentpilot.llm.client import LLMConfig
-from agentpilot.recipe.build import DEFAULT_BUILD_MAX_STEPS, build_recipe
-from agentpilot.recipe.codegen import generate_scraper_code
 from agentpilot.recipe.config import RecipeConfig
-from agentpilot.recipe.heal import check_and_heal
-from agentpilot.recipe.models import Recipe, RecipeRunResult
-from agentpilot.recipe.replay import replay_recipe
+from agentpilot.recipe.v2.onboard import DEFAULT_ONBOARD_MAX_STEPS
 from crawlpilot.config import DEFAULTS, BrowserConfig
 from crawlpilot.identity.proxy_pinning import ProxyPinner
 from crawlpilot.policy import NullPrototypes, PrototypeProvider
@@ -72,26 +78,6 @@ def _domain_from_url(url: str) -> str:
 _IDENTITY_SLOTS = 8
 
 
-def _to_recipe_model(recipe_out: RecipeOut) -> Recipe:
-    global_setup, field_groups = Recipe.groups_from_dict(
-        {"global_setup": recipe_out.global_setup, "field_groups": recipe_out.field_groups}
-    )
-    return Recipe(
-        recipe_id=recipe_out.recipe_id,
-        tenant=recipe_out.tenant,
-        name=recipe_out.name,
-        url_pattern=recipe_out.url_pattern,
-        field_schema=recipe_out.field_schema,
-        version=recipe_out.version,
-        global_setup=global_setup,
-        field_groups=field_groups,
-        health_status=recipe_out.health_status,  # type: ignore[arg-type]
-        last_verified_at=recipe_out.last_verified_at,
-        last_run_at=recipe_out.last_run_at,
-        schedule_interval_seconds=recipe_out.schedule_interval_seconds,
-    )
-
-
 class RecipeWorkerLoop:
     def __init__(
         self,
@@ -106,7 +92,7 @@ class RecipeWorkerLoop:
         max_concurrent: int = 3,
         poll_interval_seconds: float = 2.0,
         stale_after_seconds: float = 120.0,
-        build_max_steps: int = DEFAULT_BUILD_MAX_STEPS,
+        build_max_steps: int = DEFAULT_ONBOARD_MAX_STEPS,
         browser_config: BrowserConfig = DEFAULTS,
         prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
         assist_poll_seconds: float = 3.0,
@@ -261,14 +247,16 @@ class RecipeWorkerLoop:
         live_session_id = f"recipe-run-{run.run_id}"
         await self._publish_live_route(live_session_id, session, "auto")
         try:
-            if run.kind == "onboard":
+            # `build` and `heal` are both "work out where these fields live on
+            # this page", which is what onboarding does -- so they are the same
+            # code path, differing only in whether a document already exists to
+            # take the field list from. The v1 engine that used to serve them
+            # read `field_groups`, a column nothing has written since the studio
+            # shipped.
+            if run.kind in ("onboard", "build", "heal"):
                 await self._process_onboard(run, session, target_url)
-            elif run.kind == "build":
-                await self._process_build(run, session)
             elif run.kind == "replay":
                 await self._process_replay(run, session, target_url)
-            elif run.kind == "heal":
-                await self._process_heal(run, session)
             else:
                 raise AssertionError(f"unhandled recipe run kind: {run.kind!r}")
         finally:
@@ -389,7 +377,7 @@ class RecipeWorkerLoop:
     ) -> None:
         """The v2 build: a contract and a URL in, a saved v2 document out.
 
-        Unlike `_process_build` this writes `document`, which is the whole
+        This writes `document`, which is the whole
         point -- a recipe without one is refused by `_process_job_run` and
         cannot be opened by the studio, so the v1 build could never produce
         something the marketplace would run.
@@ -651,30 +639,6 @@ class RecipeWorkerLoop:
                 unsettled.setdefault(ask.field, ask.reason)
         return recipe, unsettled
 
-    async def _process_build(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
-        recipe, result = await build_recipe(
-            recipe_id=run.recipe_id,
-            tenant=run.tenant,
-            name=run.recipe.name,
-            url=run.recipe.url_pattern,
-            raw_schema=run.recipe.field_schema,
-            session=session,
-            registry=self._registry,
-            driver=self._driver,
-            llm_config=LLMConfig.from_env(),
-            max_steps=self._build_max_steps,
-        )
-        await self._store.apply_recipe_update(
-            run.recipe_id,
-            version=run.recipe.version + 1,
-            global_setup=[s.to_dict() for s in recipe.global_setup],
-            field_groups=[g.to_dict() for g in recipe.field_groups],
-            health_status=recipe.health_status,
-            diff_summary="initial build",
-            heal_attempts="reset",  # a fresh build clears any prior failed-heal streak
-        )
-        await self._complete_from_result(run, result)
-
     async def _process_replay(
         self, run: ClaimedRecipeRun, session: InteractiveSession, url: str
     ) -> None:
@@ -699,18 +663,18 @@ class RecipeWorkerLoop:
             return
 
         document = run.recipe.document
-        if document:
-            await self._process_replay_v2(run, session, document, url)
+        if not document:
+            # Nothing to replay. A recipe with no document was never built --
+            # its onboarding run failed, or it is a shell created by a request
+            # whose build never finished. Saying so beats the v1 engine's old
+            # answer, which was to replay zero field groups and report success
+            # with `data = {}`.
+            await self._store.complete_run(
+                run.run_id, run.lock, data=None, field_failures=None,
+                error="this recipe has no document yet -- its build did not finish",
+            )
             return
-
-        recipe = _to_recipe_model(run.recipe)
-        result = await replay_recipe(
-            recipe, session=session, registry=self._registry, driver=self._driver
-        )
-        await self._store.mark_replay_result(
-            run.recipe_id, health_status="healthy" if result.success else "degraded"
-        )
-        await self._complete_from_result(run, result)
+        await self._process_replay_v2(run, session, document, url)
 
     async def _process_replay_v2(
         self,
@@ -832,29 +796,6 @@ class RecipeWorkerLoop:
             error=result.error,
         )
 
-    async def _process_heal(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
-        recipe = _to_recipe_model(run.recipe)
-        healed, result = await check_and_heal(
-            recipe,
-            session=session,
-            registry=self._registry,
-            driver=self._driver,
-            llm_config=LLMConfig.from_env(),
-            max_steps=self._build_max_steps,
-        )
-        await self._store.apply_recipe_update(
-            run.recipe_id,
-            version=healed.version,
-            global_setup=[s.to_dict() for s in healed.global_setup],
-            field_groups=[g.to_dict() for g in healed.field_groups],
-            health_status=healed.health_status,
-            diff_summary=f"heal cycle (fields: {sorted(result.field_failures)})",
-            # Reset the streak on a healthy heal; otherwise count it toward the
-            # max_heal_attempts cutoff.
-            heal_attempts="reset" if healed.health_status == "healthy" else "increment",
-        )
-        await self._complete_from_result(run, result)
-
     async def _process_codegen(self, run: ClaimedRecipeRun) -> None:
         """Write a standalone scraper for this recipe.
 
@@ -870,23 +811,13 @@ class RecipeWorkerLoop:
         language = params.get("language", "python-playwright")
         document = run.recipe.document
 
-        if document:
-            await self._process_codegen_v2(run, document, language)
-            return
-
-        recipe = _to_recipe_model(run.recipe)
-        try:
-            code = await generate_scraper_code(
-                recipe, language=language, llm_config=LLMConfig.from_env()
-            )
-        except ValueError as exc:
+        if not document:
             await self._store.complete_run(
-                run.run_id, run.lock, data=None, field_failures=None, error=str(exc)
+                run.run_id, run.lock, data=None, field_failures=None,
+                error="this recipe has no document yet -- its build did not finish",
             )
             return
-        await self._store.complete_run(
-            run.run_id, run.lock, data={"code": code, "language": language}, field_failures=None
-        )
+        await self._process_codegen_v2(run, document, language)
 
     async def _process_codegen_v2(
         self, run: ClaimedRecipeRun, document: dict[str, Any], language: str
@@ -923,13 +854,4 @@ class RecipeWorkerLoop:
                 if problems
                 else None
             ),
-        )
-
-    async def _complete_from_result(self, run: ClaimedRecipeRun, result: RecipeRunResult) -> None:
-        await self._store.complete_run(
-            run.run_id,
-            run.lock,
-            data=result.data,
-            field_failures=result.field_failures,
-            error=result.error,
         )

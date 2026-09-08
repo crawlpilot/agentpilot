@@ -82,16 +82,11 @@ class _Loop(RecipeWorkerLoop):
 def loop(monkeypatch):
     made = _Loop()
 
-    async def fake_v1(recipe, **kwargs):
-        made.took.append("v1")
-        from agentpilot.recipe.models import RecipeRunResult
-
-        return RecipeRunResult(success=True, data={}, field_failures={})
-
-    monkeypatch.setattr("agentpilot.jobs.recipe_worker_loop.replay_recipe", fake_v1)
-
     class _Store:
         async def mark_replay_result(self, *a, **k): ...
+
+        async def complete_run(self, *a, **k):
+            made.took.append("refused")
 
     made._store = _Store()  # type: ignore[assignment]
     return made
@@ -110,12 +105,16 @@ async def test_the_submitted_url_is_what_v2_runs_against(loop) -> None:
     assert loop.url == "https://x.test/p/9"
 
 
-async def test_a_genuinely_v1_recipe_still_uses_the_v1_engine(loop) -> None:
-    """Nothing about this fix may change what happens to a recipe that has no
-    v2 document -- that path is the only thing v1 recipes have."""
+async def test_a_recipe_with_no_document_is_refused_rather_than_run_empty(loop) -> None:
+    """There is nothing to replay, and saying so is the point.
+
+    The v1 engine's answer here was to replay zero field groups and report
+    success with `data = {}` -- a run that collected nothing and marked the
+    recipe healthy, which is how "the recipe returns nulls" went unexplained.
+    """
 
     await loop._process_replay(_run(document=None), None, "https://x.test/p/1")
-    assert loop.took == ["v1", "completed"]
+    assert loop.took == ["refused"]
 
 
 async def test_a_job_run_still_goes_to_the_job_path(loop) -> None:
