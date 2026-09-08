@@ -467,6 +467,13 @@ class RecipeOnboardRequest(BaseModel):
     """e.g. "product name, price, sizes in stock, and all the image URLs"."""
     fields: dict[str, Any] | None = None
     """A v2 `fields` object, when the caller already has one."""
+    output_schema: dict[str, Any] | None = None
+    """The shape you want back, as either a JSON Schema
+    (`{"type":"object","properties":{...}}`) or a plain example of the JSON.
+
+    Converted deterministically -- no model -- because a caller who states the
+    shape exactly has already said what they want, and running that through a
+    model could only lose it. Wins over `description`; loses to `fields`."""
     sample_urls: list[str] = []
     """More pages of the same kind. Two or more sharpen the derived
     `target.match` from a guess into the URLs' actual shared shape."""

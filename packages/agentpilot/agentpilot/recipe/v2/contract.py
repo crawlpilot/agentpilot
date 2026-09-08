@@ -189,6 +189,133 @@ def parse_contract(raw: dict[str, Any]) -> dict[str, FieldSpec]:
     return fields
 
 
+def _looks_like_json_schema(raw: dict[str, Any]) -> bool:
+    return raw.get("type") == "object" and isinstance(raw.get("properties"), dict)
+
+
+def _type_from_json_schema(node: dict[str, Any]) -> TypeSpec:
+    """One JSON-Schema property as a `TypeSpec`."""
+
+    kind = node.get("type")
+    fmt = str(node.get("format") or "")
+
+    if kind == "array":
+        items = node.get("items") or {}
+        if isinstance(items, dict) and items.get("type") == "object":
+            # A list of objects is a table: repeating rows with known columns,
+            # which is what a `RepeatSpec` produces.
+            columns = {
+                slugify(str(name)): _type_from_json_schema(prop if isinstance(prop, dict) else {})
+                for name, prop in (items.get("properties") or {}).items()
+            }
+            if columns:
+                return TypeSpec(kind="table", columns=columns)
+        inner = _type_from_json_schema(items if isinstance(items, dict) else {})
+        return TypeSpec(kind="list", items=inner)
+
+    if kind == "object":
+        properties = {
+            slugify(str(name)): _type_from_json_schema(prop if isinstance(prop, dict) else {})
+            for name, prop in (node.get("properties") or {}).items()
+        }
+        return TypeSpec(kind="object", properties=properties)
+
+    if kind in ("number",):
+        return TypeSpec(kind="scalar", value_type="number")
+    if kind == "integer":
+        return TypeSpec(kind="scalar", value_type="integer")
+    if kind == "boolean":
+        return TypeSpec(kind="scalar", value_type="boolean")
+
+    # Strings carry the interesting distinctions, and `format` is where JSON
+    # Schema puts them. Getting `url` or `date` right here is what steers the
+    # selector agent at the element that actually holds the value.
+    if fmt in ("uri", "url", "iri"):
+        return TypeSpec(kind="scalar", value_type="url")
+    if fmt == "date":
+        return TypeSpec(kind="scalar", value_type="date")
+    if fmt in ("date-time", "datetime"):
+        return TypeSpec(kind="scalar", value_type="datetime")
+    return TypeSpec(kind="scalar", value_type="string")
+
+
+def _type_from_example(value: Any) -> TypeSpec:
+    """One value from an example payload as a `TypeSpec`.
+
+    People paste the JSON they want back far more readily than they write a
+    schema for it, and the shape is right there in the example.
+    """
+
+    if isinstance(value, bool):
+        return TypeSpec(kind="scalar", value_type="boolean")
+    if isinstance(value, int):
+        return TypeSpec(kind="scalar", value_type="integer")
+    if isinstance(value, float):
+        return TypeSpec(kind="scalar", value_type="number")
+    if isinstance(value, list):
+        first = value[0] if value else ""
+        if isinstance(first, dict):
+            columns = {slugify(str(k)): _type_from_example(v) for k, v in first.items()}
+            if columns:
+                return TypeSpec(kind="table", columns=columns)
+        return TypeSpec(kind="list", items=_type_from_example(first))
+    if isinstance(value, dict):
+        return TypeSpec(
+            kind="object",
+            properties={slugify(str(k)): _type_from_example(v) for k, v in value.items()},
+        )
+    text = str(value or "")
+    if text.startswith(("http://", "https://", "/")):
+        return TypeSpec(kind="scalar", value_type="url")
+    return TypeSpec(kind="scalar", value_type="string")
+
+
+def fields_from_output_schema(raw: dict[str, Any]) -> dict[str, FieldSpec]:
+    """The caller's desired output shape as a field map. No model involved.
+
+    Accepts either a JSON Schema (`{"type": "object", "properties": {...}}`) or
+    a plain example of the JSON they want back. Both are how people actually
+    describe an output contract; neither is the v2 `fields` object, and
+    requiring that one was requiring them to learn this system's vocabulary
+    before they could ask it for anything.
+
+    Deterministic on purpose. The caller stated the shape exactly, and running
+    it through a model could only lose that.
+    """
+
+    if not isinstance(raw, dict) or not raw:
+        return {}
+
+    if _looks_like_json_schema(raw):
+        required = {str(name) for name in (raw.get("required") or [])}
+        out: dict[str, FieldSpec] = {}
+        for name, prop in (raw.get("properties") or {}).items():
+            node = prop if isinstance(prop, dict) else {}
+            key = slugify(str(name))
+            if not key or key in out:
+                continue
+            out[key] = FieldSpec(
+                name=key,
+                description=str(node.get("description") or ""),
+                type=_type_from_json_schema(node),
+                required=str(name) in required,
+            )
+            if len(out) >= MAX_FIELDS:
+                break
+        return out
+
+    # A bare example object.
+    example: dict[str, FieldSpec] = {}
+    for name, value in raw.items():
+        key = slugify(str(name))
+        if not key or key in example:
+            continue
+        example[key] = FieldSpec(name=key, type=_type_from_example(value))
+        if len(example) >= MAX_FIELDS:
+            break
+    return example
+
+
 async def fields_from_description(
     description: str, *, llm_config: LLMConfig, url: str | None = None
 ) -> dict[str, FieldSpec]:

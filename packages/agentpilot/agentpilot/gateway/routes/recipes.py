@@ -244,10 +244,11 @@ async def onboard_recipe_route(
     proposal, not a published scraper.
     """
 
-    if not req.fields and not (req.description or "").strip():
+    if not req.fields and not req.output_schema and not (req.description or "").strip():
         raise HTTPException(
             status_code=400,
-            detail="give either `fields` (a v2 field map) or `description` "
+            detail="give `fields` (a v2 field map), `output_schema` (a JSON "
+            "Schema or an example of the JSON you want back), or `description` "
             "(plain English) -- there is nothing to look for otherwise",
         )
     if not req.url.strip():
@@ -271,6 +272,7 @@ async def onboard_recipe_route(
         kind="onboard",
         params={
             "description": req.description or "",
+            "output_schema": req.output_schema or None,
             "sample_urls": [req.url, *req.sample_urls],
         },
     )

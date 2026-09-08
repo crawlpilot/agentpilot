@@ -73,7 +73,12 @@ export function OnboardProgress({
     const payload = (run.data ?? {}) as Record<string, unknown>
     const ready = Boolean(payload.ready_for_review)
     const review = (payload.review ?? {}) as {
-      runs?: Array<{ data?: Record<string, unknown> }>
+      runs?: Array<{
+        url?: string
+        outcome?: string
+        data?: Record<string, unknown>
+        step_trace?: Array<Record<string, unknown>>
+      }>
       verdict?: {
         errored?: boolean
         fields?: Record<string, { ok: boolean; reason?: string }>
@@ -124,6 +129,8 @@ export function OnboardProgress({
           <p className="text-sm text-muted-foreground">Loading the recipe…</p>
         )}
 
+        <RunEvidence runs={review.runs ?? []} />
+
         <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
           <Button onClick={onDone}>Edit it</Button>
           <Button variant="outline" asChild>
@@ -163,6 +170,67 @@ export function OnboardProgress({
         Waiting for a worker to pick this up. The page will appear here once one does.
       </p>
     </Centered>
+  )
+}
+
+/**
+ * What actually happened when the recipe was run back against real pages.
+ *
+ * The verdict badges above say whether it worked; this says why. A step that
+ * matched nothing is otherwise completely silent -- every reveal step is
+ * `optional`/`on_error: continue` by construction -- so a field that came back
+ * empty because its click never landed looks identical to one whose selector
+ * is wrong, and the two need opposite fixes.
+ */
+function RunEvidence({
+  runs,
+}: {
+  runs: Array<{ url?: string; outcome?: string; step_trace?: Array<Record<string, unknown>> }>
+}) {
+  if (runs.length === 0) return null
+
+  return (
+    <details className="w-full max-w-3xl rounded-md border border-border">
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
+        What it did on {runs.length} sample {runs.length === 1 ? 'page' : 'pages'}
+      </summary>
+      <div className="flex flex-col gap-3 border-t border-border p-3">
+        {runs.map((run, i) => {
+          const trace = run.step_trace ?? []
+          const failed = trace.filter((s) => s.status === 'failed').length
+          return (
+            <div key={i} className="flex flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={run.outcome === 'ok' ? 'success' : 'destructive'}>
+                  {run.outcome ?? 'unknown'}
+                </Badge>
+                <code className="truncate text-[11px] text-muted-foreground">{run.url}</code>
+                {failed > 0 && (
+                  <Badge variant="warning">
+                    {failed} step{failed === 1 ? '' : 's'} did not run
+                  </Badge>
+                )}
+              </div>
+              {trace.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {trace.map((step, j) => (
+                    <Badge
+                      key={j}
+                      variant={step.status === 'failed' ? 'warning' : 'outline'}
+                      className="font-normal"
+                      title={String(step.reason ?? '')}
+                    >
+                      {String(step.op ?? '')}
+                      {step.status === 'skipped' ? ' (skipped)' : ''}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </details>
   )
 }
 

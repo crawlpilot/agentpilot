@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -30,18 +30,38 @@ export function RecipeOnboardPage() {
 
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
+  const [mode, setMode] = useState<'describe' | 'schema'>('describe')
   const [description, setDescription] = useState('')
+  const [schemaText, setSchemaText] = useState('')
   const [extraUrls, setExtraUrls] = useState<string[]>([])
   const [started, setStarted] = useState<{ recipeId: string; runId: string } | null>(null)
 
-  const canStart = url.trim().length > 0 && description.trim().length > 0
+  // A schema is only usable once it parses, so the button reflects that
+  // rather than letting someone submit and find out from the worker.
+  const parsedSchema = useMemo(() => {
+    if (mode !== 'schema' || !schemaText.trim()) return null
+    try {
+      const value = JSON.parse(schemaText)
+      return value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null
+    } catch {
+      return null
+    }
+  }, [mode, schemaText])
+  const schemaError = mode === 'schema' && schemaText.trim().length > 0 && parsedSchema === null
+
+  const canStart =
+    url.trim().length > 0 &&
+    (mode === 'describe' ? description.trim().length > 0 : parsedSchema !== null)
 
   function start() {
     onboard.mutate(
       {
         name: name.trim() || hostOf(url) || 'new recipe',
         url: url.trim(),
-        description: description.trim(),
+        description: mode === 'describe' ? description.trim() : undefined,
+        output_schema: mode === 'schema' ? (parsedSchema ?? undefined) : undefined,
         sample_urls: extraUrls.map((u) => u.trim()).filter(Boolean),
       },
       {
@@ -91,21 +111,70 @@ export function RecipeOnboardPage() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="description">What do you want from pages like this?</Label>
-        <Textarea
-          id="description"
-          rows={4}
-          placeholder={
-            'product name, price, all the image URLs, and the sizes with whether each is in stock'
-          }
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-        <p className="text-xs text-muted-foreground">
-          Plain English, one thing per line or comma-separated. Say the type when it matters
-          &mdash; &ldquo;price&rdquo;, &ldquo;image URLs&rdquo;, &ldquo;a list of&hellip;&rdquo;
-          &mdash; that is what tells it which element actually holds the value.
-        </p>
+        <div className="flex items-center gap-2">
+          <Label>What do you want from pages like this?</Label>
+          <div className="ml-auto flex rounded-md border border-border p-0.5">
+            <Button
+              size="sm"
+              variant={mode === 'describe' ? 'secondary' : 'ghost'}
+              className="h-6 px-2 text-xs"
+              onClick={() => setMode('describe')}
+            >
+              Describe it
+            </Button>
+            <Button
+              size="sm"
+              variant={mode === 'schema' ? 'secondary' : 'ghost'}
+              className="h-6 px-2 text-xs"
+              onClick={() => setMode('schema')}
+            >
+              Output schema
+            </Button>
+          </div>
+        </div>
+
+        {mode === 'describe' ? (
+          <>
+            <Textarea
+              id="description"
+              rows={4}
+              placeholder={
+                'product name, price, all the image URLs, and the sizes with whether each is in stock'
+              }
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Plain English, one thing per line or comma-separated. Say the type when it matters
+              &mdash; &ldquo;price&rdquo;, &ldquo;image URLs&rdquo;, &ldquo;a list of&hellip;&rdquo;
+              &mdash; that is what tells it which element actually holds the value.
+            </p>
+          </>
+        ) : (
+          <>
+            <Textarea
+              id="schema"
+              rows={12}
+              className="font-mono text-xs"
+              placeholder={SCHEMA_PLACEHOLDER}
+              value={schemaText}
+              onChange={(e) => setSchemaText(e.target.value)}
+            />
+            {schemaError ? (
+              <p className="text-xs text-destructive">
+                That is not valid JSON yet. Paste a JSON Schema, or an example of the object you
+                want back.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Either a JSON Schema (<code>{'{"type":"object","properties":{…}}'}</code>) or a
+                plain example of the JSON you want back. Read exactly as written &mdash; no model
+                reinterprets it &mdash; so this is the way to pin the output shape your downstream
+                code already expects.
+              </p>
+            )}
+          </>
+        )}
       </div>
 
       <div className="flex flex-col gap-2">
@@ -169,6 +238,26 @@ export function RecipeOnboardPage() {
     </div>
   )
 }
+
+const SCHEMA_PLACEHOLDER = `{
+  "type": "object",
+  "required": ["name", "price"],
+  "properties": {
+    "name":   { "type": "string", "description": "the product title" },
+    "price":  { "type": "number" },
+    "images": { "type": "array", "items": { "type": "string", "format": "uri" } },
+    "sizes":  {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "size":     { "type": "string" },
+          "in_stock": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}`
 
 function hostOf(url: string): string {
   try {

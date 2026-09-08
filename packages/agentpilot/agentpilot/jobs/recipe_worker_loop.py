@@ -266,7 +266,7 @@ class RecipeWorkerLoop:
             elif run.kind == "build":
                 await self._process_build(run, session)
             elif run.kind == "replay":
-                await self._process_replay(run, session)
+                await self._process_replay(run, session, target_url)
             elif run.kind == "heal":
                 await self._process_heal(run, session)
             else:
@@ -401,7 +401,10 @@ class RecipeWorkerLoop:
 
         from agentpilot.recipe.v2.assertions import propose_assertions, with_assertions
         from agentpilot.recipe.v2.assist import build_asks
-        from agentpilot.recipe.v2.contract import fields_from_description
+        from agentpilot.recipe.v2.contract import (
+            fields_from_description,
+            fields_from_output_schema,
+        )
         from agentpilot.recipe.v2.onboard import BlockedError, onboard_recipe
         from agentpilot.recipe.v2.review import merge_field_values, verify_and_judge
         from agentpilot.recipe.v2.schema import fields_to_dict, parse_fields
@@ -411,15 +414,27 @@ class RecipeWorkerLoop:
         llm_config = LLMConfig.from_env()
         cfg = RecipeConfig.from_env()
 
+        # Three ways to say what you want, in descending order of how exactly
+        # the caller stated it. An explicit v2 field map is taken as-is; a JSON
+        # Schema or example payload is converted deterministically; only a
+        # plain-English description needs a model, because only it is ambiguous.
         declared = run.recipe.field_schema or {}
+        output_schema = params.get("output_schema") or None
         try:
-            fields = (
-                parse_fields(declared)
-                if declared
-                else await fields_from_description(
+            if declared:
+                fields = parse_fields(declared)
+            elif isinstance(output_schema, dict) and output_schema:
+                fields = fields_from_output_schema(output_schema)
+                if not fields:
+                    raise ValueError(
+                        "could not read any fields out of that output schema -- it "
+                        "should be a JSON Schema with `properties`, or an example "
+                        "of the JSON object you want back"
+                    )
+            else:
+                fields = await fields_from_description(
                     str(params.get("description") or ""), llm_config=llm_config, url=url
                 )
-            )
         except ValueError as exc:
             await self._store.complete_run(
                 run.run_id, run.lock, data=None, field_failures=None, error=str(exc)
@@ -660,11 +675,32 @@ class RecipeWorkerLoop:
         )
         await self._complete_from_result(run, result)
 
-    async def _process_replay(self, run: ClaimedRecipeRun, session: InteractiveSession) -> None:
-        # A submitted run and a scheduled one are both replays, and they differ
-        # in the two ways this branches on.
+    async def _process_replay(
+        self, run: ClaimedRecipeRun, session: InteractiveSession, url: str
+    ) -> None:
+        """Run the recipe once and report what it collected.
+
+        Three paths, and which one is taken is decided by the recipe's *shape*,
+        not by preference:
+
+        - A submitted job run carries its own URL and goes to `_process_job_run`.
+        - A recipe with a v2 `document` must use the v2 engine. The v1 engine
+          reads `global_setup`/`field_groups`, the v1 columns, which are empty
+          for everything the studio and the onboarding agent produce -- so it
+          replayed a recipe with no groups at all and completed successfully
+          with `data = {}`. A run that collects nothing and calls itself healthy
+          is the worst of both outcomes: the caller gets nulls and the recipe
+          gets marked fine.
+        - Only a genuinely v1 recipe falls through to the v1 engine.
+        """
+
         if run.job_id is not None and run.url:
             await self._process_job_run(run, session)
+            return
+
+        document = run.recipe.document
+        if document:
+            await self._process_replay_v2(run, session, document, url)
             return
 
         recipe = _to_recipe_model(run.recipe)
@@ -675,6 +711,55 @@ class RecipeWorkerLoop:
             run.recipe_id, health_status="healthy" if result.success else "degraded"
         )
         await self._complete_from_result(run, result)
+
+    async def _process_replay_v2(
+        self,
+        run: ClaimedRecipeRun,
+        session: InteractiveSession,
+        document: dict[str, Any],
+        url: str,
+    ) -> None:
+        """A scheduled or manual replay of a v2 recipe.
+
+        Differs from `_process_job_run` in exactly one way, and it is the
+        documented one: this DOES move the recipe's health. A scheduled replay
+        failing means the recipe is degraded; a submitted run failing usually
+        means the caller's URL was wrong, and letting one bad paste mark a
+        public template broken would take a working scraper out of the
+        catalogue for every tenant that can see it.
+        """
+
+        from agentpilot.recipe.v2.models import Recipe as RecipeV2
+        from agentpilot.recipe.v2.models import RunInput
+        from agentpilot.recipe.v2.replay import replay_recipe as replay_v2
+
+        result = await replay_v2(
+            RecipeV2.from_dict(document, recipe_id=run.recipe_id, tenant=run.tenant),
+            RunInput(url=url, metadata=(run.params or {}).get("metadata") or {}),
+            session=session,
+            registry=self._registry,
+            driver=self._driver,
+        )
+        # `blocked` is not `degraded`. A recipe that could not be read because a
+        # wall stood in front of it has not drifted, and healing it against the
+        # wall is how `classify.py` says recipes get destroyed.
+        if result.outcome != "blocked":
+            await self._store.mark_replay_result(
+                run.recipe_id,
+                health_status="healthy" if result.success else "degraded",
+            )
+        await self._store.complete_run(
+            run.run_id,
+            run.lock,
+            data=result.data,
+            field_failures={
+                "field_status": result.field_status,
+                "truncated": result.truncated,
+                "outcome": result.outcome,
+                "step_trace": [s.to_dict() for s in result.step_trace],
+            },
+            error=result.error,
+        )
 
     async def _process_job_run(
         self, run: ClaimedRecipeRun, session: InteractiveSession

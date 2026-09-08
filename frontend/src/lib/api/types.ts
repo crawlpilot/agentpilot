@@ -756,8 +756,14 @@ export interface RecipeOnboardRequest {
   url: string
   /** Plain English, e.g. "product name, price, sizes in stock, all image URLs". */
   description?: string
-  /** A v2 `fields` object, when the caller already has one. Wins over `description`. */
+  /** A v2 `fields` object, when the caller already has one. Wins over everything. */
   fields?: Record<string, unknown>
+  /**
+   * The shape you want back: a JSON Schema, or a plain example of the JSON.
+   * Converted deterministically, so an exactly-stated contract is not run
+   * through a model that could only lose it.
+   */
+  output_schema?: Record<string, unknown>
   /** More pages of the same kind. Two or more sharpen the derived `target.match`. */
   sample_urls?: string[]
 }

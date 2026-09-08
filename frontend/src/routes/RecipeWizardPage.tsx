@@ -87,6 +87,9 @@ export function RecipeWizardPage() {
     const document = existing.data?.data?.document
     if (document) hydrate(document as unknown as Recipe)
   }, [existing.data, hydrate])
+  // True only while an EXISTING recipe's document is still in flight. A brand
+  // new recipe has nothing to wait for.
+  const loadingExisting = Boolean(recipeId) && existing.data === undefined
 
   const [step, setStep] = useState(0)
   const [furthest, setFurthest] = useState(0)
@@ -402,6 +405,18 @@ export function RecipeWizardPage() {
   const errors = issues.filter((i) => i.severity === 'error').length
 
   function saveRecipe() {
+    // Never write over a recipe whose current contents have not arrived yet.
+    // The editor seeds an empty document and hydrates from the server a beat
+    // later, so a save in that window would replace a working scraper with a
+    // blank one and record it as a new version. `loading` is only true when
+    // there is a recipe id to load.
+    if (loadingExisting) {
+      toast({
+        title: 'Still loading this recipe',
+        description: 'Saving now would overwrite it with an empty document.',
+      })
+      return
+    }
     setSaved(null)
     save.mutate(
       {
