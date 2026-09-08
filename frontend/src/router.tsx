@@ -19,6 +19,7 @@ import { MarketplaceDetailPage } from '@/routes/MarketplaceDetailPage'
 import { RecipeJobPage } from '@/routes/RecipeJobPage'
 import { RecipeDetailPage } from '@/routes/RecipeDetailPage'
 import { RecipeWizardPage } from '@/routes/RecipeWizardPage'
+import { RecipeOnboardPage } from '@/routes/RecipeOnboardPage'
 import { RecipeStudioPage } from '@/routes/RecipeStudioPage'
 import { ApiKeysPage } from '@/routes/ApiKeysPage'
 import { NodesPage } from '@/routes/NodesPage'
@@ -59,6 +60,10 @@ export const router = createBrowserRouter([
       // Recipes are persistent, revisitable entities (like Sessions), not
       // one-shot Playground tools -- top-level list+detail, not a tab.
       { path: 'recipes', element: <RecipesListPage /> },
+      // The agent front door. Inside the shell rather than full-viewport
+      // like the wizard: it is a short form, and while a build is running
+      // the person should still be able to navigate away and come back.
+      { path: 'recipes/onboard', element: <RecipeOnboardPage /> },
       { path: 'recipes/:recipeId', element: <RecipeDetailPage /> },
       // The marketplace is the *use* surface for the same objects `/recipes`
       // authors: browse what is published, hand one your URLs, read the batch.

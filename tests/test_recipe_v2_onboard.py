@@ -315,3 +315,66 @@ async def test_bindings_by_field_skips_a_tables_columns(patched) -> None:
     await state.on_step(_step([{"type": "ClickAction", "ref": "e12"}]))
 
     assert bindings_by_field(state.field_groups) == {}
+
+
+# --- narrating a build that takes minutes ------------------------------------
+
+
+async def test_progress_is_reported_after_every_step(patched) -> None:
+    """A build drives a real browser for minutes. Without this the only thing
+    the UI could show for that whole time was a spinner -- hiding exactly the
+    evidence (a cookie wall, a consent dialog) a person could act on instantly."""
+
+    seen: list[dict[str, Any]] = []
+
+    async def sink(payload: dict[str, Any]) -> None:
+        seen.append(payload)
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None, on_progress=sink,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert len(seen) == 1
+    assert seen[0]["phase"] == "exploring"
+    assert seen[0]["found"] == ["title"]
+    assert seen[0]["remaining"] == ["price"]
+    assert seen[0]["steps"][0]["actions"] == ["ClickAction"]
+    assert seen[0]["steps"][0]["found"] == ["title"]
+
+
+async def test_a_step_that_found_nothing_still_reports(patched) -> None:
+    """Otherwise the narration stalls on exactly the steps a watcher most wants
+    to see -- the ones where it is stuck."""
+
+    seen: list[dict[str, Any]] = []
+
+    async def sink(payload: dict[str, Any]) -> None:
+        seen.append(payload)
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None, on_progress=sink,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert len(seen) == 1
+    assert seen[0]["found"] == []
+    assert seen[0]["steps"][0]["found"] == []
+
+
+async def test_a_failing_progress_sink_cannot_break_the_build(patched) -> None:
+    """A status line that can fail a build would be absurd."""
+
+    async def boom(_payload: dict[str, Any]) -> None:
+        raise RuntimeError("the database went away")
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None, on_progress=boom,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    # The field was still frozen, which is the thing that actually matters.
+    assert len(state.field_groups) == 1

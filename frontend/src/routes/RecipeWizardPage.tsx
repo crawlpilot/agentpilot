@@ -15,7 +15,7 @@ import { StepValidate } from '@/components/app/wizard/StepValidate'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
 import { useExecuteSession } from '@/hooks/useExecuteSession'
-import { useSaveRecipe } from '@/hooks/useRecipes'
+import { useRecipe, useSaveRecipe } from '@/hooks/useRecipes'
 import { useRecipeValidation } from '@/hooks/useRecipeValidation'
 import { useToast } from '@/components/ui/toast'
 import { emptyRecipe, toExport } from '@/lib/recipe/document'
@@ -77,7 +77,16 @@ export function RecipeWizardPage() {
   const { toast } = useToast()
 
   const seed = useMemo<Recipe>(() => emptyRecipe(''), [])
-  const { doc, update, reset, markSaved } = useRecipeDoc(draftKey, seed)
+  const { doc, update, reset, hydrate, markSaved } = useRecipeDoc(draftKey, seed)
+
+  // Load what the server holds for this recipe. Without this the editor opened
+  // empty for every existing recipe -- including every one the onboarding agent
+  // had just built, which is the whole point of handing it over for review.
+  const existing = useRecipe(recipeId ?? '')
+  useEffect(() => {
+    const document = existing.data?.data?.document
+    if (document) hydrate(document as unknown as Recipe)
+  }, [existing.data, hydrate])
 
   const [step, setStep] = useState(0)
   const [furthest, setFurthest] = useState(0)

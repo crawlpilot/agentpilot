@@ -1,5 +1,7 @@
 import { apiRequest } from './client'
 import type {
+  RecipeAssistRequest,
+  RecipeAssistResponse,
   RecipeCodegenLanguage,
   RecipeCreateRequest,
   RecipeCreateResponse,
@@ -9,6 +11,8 @@ import type {
   RecipeJobResponse,
   RecipeJobsResponse,
   RecipeListResponse,
+  RecipeOnboardRequest,
+  RecipeOnboardResponse,
   RecipeRunQueuedResponse,
   RecipeRunResponse,
   RecipeSaveRequest,
@@ -36,6 +40,44 @@ export function saveRecipeV2(token: string, req: RecipeSaveRequest) {
 export function updateRecipe(token: string, recipeId: string, req: RecipeSaveRequest) {
   return apiRequest<RecipeSaveResponse>(`/v1/recipes/${recipeId}`, {
     method: 'PUT',
+    body: req,
+    token,
+  })
+}
+
+/**
+ * Build a recipe from a URL and a description of the wanted data.
+ *
+ * Not `createRecipe`, which starts a v1 build whose output has no v2 document
+ * and so can never run in the marketplace or be opened in the studio. This is
+ * the one that produces the document.
+ *
+ * Queued, not synchronous: onboarding drives a real browser through an agent
+ * loop against a live site, which is minutes. Poll the run.
+ */
+export function onboardRecipe(token: string, req: RecipeOnboardRequest) {
+  return apiRequest<RecipeOnboardResponse>('/v1/recipes/onboard', {
+    method: 'POST',
+    body: req,
+    token,
+  })
+}
+
+/**
+ * Answer what a parked onboarding run is waiting for.
+ *
+ * The run's worker is still holding a live browser session on the page it got
+ * stuck on, which is why an answer can be an element pick rather than a
+ * description. Accepting flips the run back to `running`.
+ */
+export function submitAssist(
+  token: string,
+  recipeId: string,
+  runId: string,
+  req: RecipeAssistRequest,
+) {
+  return apiRequest<RecipeAssistResponse>(`/v1/recipes/${recipeId}/runs/${runId}/assist`, {
+    method: 'POST',
     body: req,
     token,
   })

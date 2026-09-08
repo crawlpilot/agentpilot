@@ -514,7 +514,15 @@ export interface AgentRunListResponse {
 // --- recipes (routes/recipes.py) ---
 
 export type RecipeHealthStatus = 'healthy' | 'degraded' | 'broken'
-export type RecipeRunKind = 'build' | 'replay' | 'heal' | 'codegen'
+export type RecipeRunKind = 'build' | 'replay' | 'heal' | 'codegen' | 'onboard'
+
+/**
+ * A recipe run can also be *parked*, waiting for a person to settle a field
+ * the agent could not. Kept separate from the shared `RunStatus` because an
+ * agent run has no such state, and widening the shared union would tell every
+ * consumer to handle a case that cannot happen to them.
+ */
+export type RecipeRunStatus = RunStatus | 'needs_input'
 export type RecipeCodegenLanguage = 'python-playwright' | 'node-puppeteer' | 'python-requests-only'
 
 export interface RecipeCreateRequest {
@@ -576,6 +584,12 @@ export interface RecipeOut {
   schedule_interval_seconds: number | null
   created_at: string
   updated_at: string
+  /**
+   * The v2 document -- fields, bindings, steps. This IS the recipe;
+   * `field_groups` above is the v1 shape and is empty for anything the
+   * studio or the onboarding agent produced.
+   */
+  document?: Record<string, unknown> | null
 }
 
 export interface RecipeGetResponse {
@@ -594,13 +608,17 @@ export interface RecipeRunOut {
   recipe_id: string
   tenant: string
   kind: RecipeRunKind
-  status: RunStatus
+  status: RecipeRunStatus
   data: Record<string, unknown> | null
   field_failures: Record<string, unknown> | null
   error: string | null
   created_at: string
   started_at: string | null
   finished_at: string | null
+  /** Set only while `status` is `needs_input`. */
+  pending_asks?: PendingAsk[] | null
+  /** What a long-running build is doing right now. */
+  progress?: RunProgress | null
 }
 
 export interface RecipeRunResponse {
@@ -728,4 +746,71 @@ export interface RecipeJobResponse {
 export interface RecipeJobsResponse {
   success: boolean
   jobs: RecipeJobOut[]
+}
+
+
+// --- onboarding: build a recipe from a URL and a description of the data ---
+
+export interface RecipeOnboardRequest {
+  name: string
+  url: string
+  /** Plain English, e.g. "product name, price, sizes in stock, all image URLs". */
+  description?: string
+  /** A v2 `fields` object, when the caller already has one. Wins over `description`. */
+  fields?: Record<string, unknown>
+  /** More pages of the same kind. Two or more sharpen the derived `target.match`. */
+  sample_urls?: string[]
+}
+
+export interface RecipeOnboardResponse {
+  success: boolean
+  recipe_id: string
+  run_id: string
+}
+
+/** One thing a parked onboarding run needs a person to settle. */
+export interface PendingAsk {
+  field: string
+  /**
+   * `unresolved` was never found ("where is this?"); `rejected` was found but
+   * judged to be the wrong thing ("you picked the breadcrumb, which is the
+   * title?"). Different questions, so they are shown differently.
+   */
+  kind: 'unresolved' | 'rejected'
+  reason: string
+  /**
+   * What the group's steps actually did. Without it an empty field behind a
+   * reveal click is unattributable: the selector may be wrong, or the click may
+   * never have run, and the two need opposite fixes.
+   */
+  step_trace: Array<Record<string, unknown>>
+}
+
+export interface RecipeResolution {
+  field: string
+  action: 'pick' | 'describe' | 'skip'
+  /** `pick`: v2 locators, as the studio picker already produces them. */
+  locators?: Array<Record<string, unknown>>
+  /** `describe`: a hint fed to the selector agent, not used as a selector. */
+  hint?: string
+}
+
+export interface RecipeAssistRequest {
+  resolutions: RecipeResolution[]
+}
+
+export interface RecipeAssistResponse {
+  success: boolean
+  accepted: string[]
+}
+
+
+/** Live narration from a build that takes minutes. */
+export interface RunProgress {
+  phase?: 'exploring' | 'verifying'
+  steps?: Array<{ n: number; goal: string; actions: string[]; found: string[] }>
+  /** Fields bound so far. */
+  found?: string[]
+  /** Fields still being looked for. */
+  remaining?: string[]
 }

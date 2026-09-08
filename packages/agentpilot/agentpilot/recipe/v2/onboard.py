@@ -32,6 +32,7 @@ Four things this does that v1 could not:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -70,6 +71,17 @@ log = structlog.get_logger(__name__)
 
 DEFAULT_ONBOARD_MAX_STEPS = 15
 DEFAULT_MAX_REPEAT_ITERATIONS = 20
+
+# How many steps of narration to keep. A build is capped at ~15 agent steps, so
+# this holds all of them; the bound exists so a future longer run cannot grow
+# the row without limit.
+_MAX_NARRATED_STEPS = 40
+
+ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
+"""Called after each exploration step with a snapshot of what the build is
+doing. Injected rather than imported so the module has no opinion about where
+progress is written -- the worker sends it to the run row, and a test can just
+collect it in a list."""
 
 
 class BlockedError(Exception):
@@ -198,7 +210,10 @@ class ExplorationState:
         llm_config: LLMConfig,
         max_repeat_iterations: int = DEFAULT_MAX_REPEAT_ITERATIONS,
         verify_max_retries: int = 1,
+        on_progress: ProgressSink | None = None,
     ) -> None:
+        self._on_progress = on_progress
+        self._steps: list[dict[str, Any]] = []
         self._all_fields = fields
         self._unfound = all_leaf_fields(fields)
         self._column_to_table = column_to_table_map(fields)
@@ -227,6 +242,30 @@ class ExplorationState:
             name: self._failures.get(name, "not located during exploration")
             for name in self._unfound
         }
+
+    async def _narrate(self, step_record: AgentStepRecord, just_found: list[str]) -> None:
+        """Say what happened, for whoever is watching a build that takes
+        minutes. Never allowed to break the build: a progress indicator that can
+        fail a run is worse than no progress indicator."""
+
+        if self._on_progress is None:
+            return
+        self._steps.append({
+            "n": step_record.step_number,
+            "goal": step_record.next_goal,
+            "actions": [a.get("type", "") for a in step_record.actions],
+            "found": just_found,
+        })
+        del self._steps[:-_MAX_NARRATED_STEPS]
+        try:
+            await self._on_progress({
+                "phase": "exploring",
+                "steps": list(self._steps),
+                "found": sorted(set(self._all_fields) - set(self._unfound)),
+                "remaining": sorted(self._unfound),
+            })
+        except Exception:  # noqa: BLE001 - see docstring
+            log.debug("onboard.progress_write_failed", exc_info=True)
 
     async def on_step(self, step_record: AgentStepRecord) -> None:
         if not self._unfound:
@@ -270,15 +309,18 @@ class ExplorationState:
             if name not in verified:
                 self._failures[name] = "no proposed locator resolved on this page state"
         if not verified:
+            await self._narrate(step_record, [])
             return
 
         # Only what actually reached a group counts as found. A column whose
         # rows could not be iterated resolved to a value and still has no way to
         # produce rows, so it stays unfound and reaches the assist loop -- rather
         # than being dropped for having been "verified".
-        for name in self._freeze(verified, snapshot=snapshot, clicked_ref=clicked_ref):
+        frozen = self._freeze(verified, snapshot=snapshot, clicked_ref=clicked_ref)
+        for name in frozen:
             self._unfound.pop(name, None)
             self._failures.pop(name, None)
+        await self._narrate(step_record, sorted(frozen))
 
     def _freeze(
         self,
@@ -397,6 +439,7 @@ async def onboard_recipe(
     sample_urls: list[str] | None = None,
     max_steps: int = DEFAULT_ONBOARD_MAX_STEPS,
     max_repeat_iterations: int = DEFAULT_MAX_REPEAT_ITERATIONS,
+    on_progress: ProgressSink | None = None,
 ) -> tuple[Recipe, OnboardOutcome]:
     """Stages 2 and 3: recon, then explore-and-freeze.
 
@@ -416,6 +459,7 @@ async def onboard_recipe(
         reader=reader,
         llm_config=llm_config,
         max_repeat_iterations=max_repeat_iterations,
+        on_progress=on_progress,
     )
 
     run_result = await run_agent_loop(

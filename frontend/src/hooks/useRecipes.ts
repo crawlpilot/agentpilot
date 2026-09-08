@@ -7,8 +7,10 @@ import {
   healRecipe,
   listRecipes,
   listRecipeVersions,
+  onboardRecipe,
   runRecipe,
   saveRecipeV2,
+  submitAssist,
   updateRecipe,
 } from '@/lib/api/recipes'
 import { queryKeys } from '@/lib/query/queryClient'
@@ -16,11 +18,17 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import type {
   RecipeCodegenLanguage,
   RecipeCreateRequest,
+  RecipeOnboardRequest,
+  RecipeResolution,
+  RecipeRunStatus,
   RecipeSaveRequest,
-  RunStatus,
 } from '@/lib/api/types'
 
-const TERMINAL_STATUSES: RunStatus[] = ['completed', 'failed', 'cancelled']
+// `needs_input` is deliberately NOT terminal: a parked run is mid-build,
+// waiting for a person, and will carry on the moment one answers or its park
+// expires. Treating it as finished would stop the poll exactly when the UI most
+// needs to notice the run resuming.
+const TERMINAL_STATUSES: RecipeRunStatus[] = ['completed', 'failed', 'cancelled']
 
 export function useRecipesList() {
   const { apiKey, isAuthed } = useAuth()
@@ -124,5 +132,38 @@ export function useSaveRecipe() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.recipes })
     },
+  })
+}
+
+
+/**
+ * Build a recipe from a URL and a description of the wanted data.
+ *
+ * The run it queues is the long one -- an agent loop against a live site, then
+ * a replay, then a judge. `useRecipeRun` is what watches it.
+ */
+export function useOnboardRecipe() {
+  const { apiKey } = useAuth()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (req: RecipeOnboardRequest) => onboardRecipe(apiKey!, req),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.recipes }),
+  })
+}
+
+/**
+ * Answer a parked run's questions.
+ *
+ * Invalidates the run so the UI sees it leave `needs_input` rather than waiting
+ * out the poll interval -- the person just acted, and the page should say so.
+ */
+export function useSubmitAssist(recipeId: string, runId: string) {
+  const { apiKey } = useAuth()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (resolutions: RecipeResolution[]) =>
+      submitAssist(apiKey!, recipeId, runId, { resolutions }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.recipeRun(recipeId, runId) }),
   })
 }

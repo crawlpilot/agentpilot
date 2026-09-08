@@ -538,6 +538,12 @@ class Wiring:
         if self.role != "worker" or self.recipe_store is None:
             return
         from agentpilot.jobs.recipe_worker_loop import RecipeWorkerLoop
+        from agentpilot.placement.placer import SessionPlacer
+
+        # Built here rather than shared with `_start_agent_worker_loop`: the two
+        # start independently, and either may be disabled. `None` when Redis is
+        # unset, which degrades live-view to unavailable without touching runs.
+        live_route_placer = SessionPlacer(self.redis) if self.redis is not None else None
 
         self.recipe_worker_loop = RecipeWorkerLoop(
             self.recipe_store,
@@ -553,6 +559,14 @@ class Wiring:
             # passing them in.
             browser_config=self.browser_config,
             prototype_provider=self.prototype_provider,
+            # The same live-view plumbing the agent loop gets, and for a sharper
+            # reason. A worker opens its browser in-process, so the session
+            # never passes through the placer -- `/v1/sessions` cannot list it
+            # and the live-view proxy has no route to it. An onboarding build
+            # spends minutes driving that browser, and the assist loop's whole
+            # premise is that a person can pick on the page it got stuck on.
+            sessions=self.sessions,
+            placer=live_route_placer,
         )
         self.recipe_worker_loop.start()
 

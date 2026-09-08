@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { RecipeFieldGroupsList } from '@/components/app/RecipeFieldGroupsList'
+import { RecipeOverview } from '@/components/app/onboard/RecipeOverview'
+import type { Recipe as RecipeDoc } from '@/lib/recipe/types'
 import { RecipeRunPanel } from '@/components/app/RecipeRunPanel'
 import { EmptyState } from '@/components/app/EmptyState'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -58,6 +60,8 @@ export function RecipeDetailPage() {
 
   const recipe = data.data
   const versions = versionsData?.versions ?? []
+  const document = (recipe.document ?? null) as RecipeDoc | null
+  const groups = document?.field_groups ?? recipe.field_groups
 
   return (
     <div className="flex flex-col gap-6">
@@ -106,9 +110,19 @@ export function RecipeDetailPage() {
 
       <div className="flex flex-col gap-2">
         <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-          Fields ({recipe.field_groups.length})
+          Fields ({groups.length})
         </h2>
-        <RecipeFieldGroupsList groups={recipe.field_groups} />
+        {/*
+          Read from the v2 document when there is one. `recipe.field_groups` is
+          the v1 column and is empty for everything the studio or the onboarding
+          agent produces -- so this section reported "Fields (0)" for every
+          recipe anyone has actually built, next to a working scraper.
+        */}
+        {document ? (
+          <RecipeOverview recipe={document} values={{}} />
+        ) : (
+          <RecipeFieldGroupsList groups={recipe.field_groups} />
+        )}
       </div>
 
       <div className="flex flex-col gap-2">

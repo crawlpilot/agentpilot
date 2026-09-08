@@ -52,6 +52,31 @@ export function useRecipeDoc(draftKey: string, initial?: Recipe) {
     setSavedAt(Date.now())
   }, [])
 
+  /**
+   * Load the server's copy, once, unless there is unsaved local work.
+   *
+   * The initial state is computed lazily and only once, so a document that
+   * arrives from a fetch -- which is every existing recipe, and every recipe
+   * the onboarding agent builds -- could never reach it. That is why opening a
+   * built recipe showed an empty editor.
+   *
+   * A restored draft wins: it is by definition work the person did and did not
+   * save, and silently replacing it with the server copy is the one failure a
+   * draft mechanism exists to prevent.
+   */
+  const hydrated = useRef(false)
+  const hydrate = useCallback(
+    (next: Recipe) => {
+      if (hydrated.current) return
+      hydrated.current = true
+      if (loadDraft(draftKey) !== null) return
+      setDoc(next)
+      setPast([])
+      baseline.current = JSON.stringify(next)
+    },
+    [draftKey],
+  )
+
   useEffect(() => {
     const handle = window.setTimeout(() => saveDraft(draftKey, doc), 400)
     return () => window.clearTimeout(handle)
@@ -67,6 +92,7 @@ export function useRecipeDoc(draftKey: string, initial?: Recipe) {
     update,
     undo,
     reset,
+    hydrate,
     markSaved,
     discardDraft,
     canUndo: past.length > 0,

@@ -10,7 +10,9 @@ const badgeVariants = cva(
         default: 'border-transparent bg-muted text-muted-foreground',
         accent: 'border-transparent bg-accent text-accent-foreground',
         success: 'border-transparent bg-success text-success-foreground',
-        warning: 'border-transparent bg-warning text-warning',
+        // `text-warning-foreground`, not `text-warning`: the latter is the same
+        // amber as the background, so the label rendered invisible.
+        warning: 'border-transparent bg-warning text-warning-foreground',
         destructive: 'border-transparent bg-destructive text-destructive-foreground',
         outline: 'border-border text-foreground',
       },

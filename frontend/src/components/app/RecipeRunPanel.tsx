@@ -9,11 +9,15 @@ import { EmptyState } from '@/components/app/EmptyState'
 import { useRunRecipe, useHealRecipe, useCodegenRecipe, useRecipeRun } from '@/hooks/useRecipes'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useToast } from '@/components/ui/toast'
-import type { RecipeCodegenLanguage, RecipeRunKind, RunStatus } from '@/lib/api/types'
+import type { RecipeCodegenLanguage, RecipeRunKind, RecipeRunStatus } from '@/lib/api/types'
 
-const LANGUAGES: RecipeCodegenLanguage[] = ['python-playwright', 'node-puppeteer', 'python-requests-only']
+// Only what the v2 generator can actually emit. `node-puppeteer` and
+// `python-requests-only` exist in the v1 module and are each one language pack
+// away, but offering them here would offer a run that can only fail: every
+// recipe the studio or the onboarding agent produces is v2.
+const LANGUAGES: RecipeCodegenLanguage[] = ['python-playwright']
 
-function statusVariant(status: RunStatus): NonNullable<BadgeProps['variant']> {
+function statusVariant(status: RecipeRunStatus): NonNullable<BadgeProps['variant']> {
   switch (status) {
     case 'completed':
       return 'success'
@@ -21,6 +25,10 @@ function statusVariant(status: RunStatus): NonNullable<BadgeProps['variant']> {
       return 'destructive'
     case 'running':
       return 'accent'
+    case 'needs_input':
+      // Neither a failure nor progress: it is waiting on the person
+      // reading this, which should look like neither.
+      return 'warning'
     case 'cancelled':
       return 'outline'
     default:
@@ -69,6 +77,12 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
 
   const run = runData?.data
   const generatedCode = run?.kind === 'codegen' && run.data ? (run.data.code as string | undefined) : undefined
+  // What the generated script failed to check out on. Shown WITH the code
+  // rather than instead of it: a script missing one field is still worth
+  // having, as long as what is wrong with it is said out loud rather than
+  // discovered in production.
+  const codegenProblems =
+    run?.kind === 'codegen' && run.data ? ((run.data.problems as string[] | undefined) ?? []) : []
 
   // A recipe with no target matcher has no URL of its own, which is the normal
   // shape for one authored in the studio: it is applied to URLs a caller
@@ -154,6 +168,16 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
                 <Badge variant="outline">{(run.data?.language as string) ?? language}</Badge>
                 <CopyButton text={generatedCode} />
               </div>
+              {codegenProblems.length > 0 && (
+                <div className="border-b border-warning/40 bg-warning/10 px-3 py-2">
+                  <p className="text-xs font-medium">This script did not fully check out</p>
+                  <ul className="mt-1 list-disc pl-4 text-[11px] text-muted-foreground">
+                    {codegenProblems.map((problem) => (
+                      <li key={problem}>{problem}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap p-3 text-xs">{generatedCode}</pre>
             </div>
           ) : run.status === 'completed' ? (

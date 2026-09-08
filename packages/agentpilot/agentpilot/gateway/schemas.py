@@ -656,6 +656,15 @@ class RecipeOut(BaseModel):
     schedule_interval_seconds: float | None
     created_at: str
     updated_at: str
+    document: dict[str, Any] | None = None
+    """The v2 document -- fields, bindings, steps, variants.
+
+    This is the recipe. `field_groups` above is the v1 shape and is empty for
+    anything the studio or the onboarding agent produced, so without this a
+    caller can list a recipe, see its name, and have no way to learn what it
+    actually collects or where from. The studio could not open an agent-built
+    recipe at all: it reads `bindings`/`steps`, which live only here.
+    """
 
 
 class RecipeGetResponse(BaseModel):
@@ -690,6 +699,9 @@ class RecipeRunOut(BaseModel):
     """Set only while `status` is `needs_input`: what the run is waiting for a
     person to settle, each with the reason and the step trace that explains
     why it may have failed."""
+    progress: dict[str, Any] | None = None
+    """What a long-running build is doing right now. Written as it goes, so a
+    caller polling a run that takes minutes has something to show."""
 
 
 class RecipeRunResponse(BaseModel):

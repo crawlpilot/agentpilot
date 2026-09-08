@@ -111,6 +111,10 @@ class RecipeRunOut:
     pending_asks: list[dict[str, Any]] | None = None
     """While `status` is `needs_input`: what this run is waiting for a person
     to settle. Cleared the moment it resumes."""
+    progress: dict[str, Any] | None = None
+    """What a long-running build is doing right now -- which fields it has
+    found, what it is trying next. Written as it goes, so a caller polling a
+    run that takes minutes has something to show."""
 
 
 def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
@@ -150,6 +154,7 @@ def _run_from_row(row: dict[str, Any]) -> RecipeRunOut:
         job_id=row.get("job_id"),
         url=row.get("url"),
         pending_asks=row.get("pending_asks"),
+        progress=row.get("progress"),
     )
 
 
@@ -161,7 +166,7 @@ _RECIPE_COLUMNS = (
 
 _RUN_COLUMNS = (
     "run_id, recipe_id, tenant, kind, status, data, field_failures, error, "
-    "created_at, started_at, finished_at, job_id, url, pending_asks"
+    "created_at, started_at, finished_at, job_id, url, pending_asks, progress"
 )
 
 # A job plus its rollup, counted from the runs in one pass. `finished_at` is
@@ -716,6 +721,21 @@ class PostgresRecipeStore:
                     (run_id, lock),
                 )
                 return cur.rowcount > 0
+
+    async def update_run_progress(
+        self, run_id: str, lock: str, progress: dict[str, Any]
+    ) -> None:
+        """Record what the run is doing. Best-effort by design: this is a
+        progress indicator, and failing a build because its status line could
+        not be written would be absurd."""
+
+        from psycopg.types.json import Jsonb
+
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "UPDATE recipe_runs SET progress = %s WHERE run_id = %s AND lock = %s",
+                (Jsonb(progress), run_id, lock),
+            )
 
     async def park_run(
         self,

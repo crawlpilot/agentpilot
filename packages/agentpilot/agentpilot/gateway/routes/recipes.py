@@ -84,6 +84,7 @@ def _recipe_out(recipe: RecipeRow) -> RecipeOut:
         schedule_interval_seconds=recipe.schedule_interval_seconds,
         created_at=recipe.created_at.isoformat(),
         updated_at=recipe.updated_at.isoformat(),
+        document=recipe.document,
     )
 
 
@@ -101,6 +102,7 @@ def _run_out(run: RecipeRunRow) -> RecipeRunOut:
         started_at=run.started_at.isoformat() if run.started_at else None,
         finished_at=run.finished_at.isoformat() if run.finished_at else None,
         pending_asks=run.pending_asks,
+        progress=run.progress,
     )
 
 

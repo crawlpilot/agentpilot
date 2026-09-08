@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import structlog
@@ -36,6 +36,9 @@ from crawlpilot.session.interactive import (
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi.driver import BrowserDriver
 from crawlpilot.spi.errors import LeaseConflict
+
+if TYPE_CHECKING:
+    from agentpilot.placement.placer import SessionPlacer
 
 log = structlog.get_logger(__name__)
 
@@ -107,6 +110,8 @@ class RecipeWorkerLoop:
         browser_config: BrowserConfig = DEFAULTS,
         prototype_provider: PrototypeProvider = _NO_PROTOTYPES,
         assist_poll_seconds: float = 3.0,
+        sessions: dict[str, Any] | None = None,
+        placer: SessionPlacer | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
@@ -121,6 +126,20 @@ class RecipeWorkerLoop:
         self._poll_interval_seconds = poll_interval_seconds
         self._stale_after_seconds = stale_after_seconds
         self._build_max_steps = build_max_steps
+        # Live-view plumbing, the same pair `AgentWorkerLoop` uses.
+        #
+        # A worker opens its browser in-process, which never goes through the
+        # gateway's placer -- so the session is invisible to `/v1/sessions`
+        # and the live-view proxy has no route to it. For an agent run that is
+        # a missing nicety; for an onboarding build it is the difference
+        # between watching the page and watching a spinner, and the assist
+        # loop's whole premise is that a person can pick on the live page.
+        #
+        # `sessions` is the in-process dict this worker's own live-view route
+        # reads; `placer` writes the redis route so a gateway process can
+        # proxy through to here.
+        self._sessions = sessions if sessions is not None else {}
+        self._placer = placer
         # How often a parked run checks whether a person has answered. The
         # answer is written by the gateway, not passed in memory, so this is a
         # database poll -- cheap, and a few seconds of latency is nothing next
@@ -236,6 +255,11 @@ class RecipeWorkerLoop:
         # taking them from the recipe's own `url_pattern` would open a session
         # pinned to a site this run never visits.
         session = await self._open_warm_session(run, _domain_from_url(target_url))
+        # Named after the run, which is how the UI finds it among whatever else
+        # is open -- and how the assist panel points a person at the page this
+        # run is stuck on.
+        live_session_id = f"recipe-run-{run.run_id}"
+        await self._publish_live_route(live_session_id, session, "auto")
         try:
             if run.kind == "onboard":
                 await self._process_onboard(run, session, target_url)
@@ -248,12 +272,47 @@ class RecipeWorkerLoop:
             else:
                 raise AssertionError(f"unhandled recipe run kind: {run.kind!r}")
         finally:
+            await self._forget_live_route(live_session_id, session)
             try:
                 await release_interactive_session(
                     session, registry=self._registry, driver=self._driver, vault=None
                 )
             except Exception:
                 log.warning("recipe_worker_loop.release_failed", run_id=run.run_id)
+
+    async def _publish_live_route(self, session_id: str, session: Any, tier: str) -> None:
+        """Make this worker's session reachable by the live view.
+
+        Two registrations, because there are two ways a viewer arrives: the
+        in-process `sessions` dict serves this worker's own live-view route, and
+        the redis route lets a `gateway`-role process proxy through to here.
+
+        Best-effort throughout, and a no-op with no placer wired: a redis hiccup
+        must cost the run its live view, never the run.
+        """
+
+        self._sessions[session_id] = session
+        if self._placer is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._placer.commit_route(
+                session_id,
+                session.ctx.node_id,
+                session.identity,
+                tier,
+                self._lease_ttl_seconds,
+            )
+
+    async def _forget_live_route(self, session_id: str, session: Any) -> None:
+        """Counterpart, once the session is gone. The redis route also carries a
+        TTL, so failing here degrades to a stale entry that expires rather than
+        to a failed run."""
+
+        self._sessions.pop(session_id, None)
+        if self._placer is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._placer.forget_route(session_id, session.ctx.node_id)
 
     async def _open_warm_session(
         self, run: ClaimedRecipeRun, domain: str
@@ -369,6 +428,12 @@ class RecipeWorkerLoop:
 
         sample_urls = [str(u) for u in (params.get("sample_urls") or []) if u] or [url]
 
+        async def publish(progress: dict[str, Any]) -> None:
+            # What the build is doing, so a run that takes minutes is not a
+            # spinner. Best-effort: `update_run_progress` swallows its own
+            # failures, and a status line must never be able to fail a build.
+            await self._store.update_run_progress(run.run_id, run.lock, progress)
+
         try:
             recipe, outcome = await onboard_recipe(
                 recipe_id=run.recipe_id,
@@ -382,6 +447,7 @@ class RecipeWorkerLoop:
                 driver=self._driver,
                 llm_config=llm_config,
                 max_steps=self._build_max_steps,
+                on_progress=publish,
             )
         except BlockedError as exc:
             # Distinct from "nothing resolved" on purpose: a wall needs a
@@ -392,6 +458,8 @@ class RecipeWorkerLoop:
                 error=f"blocked before anything could be built: {exc}",
             )
             return
+
+        await publish({"phase": "verifying", "found": sorted(recipe.fields), "remaining": []})
 
         # Stages 6 and 7: run what was built, judge what it collected, repair
         # what the judge rejected. A draft reaches a human only once the judge
@@ -703,9 +771,25 @@ class RecipeWorkerLoop:
         await self._complete_from_result(run, result)
 
     async def _process_codegen(self, run: ClaimedRecipeRun) -> None:
-        recipe = _to_recipe_model(run.recipe)
+        """Write a standalone scraper for this recipe.
+
+        Routed by which shape the recipe actually has. A v2 document carries
+        `bindings`/`steps`/`repeat`, which the v1 generator cannot read at all
+        -- it looks for `field_locators` and `locator.source` and would emit a
+        script for an empty recipe rather than fail. Since every recipe the
+        studio or the onboarding agent produces is v2, that is the common case,
+        not the exotic one.
+        """
+
         params: dict[str, Any] = run.params or {}
         language = params.get("language", "python-playwright")
+        document = run.recipe.document
+
+        if document:
+            await self._process_codegen_v2(run, document, language)
+            return
+
+        recipe = _to_recipe_model(run.recipe)
         try:
             code = await generate_scraper_code(
                 recipe, language=language, llm_config=LLMConfig.from_env()
@@ -717,6 +801,43 @@ class RecipeWorkerLoop:
             return
         await self._store.complete_run(
             run.run_id, run.lock, data={"code": code, "language": language}, field_failures=None
+        )
+
+    async def _process_codegen_v2(
+        self, run: ClaimedRecipeRun, document: dict[str, Any], language: str
+    ) -> None:
+        from agentpilot.recipe.v2.codegen import (
+            generate_scraper_code as generate_v2,
+        )
+        from agentpilot.recipe.v2.models import Recipe as RecipeV2
+
+        recipe = RecipeV2.from_dict(document, recipe_id=run.recipe_id, tenant=run.tenant)
+        try:
+            code, problems = await generate_v2(
+                recipe, language=language, llm_config=LLMConfig.from_env()
+            )
+        except ValueError as exc:
+            # A recipe this cannot be expressed as a standalone script at all --
+            # a Lua transform, say. Refusing beats emitting something that runs
+            # and silently collects less.
+            await self._store.complete_run(
+                run.run_id, run.lock, data=None, field_failures=None, error=str(exc)
+            )
+            return
+
+        await self._store.complete_run(
+            run.run_id,
+            run.lock,
+            data={"code": code, "language": language, "problems": problems},
+            field_failures=None,
+            # Handed over WITH its problems rather than withheld: a script with
+            # one missing field is still worth having, as long as what is wrong
+            # with it is said out loud rather than discovered in production.
+            error=(
+                "the generated script did not fully check out: " + "; ".join(problems)
+                if problems
+                else None
+            ),
         )
 
     async def _complete_from_result(self, run: ClaimedRecipeRun, result: RecipeRunResult) -> None:

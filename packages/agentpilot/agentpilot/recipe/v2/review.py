@@ -69,6 +69,11 @@ class SampleRun:
         return {
             "url": self.url,
             "outcome": self.outcome,
+            # The values, not just their statuses. This is what a reviewer
+            # actually decides on: "18 fields bound" says nothing about whether
+            # the recipe works, while `name = "Home / Tops"` says immediately
+            # that it does not.
+            "data": self.data,
             "field_status": self.field_status,
             "step_trace": self.step_trace,
             "error": self.error,

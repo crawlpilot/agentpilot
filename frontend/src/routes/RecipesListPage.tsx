@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { BookOpen, PencilRuler } from 'lucide-react'
+import { BookOpen, PencilRuler, Sparkles } from 'lucide-react'
 import { useRecipesList } from '@/hooks/useRecipes'
 import { RecipesTable } from '@/components/app/RecipesTable'
 import { EmptyState } from '@/components/app/EmptyState'
@@ -19,12 +19,20 @@ import { useAuth } from '@/lib/auth/AuthContext'
  */
 function NewRecipeLink() {
   return (
-    <Button asChild>
-      <Link to="/recipes/new">
-        <PencilRuler className="size-4" />
-        New recipe
-      </Link>
-    </Button>
+    <div className="flex items-center gap-2">
+      <Button asChild>
+        <Link to="/recipes/onboard">
+          <Sparkles className="size-4" />
+          Build with AI
+        </Link>
+      </Button>
+      <Button asChild variant="outline">
+        <Link to="/recipes/new">
+          <PencilRuler className="size-4" />
+          Build by hand
+        </Link>
+      </Button>
+    </div>
   )
 }
 

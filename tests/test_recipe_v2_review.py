@@ -229,3 +229,16 @@ async def test_sample_runs_are_capped(stubs) -> None:
         session=None, registry=None, driver=None, llm_config=None, sample_limit=2,
     )
     assert stubs["replays"] == 2
+
+
+def test_a_sample_run_carries_the_values_it_collected() -> None:
+    """The review screen decides on values, not counts. Omitting `data` from
+    the payload leaves a reviewer looking at a list of green badges with no way
+    to see that `name` came back as the breadcrumb trail."""
+
+    run = SampleRun(
+        url="https://x.test/p/1", outcome="ok",
+        data={"name": "Ribbed top", "price": 2290},
+        field_status={"name": "resolved"},
+    )
+    assert run.to_dict()["data"] == {"name": "Ribbed top", "price": 2290}
