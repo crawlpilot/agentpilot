@@ -177,3 +177,51 @@ def test_rejected_is_the_failures_map_a_repair_round_feeds_back() -> None:
         },
     )
     assert verdict.rejected == {"name": "it is the breadcrumb"}
+
+
+# --- absence, as distinct from being wrong -----------------------------------
+
+
+def test_absence_is_parsed_and_kept_out_of_the_repair_list() -> None:
+    """The distinction the loop turned on. A rejection sends the selector agent
+    back for a better locator; absence has to tell it to stop looking, or it
+    returns a different wrong element for ever."""
+
+    verdict = parse_verdict(
+        {"fields": [
+            {"field": "name", "ok": False, "reason": "that is the breadcrumb"},
+            {"field": "price", "ok": False, "absent": True,
+             "reason": "this page shows no price at all"},
+        ]},
+        FIELDS,
+    )
+    assert verdict.rejected == {"name": "that is the breadcrumb"}
+    assert verdict.absent == {"price": "this page shows no price at all"}
+    assert verdict.passed is False
+
+
+def test_absent_only_counts_on_a_rejection() -> None:
+    """Present and absent at once is a confused reply, and the safe reading is
+    that the value stands."""
+
+    verdict = parse_verdict(
+        {"fields": [{"field": "name", "ok": True, "absent": True}]}, FIELDS
+    )
+    assert verdict.absent == {}
+    assert verdict.passed is True
+
+
+def test_an_absent_claim_with_no_reason_is_not_acted_on() -> None:
+    """Same rule as any rejection: the reason IS what the next step uses, and
+    dropping a field on an unexplained claim is worse than keeping it."""
+
+    verdict = parse_verdict(
+        {"fields": [{"field": "name", "ok": False, "absent": True}]}, FIELDS
+    )
+    assert verdict.absent == {}
+    assert verdict.rejected == {}
+
+
+def test_the_prompt_teaches_the_difference() -> None:
+    assert "absent=true" in judge_mod._SYSTEM_PROMPT
+    assert "tells it to stop looking" in judge_mod._SYSTEM_PROMPT

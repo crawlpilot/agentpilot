@@ -51,9 +51,21 @@ class FieldVerdict:
     field: str
     ok: bool
     reason: str = ""
+    absent: bool = False
+    """The page does not contain this at all -- as opposed to containing it
+    somewhere the scraper did not look.
+
+    The distinction is the difference between a fixable problem and an
+    unfixable one, and without it the two were indistinguishable: a rejection
+    sent the selector agent back to find a better locator for a value that was
+    never there, it returned a different wrong element, and the judge rejected
+    that too. Repair cannot fix absence, so absence must be sayable."""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"field": self.field, "ok": self.ok, "reason": self.reason}
+        return {
+            "field": self.field, "ok": self.ok,
+            "reason": self.reason, "absent": self.absent,
+        }
 
 
 @dataclass
@@ -66,10 +78,30 @@ class DataVerdict:
 
     @property
     def rejected(self) -> dict[str, str]:
-        """Field -> why it is wrong. This is the `failures` map a repair round
-        feeds back to the selector agent."""
+        """Field -> why it is wrong, for the ones repair can actually help.
 
-        return {v.field: v.reason for v in self.verdicts.values() if not v.ok}
+        Absent fields are excluded on purpose. Feeding one back to the selector
+        agent asks it to find something that is not there; it obliges, returns a
+        different wrong element, and the next round rejects that instead. That
+        is the loop this property exists to not start.
+        """
+
+        return {
+            v.field: v.reason
+            for v in self.verdicts.values()
+            if not v.ok and not v.absent
+        }
+
+    @property
+    def absent(self) -> dict[str, str]:
+        """Field -> why it cannot be collected from this page.
+
+        Goes to a person, not to another repair round: the useful answers are
+        "drop it", "it's on a different page", or "here is where it actually
+        is", and none of them are things the selector agent can decide.
+        """
+
+        return {v.field: v.reason for v in self.verdicts.values() if v.absent}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +138,14 @@ you cannot corroborate either way is ok=true with a short note -- an unproven \
 value is not a wrong one, and a false rejection sends a working recipe back to \
 a human for nothing.
 
+When the page simply DOES NOT CONTAIN what the field asked for, set \
+absent=true as well as ok=false, and say what is missing. This matters more \
+than it looks. "Wrong value" sends the scraper back to find a better one; \
+"not on this page" tells it to stop looking. Get that backwards on a field the \
+page does not have and it will keep returning different wrong elements for \
+ever, each rejected in turn. If the caller asked for a warranty period and \
+this page is about a dress, that is absent -- not a bad selector.
+
 When you reject, say what the value ACTUALLY is, not that it is wrong. Your \
 reason is fed back verbatim to the component that will pick a new locator, so \
 "this is the breadcrumb trail, the product title is in the h1 below it" is \
@@ -125,6 +165,7 @@ _JSON_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "field": {"type": "string"},
                     "ok": {"type": "boolean"},
+                    "absent": {"type": "boolean"},
                     "reason": {"type": "string"},
                 },
                 "required": ["field", "ok"],
@@ -179,11 +220,18 @@ def parse_verdict(raw: dict[str, Any], fields: dict[str, FieldSpec]) -> DataVerd
         if name not in fields:
             continue
         ok = bool(item.get("ok", True))
+        absent = bool(item.get("absent", False))
         reason = str(item.get("reason") or "").strip()
         if not ok and not reason:
             ok = True
+            absent = False
             reason = "rejected without a reason, so it was not acted on"
-        verdicts[name] = FieldVerdict(field=name, ok=ok, reason=reason)
+        # `absent` only means anything on a rejection. A field marked present
+        # and absent at once is a confused reply, and the safe reading is that
+        # the value stands.
+        verdicts[name] = FieldVerdict(
+            field=name, ok=ok, reason=reason, absent=absent and not ok
+        )
 
     return DataVerdict(passed=all(v.ok for v in verdicts.values()), verdicts=verdicts)
 

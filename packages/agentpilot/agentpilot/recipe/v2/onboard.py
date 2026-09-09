@@ -77,6 +77,21 @@ DEFAULT_MAX_REPEAT_ITERATIONS = 20
 # the row without limit.
 _MAX_NARRATED_STEPS = 40
 
+# How many times a field may fail to resolve before it is presumed not to be on
+# this page at all.
+#
+# Without this, a field the caller asked for that the page simply does not have
+# is re-proposed on every single exploration step: fifteen model calls, fifteen
+# verification rounds, and fifteen identical failures, for a value that was
+# never there. The contract had no way to say "absent" -- only "not found yet"
+# -- so the search never stopped.
+#
+# Two is deliberate. One miss is uninformative: the field may be behind an
+# accordion the agent has not opened yet, which is the entire reason the loop
+# explores rather than reading once. Two consecutive misses *with no progress
+# anywhere on the page in between* is a different thing.
+_MAX_FIELD_ATTEMPTS = 2
+
 ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
 """Called after each exploration step with a snapshot of what the build is
 doing. Injected rather than imported so the module has no opinion about where
@@ -226,6 +241,10 @@ class ExplorationState:
         self._pending_steps: list[Step] = []
         self._global_setup_captured = False
         self._failures: dict[str, str] = {}
+        # Consecutive misses per field, and what that count is allowed to
+        # conclude. See `_MAX_FIELD_ATTEMPTS`.
+        self._misses: dict[str, int] = {}
+        self.presumed_absent: set[str] = set()
 
         self.global_setup: list[Step] = []
         self.field_groups: list[FieldGroup] = []
@@ -296,18 +315,56 @@ class ExplorationState:
         structured = await self._reader.structured_data()
         snapshot_text = serialize(snapshot).llm_text
 
+        # A field presumed absent is not proposed again. This is the whole of
+        # the fix for the loop: the model was being asked, every step, to find
+        # something that is not there, and answering honestly ("I could not")
+        # did nothing to stop it being asked again.
+        looking_for = {
+            name: spec
+            for name, spec in self._unfound.items()
+            if name not in self.presumed_absent
+        }
+        if not looking_for:
+            await self._narrate(step_record, [])
+            return
+
         verified = await propose_and_verify(
-            self._unfound,
+            looking_for,
             snapshot_text=snapshot_text,
             structured_data=structured,
             llm_config=self._llm_config,
             verify=self._reader.read,
             max_retries=self._verify_max_retries,
             verified_on=1,
+            # `url_resolve` needs it, and without it every url field would
+            # validate a relative href against nothing and pass.
+            page_url=self._reader.base_url,
         )
-        for name in self._unfound:
-            if name not in verified:
+        # A step that found something is evidence the page moved somewhere
+        # useful, so every field gets its patience back: what was invisible a
+        # moment ago may be on screen now. A step that found nothing is not, so
+        # the counters advance.
+        progressed = bool(verified)
+        for name in looking_for:
+            if name in verified:
+                self._misses.pop(name, None)
+                continue
+            if progressed:
+                self._misses[name] = 0
+                self._failures[name] = "not found yet on this page state"
+                continue
+            missed = self._misses.get(name, 0) + 1
+            self._misses[name] = missed
+            if missed >= _MAX_FIELD_ATTEMPTS:
+                self.presumed_absent.add(name)
+                self._failures[name] = (
+                    f"looked for it {missed} times and found nothing -- it may simply "
+                    "not be on this page"
+                )
+                log.info("onboard.field_presumed_absent", field=name, attempts=missed)
+            else:
                 self._failures[name] = "no proposed locator resolved on this page state"
+
         if not verified:
             await self._narrate(step_record, [])
             return

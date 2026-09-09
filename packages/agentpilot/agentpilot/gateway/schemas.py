@@ -492,14 +492,25 @@ class RecipeResolutionIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     field: str
-    action: Literal["pick", "describe", "skip"]
+    action: Literal["pick", "scope", "describe", "skip"]
     locators: list[dict[str, Any]] = []
-    """`pick`: what the person clicked, as v2 locators. The studio's existing
-    picker already produces these -- the run is parked on a live session, so
-    they are looking at the same page the agent gave up on."""
+    """`pick`: the element they clicked. `scope`: the REGION they pointed at,
+    which becomes a `within` for whatever the model finds inside it.
+
+    Both come from the studio's existing picker -- the run is parked on a live
+    session, so they are looking at the same page the agent gave up on."""
     hint: str = ""
     """`describe`: e.g. "it's inside the Details accordion, open that first".
     Fed to the selector agent as feedback rather than used as a selector."""
+    shape: Literal["one", "values", "map", "rows"] = "one"
+    """`scope`: what they want out of the region. A section is rarely one value
+    -- a specifications block is an open key->value map -- and binding one as a
+    scalar is how a whole table comes back as its own heading."""
+    html: str = Field(default="", max_length=40_000)
+    """`scope`: the region's markup, sent from the browser that already had the
+    element rather than re-read server-side. Prompt context only: every proposal
+    is still verified against the live page, so a stale fragment costs accuracy,
+    never correctness."""
 
 
 class RecipeAssistRequest(BaseModel):

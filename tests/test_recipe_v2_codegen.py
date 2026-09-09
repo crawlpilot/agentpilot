@@ -227,3 +227,17 @@ async def test_the_prompt_states_the_two_rules_a_naive_script_gets_wrong(
 
     assert "EACH GROUP RE-NAVIGATES" in codegen_mod._SYSTEM_PROMPT
     assert "FIRST NON-EMPTY WINS" in codegen_mod._SYSTEM_PROMPT
+
+
+def test_the_language_pack_states_the_either_or_transform_rule() -> None:
+    """`resolve_field` reads `cand.transform if cand.transform is not None else
+    spec.transform` -- either/or. The pack used to say the candidate's applied
+    "then the field's applies to the result", so a generated script would
+    double-transform any field carrying both and quietly disagree with the
+    recipe it was generated from."""
+
+    pack = codegen_mod._LANGUAGE_PACKS["python-playwright"]
+    prompt = codegen_mod._SYSTEM_PROMPT
+    assert "REPLACES THE FIELD'S" in prompt
+    assert "NEVER run both" in prompt
+    assert pack  # the pack itself stays about the target language

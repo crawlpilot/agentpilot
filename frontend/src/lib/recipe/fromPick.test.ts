@@ -10,6 +10,7 @@ import {
   toPreviewFields,
   toPreviewRowsFields,
   detailPickToDraft,
+  scopeFromPick,
   itemsToRecipe,
   jsonHitToDraft,
   planGroups,
@@ -222,6 +223,50 @@ describe('listPickToDrafts', () => {
     expect(Object.keys(draft.spec.type.columns ?? {}).sort()).toEqual(
       Object.keys(draft.columns!).sort(),
     )
+  })
+})
+
+describe('scopeFromPick', () => {
+  // The failure this exists for: on Walmart, clicking "Specifications" bound
+  // the accordion's heading, and the recipe returned the string
+  // "Specifications" instead of the spec table under it.
+  const SECTION = `
+    <section class="specs">
+      <h3 class="specs-title">Specifications</h3>
+      <dl><dt>Brand</dt><dd>Dove</dd><dt>Size</dt><dd>20 oz</dd></dl>
+    </section>`
+
+  it('takes the region as a scope rather than a value to read', async () => {
+    document.body.innerHTML = SECTION
+    const scope = scopeFromPick(await pick('detail', 'section.specs'))
+
+    expect(scope.locators.length).toBeGreaterThan(0)
+    // Whatever chain it produces has to select the section itself.
+    const selector = scope.locators[0].selector!
+    const found = document.querySelector(selector)
+    expect(found?.tagName).toBe('SECTION')
+  })
+
+  it('offers a fallback chain, not a single selector', async () => {
+    document.body.innerHTML = SECTION
+    const scope = scopeFromPick(await pick('detail', 'section.specs'))
+    // A class-based selector that stops resolving should fall through to
+    // something structural, exactly as a value binding's chain does.
+    expect(scope.locators.length).toBeGreaterThan(1)
+  })
+
+  it('reports what the selection reads, so a heading pick is visible', async () => {
+    document.body.innerHTML = SECTION
+    const heading = scopeFromPick(await pick('detail', 'h3.specs-title'))
+    // This is the mistake, surfaced BEFORE submitting: a short reading that is
+    // the label rather than the data.
+    expect(heading.preview).toBe('Specifications')
+  })
+
+  it('returns nothing usable rather than a bare tag selector', async () => {
+    document.body.innerHTML = `<div></div>`
+    const scope = scopeFromPick({ success: false } as unknown as PickPayload)
+    expect(scope.locators).toEqual([])
   })
 })
 

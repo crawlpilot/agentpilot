@@ -226,6 +226,7 @@ class PageReader:
         self.base_url = base_url
         self._structured: dict[str, Any] | None = None
         self._snapshot: EnhancedDOMTreeNode | None = None
+        self._url: str | None = None
 
     def invalidate(self) -> None:
         """Drop the caches. Called after any step that mutates the page --
@@ -234,6 +235,20 @@ class PageReader:
 
         self._structured = None
         self._snapshot = None
+        self._url = None
+
+    async def current_url(self) -> str:
+        """Where the page actually is now.
+
+        `base_url` is where it was *asked* to go. The two diverge the moment a
+        click navigates, and telling them apart is what says whether two reads
+        happened on the same page at all.
+        """
+
+        if self._url is None:
+            got = await self._eval_js("location.href")
+            self._url = str(got) if isinstance(got, str) else ""
+        return self._url
 
     async def structured_data(self) -> dict[str, Any]:
         if self._structured is None:

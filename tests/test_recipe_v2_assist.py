@@ -366,3 +366,43 @@ async def test_a_park_still_within_its_deadline_is_left_alone(
     await store.reclaim_expired_parks(grace_seconds=60.0)
     row = await store.get_run(run.run_id, tenant)
     assert row is not None and row.status == "needs_input"
+
+
+# --- pointing at a section rather than a value -------------------------------
+
+
+def test_a_scope_needs_the_regions_locators() -> None:
+    """Without them there is nothing to scope to, and binding unscoped would
+    search the whole page -- which is what the person was avoiding."""
+
+    assert parse_resolutions([{"field": "price", "action": "scope"}], _asks()) == {}
+
+
+def test_a_scope_carries_its_shape_and_markup() -> None:
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "scope",
+            "locators": [{"kind": "css", "selector": "#specs"}],
+            "shape": "map",
+            "html": "<dl><dt>Brand</dt><dd>Dove</dd></dl>",
+        }],
+        _asks(),
+    )
+    assert got["price"].action == "scope"
+    assert got["price"].shape == "map"
+    assert "Brand" in got["price"].html
+
+
+def test_an_unknown_shape_falls_back_to_a_single_value() -> None:
+    """A shape decides the field's TypeSpec, so an unrecognised one must not
+    reach `TypeSpec` and produce something unbindable."""
+
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "scope",
+            "locators": [{"kind": "css", "selector": "#specs"}],
+            "shape": "constellation",
+        }],
+        _asks(),
+    )
+    assert got["price"].shape == "one"

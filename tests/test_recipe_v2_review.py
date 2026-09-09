@@ -129,19 +129,79 @@ async def test_a_rejection_is_fed_back_and_the_repair_can_fix_it(stubs) -> None:
 
 async def test_the_repair_budget_is_bounded(stubs) -> None:
     """Each round costs a page load, the group's step sequence and a proposal
-    call."""
+    call. A different field each round keeps making progress, so the budget is
+    what stops it."""
 
     stubs["verdicts"] = [
-        DataVerdict(passed=False, verdicts={"name": FieldVerdict("name", False, "no")})
-        for _ in range(6)
+        DataVerdict(passed=False, verdicts={"name": FieldVerdict("name", False, "no")}),
+        DataVerdict(passed=False, verdicts={"price": FieldVerdict("price", False, "no")}),
+        DataVerdict(passed=False, verdicts={"name": FieldVerdict("name", False, "no")}),
     ]
-    stubs["repair_returns"] = {"name"}
+    stubs["repair_returns"] = {"name", "price"}
 
     _recipe_out, result = await _run(stubs, max_repairs=2)
 
     assert result.repairs == 2
-    assert result.unrepaired == {"name": "no"}
     assert result.ready_for_review is False
+
+
+async def test_a_field_rejected_twice_stops_being_repaired(stubs) -> None:
+    """THE loop. Asked to find something that is not on the page, the model
+    obliges: it returns a different wrong element every round, the judge rejects
+    that one too, and the two of them will keep at it as long as the budget
+    allows. A field already re-bound once and rejected again is not converging,
+    whatever the reason given."""
+
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={"name": FieldVerdict("name", False, "still wrong")})
+        for _ in range(6)
+    ]
+    stubs["repair_returns"] = {"name"}
+
+    _recipe_out, result = await _run(stubs, max_repairs=5)
+
+    # One attempt, not five.
+    assert result.repairs == 1
+    assert result.unrepaired == {"name": "still wrong"}
+
+
+async def test_an_absent_field_is_never_sent_to_repair(stubs) -> None:
+    """Repair cannot conjure a value the page does not have. Feeding it one
+    asks the selector agent to find something that is not there -- which is
+    exactly how the loop starts."""
+
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={
+            "name": FieldVerdict("name", False, "no warranty section on this page", absent=True),
+        }),
+    ]
+    stubs["repair_returns"] = {"name"}
+
+    _recipe_out, result = await _run(stubs, max_repairs=3)
+
+    assert result.repairs == 0
+    assert stubs["repairs"] == []
+    # It still reaches a person -- just with the right question.
+    assert result.absent == {"name": "no warranty section on this page"}
+
+
+async def test_absence_is_kept_apart_from_being_wrong(stubs) -> None:
+    """They need different questions put to a person: "which one is right?" is
+    answerable by pointing, "it is not here" is answered by dropping it."""
+
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={
+            "name": FieldVerdict("name", False, "that is the breadcrumb"),
+            "price": FieldVerdict("price", False, "this page shows no price", absent=True),
+        }),
+    ]
+    stubs["repair_returns"] = set()
+
+    _recipe_out, result = await _run(stubs, max_repairs=2)
+
+    assert "price" not in stubs["repairs"][0]
+    assert stubs["repairs"][0] == {"name": "that is the breadcrumb"}
+    assert result.absent == {"price": "this page shows no price"}
 
 
 async def test_a_repair_that_changes_nothing_stops_the_loop(stubs) -> None:
@@ -242,3 +302,76 @@ def test_a_sample_run_carries_the_values_it_collected() -> None:
         field_status={"name": "resolved"},
     )
     assert run.to_dict()["data"] == {"name": "Ribbed top", "price": 2290}
+
+
+# --- narrating the check ----------------------------------------------------
+
+
+async def test_the_check_is_narrated_end_to_end(stubs) -> None:
+    """This phase decides whether the recipe is any good and takes minutes. It
+    used to emit one "checking..." line and then go dark for all of it."""
+
+    seen: list[dict] = []
+
+    async def sink(payload: dict) -> None:
+        seen.append(payload)
+
+    stubs["verdicts"] = [DataVerdict(passed=True)]
+    await _run(stubs, on_progress=sink)
+
+    steps = [p.get("step") for p in seen]
+    assert steps == ["replaying", "replayed", "judging", "judged"]
+    # Every line carries the recipe as it stands, so the UI can render it while
+    # it is being checked rather than only once the run ends.
+    assert all("recipe" in p for p in seen)
+    assert all(p["phase"] == "verifying" for p in seen)
+
+
+async def test_the_judges_findings_are_reported_as_they_land(stubs) -> None:
+    seen: list[dict] = []
+
+    async def sink(payload: dict) -> None:
+        seen.append(payload)
+
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={
+            "name": FieldVerdict("name", False, "this is the breadcrumb trail"),
+        }),
+        DataVerdict(passed=True),
+    ]
+    stubs["repair_returns"] = {"name"}
+
+    await _run(stubs, on_progress=sink)
+
+    judged = next(p for p in seen if p["step"] == "judged")
+    assert judged["verdict"]["fields"]["name"]["ok"] is False
+
+    repairing = next(p for p in seen if p["step"] == "repairing")
+    assert repairing["rejected"] == {"name": "this is the breadcrumb trail"}
+    repaired = next(p for p in seen if p["step"] == "repaired")
+    assert repaired["fields"] == ["name"]
+
+
+async def test_the_collected_values_travel_with_the_narration(stubs) -> None:
+    """The recipe alone does not answer "is this any good?" -- the values it
+    produced do, and they have to arrive together to be read together."""
+
+    seen: list[dict] = []
+
+    async def sink(payload: dict) -> None:
+        seen.append(payload)
+
+    await _run(stubs, on_progress=sink)
+    replayed = next(p for p in seen if p["step"] == "replayed")
+    assert replayed["collected"] == {"name": "Home / Tops", "price": 2290}
+    assert replayed["runs"][0]["outcome"] == "ok"
+
+
+async def test_a_failing_progress_sink_cannot_fail_the_check(stubs) -> None:
+    """A progress line that can fail a build would be absurd."""
+
+    async def boom(_payload: dict) -> None:
+        raise RuntimeError("the database went away")
+
+    _recipe_out, result = await _run(stubs, on_progress=boom)
+    assert result.ready_for_review is True

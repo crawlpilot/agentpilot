@@ -197,7 +197,7 @@ async def test_only_resolving_locators_survive() -> None:
         [Locator(kind="css", selector=".missing"), Locator(kind="css", selector=".real")],
         verify=verify,
     )
-    assert [s.selector for s in survivors] == [".real"]
+    assert [s.locator.selector for s in survivors] == [".real"]
     assert reason is None
 
 
@@ -438,3 +438,314 @@ async def test_the_fallback_pass_can_be_turned_off(monkeypatch) -> None:
         dom_fallbacks=False,
     )
     assert len(stub.prompts) == 1
+
+
+# --- locating a field inside a region a person pointed at --------------------
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_proposal_is_bound_within_the_region(monkeypatch) -> None:
+    """The person supplies the region -- the part they can see -- and the model
+    supplies which node in it holds the value. `within` is what carries their
+    half through to replay, and is why the binding survives a redesign of
+    everything outside the section."""
+
+    from agentpilot.recipe.v2.selector_agent import propose_within
+
+    async def fake(messages, **kwargs):
+        return {"fields": [{"field": "price", "candidates": [
+            {"kind": "css", "selector": "dd.price"},
+        ]}]}
+
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.chat_json_conversation", fake)
+
+    got = await propose_within(
+        {"price": FIELDS["price"]},
+        scope=Locator(kind="css", selector="#specs"),
+        fragment_html="<dl><dd class=price>9550</dd></dl>",
+        llm_config=None,
+        verify=fake_page({("css", "dd.price"): "9550"}),
+    )
+
+    locator = got["price"][0].locator
+    assert locator.selector == "dd.price"
+    assert locator.within is not None
+    assert locator.within.selector == "#specs"
+
+
+@pytest.mark.asyncio
+async def test_a_structured_candidate_is_not_scoped(monkeypatch) -> None:
+    """A JSON path has no DOM container, so attaching one would make it
+    unresolvable -- and those are the candidates worth keeping most."""
+
+    from agentpilot.recipe.v2.selector_agent import propose_within
+
+    async def fake(messages, **kwargs):
+        return {"fields": [{"field": "price", "candidates": [
+            {"kind": "hydration", "path": "props.price"},
+        ]}]}
+
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.chat_json_conversation", fake)
+
+    got = await propose_within(
+        {"price": FIELDS["price"]},
+        scope=Locator(kind="css", selector="#specs"),
+        fragment_html="<dl></dl>",
+        llm_config=None,
+        verify=fake_page({("hydration", "props.price"): "9550"}),
+    )
+    assert got["price"][0].locator.within is None
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_proposal_that_does_not_resolve_is_dropped(monkeypatch) -> None:
+    """A person pointing at the right region does not make a proposal correct.
+    Binding one unchecked swaps a known gap for a silent one."""
+
+    from agentpilot.recipe.v2.selector_agent import propose_within
+
+    async def fake(messages, **kwargs):
+        return {"fields": [{"field": "price", "candidates": [
+            {"kind": "css", "selector": ".nope"},
+        ]}]}
+
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.chat_json_conversation", fake)
+
+    got = await propose_within(
+        {"price": FIELDS["price"]},
+        scope=Locator(kind="css", selector="#specs"),
+        fragment_html="<dl></dl>",
+        llm_config=None,
+        verify=fake_page({}),
+    )
+    assert got == {}
+
+
+def test_the_scoped_prompt_warns_off_the_heading() -> None:
+    """The failure this exists for: clicking "Specifications" and getting back
+    the string "Specifications"."""
+
+    from agentpilot.recipe.v2 import selector_agent as mod
+
+    assert "is NOT the value" in mod._WITHIN_SYSTEM_PROMPT
+    # Relative xpath, or the scope is ignored entirely.
+    assert "Keep xpath RELATIVE" in mod._WITHIN_SYSTEM_PROMPT
+
+
+# --- the transform is part of what is verified -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_time_verification_agrees_with_replay() -> None:
+    """THE guard. `verify_locators` and `resolve_field` must reach the same
+    accept/reject decision for the same value, spec and locator.
+
+    They did not, and that disagreement IS the bug: the build said "verified" on
+    a raw read, replay applied the transform and got nothing, and the judge was
+    the first thing in the pipeline to notice. A test is the only thing that
+    keeps the two together as either changes.
+    """
+
+    from agentpilot.recipe.v2.resolve import resolve_field
+    from agentpilot.recipe.v2.transform import TransformContext
+
+    cases = {
+        "₹ 9,550.00": True,          # cleans up to 9550.0
+        "Contact us for pricing": False,  # reads fine, casts to nothing
+        "   ": False,                # blank
+    }
+    spec = FIELDS["price"]
+    ctx = TransformContext()
+
+    for raw, expected in cases.items():
+        locator = Locator(kind="css", selector=".p")
+        survivors, _reason = await verify_locators(
+            [locator], verify=fake_page({("css", ".p"): raw}), spec=spec, ctx=ctx
+        )
+        build_accepted = bool(survivors)
+
+        async def evaluate(_loc, value=raw):
+            return value
+
+        resolution = await resolve_field(
+            spec,
+            [Candidate(locator=locator, transform=infer_transform(spec, locator))],
+            evaluate=evaluate,
+            ctx=ctx,
+        )
+        replay_accepted = resolution.status in ("resolved", "fallback")
+
+        assert build_accepted == replay_accepted == expected, f"disagreed on {raw!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_value_that_cleans_up_to_nothing_is_rejected_here() -> None:
+    """"Contact us for pricing" read perfectly and verified perfectly, then
+    became None at replay. Rejecting it here lets the next candidate be tried
+    while the page is still open."""
+
+    survivors, reason = await verify_locators(
+        [Locator(kind="css", selector=".p")],
+        verify=fake_page({("css", ".p"): "Contact us for pricing"}),
+        spec=FIELDS["price"],
+    )
+    assert survivors == []
+    # And the reason is one a model can act on -- it quotes what was read.
+    assert "Contact us for pricing" in (reason or "")
+
+
+@pytest.mark.asyncio
+async def test_the_cleaned_value_is_returned_not_just_the_locator() -> None:
+    """What the field will actually contain. Nothing at build time could see
+    this before -- it existed only at replay, behind a judge."""
+
+    survivors, _reason = await verify_locators(
+        [Locator(kind="css", selector=".p")],
+        verify=fake_page({("css", ".p"): "₹ 9,550.00"}),
+        spec=FIELDS["price"],
+    )
+    assert survivors[0].raw == "₹ 9,550.00"
+    assert survivors[0].value == 9550.0
+
+
+@pytest.mark.asyncio
+async def test_url_resolution_is_validated_against_the_page_url() -> None:
+    """The case that silently passes if the context is dropped: a relative href
+    joined against nothing stays relative, and looks fine."""
+
+    from agentpilot.recipe.v2.transform import TransformContext
+
+    spec = FieldSpec(name="link", type=TypeSpec(kind="scalar", value_type="url"))
+    survivors, _reason = await verify_locators(
+        [Locator(kind="css", selector="a", attribute="href")],
+        verify=fake_page({("css", "a"): "/p/123"}),
+        spec=spec,
+        ctx=TransformContext(url="https://shop.test/c/shoes"),
+    )
+    assert survivors[0].value == "https://shop.test/p/123"
+
+
+@pytest.mark.asyncio
+async def test_an_assertion_failure_flags_and_does_not_reject() -> None:
+    """An assertion the build guessed is a weaker claim than a value read off
+    the page, so it annotates rather than discards."""
+
+    from agentpilot.recipe.v2.schema import Assertion
+
+    spec = FieldSpec(
+        name="price",
+        type=TypeSpec(kind="scalar", value_type="price"),
+        assertions=[Assertion(kind="range", min=0)],
+    )
+    # Read from JSON, where the pipeline is a bare cast -- the DOM pipeline's
+    # digit extraction would strip the sign before any assertion saw it.
+    survivors, _reason = await verify_locators(
+        [Locator(kind="json_ld", path="p")],
+        verify=fake_page({("json_ld", "p"): "-5"}),
+        spec=spec,
+    )
+    assert survivors[0].value == -5.0
+    assert any("range" in note for note in survivors[0].notes)
+
+
+@pytest.mark.asyncio
+async def test_without_a_spec_the_raw_only_rule_is_kept() -> None:
+    """Callers with no field to transform against are unaffected."""
+
+    survivors, _reason = await verify_locators(
+        [Locator(kind="css", selector=".p")],
+        verify=fake_page({("css", ".p"): "Contact us for pricing"}),
+    )
+    assert len(survivors) == 1
+
+
+# --- repairing the pipeline, not the selector --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_transform_failure_asks_for_a_transform(monkeypatch) -> None:
+    """The selector was right and the cleanup was wrong. Re-asking for a
+    different locator returns another one onto the same kind of text, which
+    fails the same way -- which is most of the loop."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "price", "candidates": [{"kind": "css", "selector": ".p"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    asked: dict = {}
+
+    async def fake_transform(messages, **kwargs):
+        asked["user"] = messages[1]["content"]
+        return {"transform": [
+            {"op": "regex_replace", "pattern": "^Free$", "repl": "0"},
+            {"op": "cast", "to": "price"},
+        ]}
+
+    monkeypatch.setattr(
+        "agentpilot.recipe.v2.selector_agent.chat_json_conversation", fake_transform
+    )
+
+    got = await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={},
+        llm_config=None,
+        # No digits, so the inferred `regex_extract` empties it -- the exact
+        # shape of failure that used to reach the judge as "wrong value".
+        verify=fake_page({("css", ".p"): "Free"}),
+        dom_fallbacks=False,
+    )
+
+    # It was asked about the cleanup, with the text that broke it.
+    assert "Free" in asked["user"]
+    # And kept the selector, which was never the problem.
+    assert got["price"][0].locator.selector == ".p"
+
+
+@pytest.mark.asyncio
+async def test_a_proposed_pipeline_is_run_before_it_is_accepted(monkeypatch) -> None:
+    """The same propose-then-verify discipline this module applies to locators,
+    applied to the other half of a binding."""
+
+    # Two replies: the repair fails, so the ordinary retry runs once more.
+    stub = StubLLM([
+        {"fields": [{"field": "price", "candidates": [{"kind": "css", "selector": ".p"}]}]},
+        {"fields": [{"field": "price", "candidates": [{"kind": "css", "selector": ".p"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    async def useless(messages, **kwargs):
+        # Parses, runs, and still yields nothing on this text.
+        return {"transform": [{"op": "regex_extract", "pattern": "zzz"}]}
+
+    monkeypatch.setattr(
+        "agentpilot.recipe.v2.selector_agent.chat_json_conversation", useless
+    )
+
+    got = await propose_and_verify(
+        {"price": FIELDS["price"]},
+        snapshot_text="", structured_data={},
+        llm_config=None,
+        verify=fake_page({("css", ".p"): "Contact us for pricing"}),
+        dom_fallbacks=False,
+    )
+    assert got == {}
+
+
+@pytest.mark.asyncio
+async def test_declining_to_propose_a_pipeline_is_a_real_answer(monkeypatch) -> None:
+    """"Contact us for pricing" is not a price in any cleanup. An empty list
+    says so, and is more useful than a pipeline that cannot work."""
+
+    from agentpilot.recipe.v2.selector_agent import propose_transform
+
+    async def declines(messages, **kwargs):
+        return {"transform": []}
+
+    monkeypatch.setattr(
+        "agentpilot.recipe.v2.selector_agent.chat_json_conversation", declines
+    )
+    got = await propose_transform(
+        FIELDS["price"], "Contact us for pricing", llm_config=None
+    )
+    assert got is None

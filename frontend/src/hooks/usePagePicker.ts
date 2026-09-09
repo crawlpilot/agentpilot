@@ -19,6 +19,11 @@ import {
   type PickPayload,
 } from '@/lib/picker/protocol'
 
+// A region is small by construction -- that is what scoping buys -- so this
+// only bites on someone selecting most of the page, where the scope was worth
+// little anyway. Mirrors `_MAX_FRAGMENT_CHARS` in `selector_agent.py`.
+const MAX_FRAGMENT_CHARS = 20_000
+
 /**
  * Drives the visual picker inside a live session's page.
  *
@@ -95,6 +100,8 @@ export interface UsePagePicker {
   refine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
   /** Flash a selector's matches in the page; resolves with the match count. */
   testSelector: (selector: string) => Promise<number>
+  /** A region's markup, for handing the model something to search inside. */
+  outerHtml: (selector: string) => Promise<string>
   /** Resolve fields against the live page, exactly as replay would. */
   preview: (fields: PreviewField[]) => Promise<PreviewResult[]>
   /** Read a `dom_rows` table row-wise, exactly as replay would. */
@@ -153,6 +160,21 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     async (selector: string): Promise<number> => {
       const count = await run(`window.${PICKER_GLOBAL}.testSelector(${JSON.stringify(selector)})`)
       return typeof count === 'number' ? count : 0
+    },
+    [run],
+  )
+
+  const outerHtml = useCallback(
+    async (selector: string): Promise<string> => {
+      // Read straight from the page rather than adding a field to the picker
+      // payload, which would mean regenerating the vendored bundle for one
+      // string. The selector travels as a JSON literal, so one containing a
+      // quote is data rather than syntax -- the discipline `evaluate.py` uses.
+      const html = await run(
+        `(function(){var e=document.querySelector(${JSON.stringify(selector)});` +
+          `return e?e.outerHTML.slice(0,${MAX_FRAGMENT_CHARS}):'';})()`,
+      )
+      return typeof html === 'string' ? html : ''
     },
     [run],
   )
@@ -254,5 +276,8 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     [run],
   )
 
-  return { status, error, pick, cancel, refine, testSelector, preview, previewRows, applySteps, showHighlights }
+  return {
+    status, error, pick, cancel, refine, testSelector, outerHtml,
+    preview, previewRows, applySteps, showHighlights,
+  }
 }

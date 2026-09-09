@@ -782,7 +782,7 @@ export interface PendingAsk {
    * judged to be the wrong thing ("you picked the breadcrumb, which is the
    * title?"). Different questions, so they are shown differently.
    */
-  kind: 'unresolved' | 'rejected'
+  kind: 'unresolved' | 'rejected' | 'absent'
   reason: string
   /**
    * What the group's steps actually did. Without it an empty field behind a
@@ -794,11 +794,18 @@ export interface PendingAsk {
 
 export interface RecipeResolution {
   field: string
-  action: 'pick' | 'describe' | 'skip'
-  /** `pick`: v2 locators, as the studio picker already produces them. */
+  action: 'pick' | 'scope' | 'describe' | 'skip'
+  /**
+   * `pick`: the element clicked. `scope`: the REGION pointed at, which becomes
+   * a `within` for whatever the model finds inside it.
+   */
   locators?: Array<Record<string, unknown>>
   /** `describe`: a hint fed to the selector agent, not used as a selector. */
   hint?: string
+  /** `scope`: what the region should yield. A spec block is a `map`, not `one`. */
+  shape?: 'one' | 'values' | 'map' | 'rows'
+  /** `scope`: the region's markup, as prompt context. Verified against the live page regardless. */
+  html?: string
 }
 
 export interface RecipeAssistRequest {
@@ -819,4 +826,33 @@ export interface RunProgress {
   found?: string[]
   /** Fields still being looked for. */
   remaining?: string[]
+
+  // --- verifying / judging ---
+  /** Which part of the check is running. */
+  step?: 'replaying' | 'replayed' | 'judging' | 'judged' | 'repairing' | 'repaired'
+  /** Which round of replay-judge-repair this is. */
+  attempt?: number
+  /** The recipe as it currently stands, so it can be read while it is built. */
+  recipe?: Record<string, unknown>
+  /** Sample URLs being replayed against. */
+  urls?: string[]
+  runs?: Array<{
+    url?: string
+    outcome?: string
+    data?: Record<string, unknown>
+    field_status?: Record<string, string>
+    step_trace?: Array<Record<string, unknown>>
+  }>
+  /** What the replay collected, merged across sample pages. */
+  collected?: Record<string, unknown>
+  /** The judge's findings. */
+  verdict?: {
+    passed?: boolean
+    errored?: boolean
+    fields?: Record<string, { ok: boolean; reason?: string }>
+  } | null
+  /** Fields the judge rejected, with why — the input to a repair round. */
+  rejected?: Record<string, string>
+  /** Fields a repair round actually re-bound. */
+  fields?: string[]
 }

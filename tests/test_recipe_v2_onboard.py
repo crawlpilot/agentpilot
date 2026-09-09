@@ -38,6 +38,10 @@ def _tree():
 class _Reader:
     """Stands in for `PageReader`: a fixed tree, no page."""
 
+    # Verification transforms the value it reads, and `url_resolve` needs the
+    # page it was read from -- so the fake has to carry one too.
+    base_url = "https://x.test/p/1"
+
     def __init__(self) -> None:
         self.invalidated = 0
 
@@ -378,3 +382,70 @@ async def test_a_failing_progress_sink_cannot_break_the_build(patched) -> None:
 
     # The field was still frozen, which is the thing that actually matters.
     assert len(state.field_groups) == 1
+
+
+# --- not looking for what is not there ---------------------------------------
+
+
+async def test_a_field_that_keeps_missing_stops_being_proposed(patched) -> None:
+    """THE loop, at its source. A field the page does not have was re-proposed
+    on every exploration step -- fifteen model calls and fifteen identical
+    failures for a value that was never there, because the contract could say
+    "not found yet" but not "not there"."""
+
+    asked: list[list[str]] = []
+
+    def answer(unfound):
+        asked.append(sorted(unfound))
+        return {}
+
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    patched.answer = answer
+
+    for _ in range(4):
+        await state.on_step(_step([]))
+
+    # Asked twice, then it stopped asking.
+    assert asked == [["price", "title"], ["price", "title"]]
+    assert state.presumed_absent == {"price", "title"}
+    assert "may simply not be on this page" in state.failures["price"]
+
+
+async def test_progress_anywhere_gives_every_field_its_patience_back(patched) -> None:
+    """A step that found something is evidence the page moved somewhere useful:
+    what was invisible a moment ago may be on screen now. Counting those against
+    a field would give up on it for the crime of being behind an accordion --
+    which is the entire reason the loop explores rather than reading once."""
+
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {}
+    await state.on_step(_step([]))
+    # `title` resolves; `price` misses, but the page demonstrably changed.
+    patched.answer = lambda unfound: {"title": _css("h1")} if "title" in unfound else {}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+    patched.answer = lambda unfound: {}
+    await state.on_step(_step([]))
+
+    # One miss before the progress, one after -- not two in a row.
+    assert state.presumed_absent == set()
+
+
+async def test_giving_up_on_one_field_does_not_stop_the_others(patched) -> None:
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {}
+    await state.on_step(_step([]))
+    await state.on_step(_step([]))
+    assert state.presumed_absent == {"price", "title"}
+
+    # Nothing left worth asking about, so no proposal call is made at all.
+    calls: list[int] = []
+
+    def count(unfound):
+        calls.append(len(unfound))
+        return {}
+
+    patched.answer = count
+    await state.on_step(_step([]))
+    assert calls == []

@@ -201,6 +201,52 @@ function containerScope(payload: PickPayload): Locator | undefined {
   }
 }
 
+/**
+ * A pick read as a REGION to search inside, rather than as a value to read.
+ *
+ * The difference is the whole point. `detailPickToDraft` binds the clicked
+ * element's own text, so the pick has to land on the exact node holding the
+ * value -- and on a page where the visible, clickable thing is a heading and
+ * the value is an unlabelled cell below it, that is the wrong thing to ask a
+ * person for. They know *where* the data is; which of the forty nodes in there
+ * holds it is the model's half.
+ *
+ * The chain is ordered widest-first: the element they settled on, then its
+ * XPath as a fallback. Both are sent, so a brittle class-based selector can
+ * fall through to a structural one.
+ */
+export function scopeFromPick(payload: PickPayload): {
+  locators: Locator[]
+  matched: number
+  preview: string
+} {
+  const locators: Locator[] = []
+  const seen = new Set<string>()
+  const push = (selector: string | undefined) => {
+    if (!selector || seen.has(selector)) return
+    seen.add(selector)
+    locators.push(toLocator(selector))
+  }
+
+  // The picked element itself. In detail mode the picker reports it as the
+  // "item"; `containerSelector` is the wrapper it sits in, which is a usable
+  // fallback but wider than what they pointed at.
+  for (const candidate of payload.itemSelectors ?? []) push(candidate.selector)
+  push(payload.itemSelector)
+  push(payload.itemXPath)
+  if (locators.length === 0) {
+    for (const candidate of payload.containerSelectors ?? []) push(candidate.selector)
+    push(payload.containerSelector)
+    push(payload.containerXPath)
+  }
+
+  return {
+    locators,
+    matched: payload.count ?? 0,
+    preview: (payload.previewValue ?? '').trim(),
+  }
+}
+
 /** A column name the recipe document can key on. */
 export function toFieldName(raw: string, taken: Iterable<string> = []): string {
   const used = new Set(taken)

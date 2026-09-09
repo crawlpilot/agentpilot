@@ -33,6 +33,7 @@ from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.v2.evaluate import PageReader
 from agentpilot.recipe.v2.judge import DataVerdict, judge_collection
 from agentpilot.recipe.v2.models import Candidate, FieldGroup, Recipe, RunInput
+from agentpilot.recipe.v2.onboard import ProgressSink
 from agentpilot.recipe.v2.replay import replay_recipe
 from agentpilot.recipe.v2.schema import all_leaf_fields, column_to_table_map
 from agentpilot.recipe.v2.selector_agent import propose_and_verify
@@ -88,6 +89,14 @@ class ReviewResult:
     unrepaired: dict[str, str] = field(default_factory=dict)
     """Fields the judge rejected that repair could not fix. These go to the
     assist loop -- a human is the next thing to try."""
+
+    absent: dict[str, str] = field(default_factory=dict)
+    """Fields the judge says the page does not contain at all.
+
+    Kept apart from `unrepaired` because they need a different question put to a
+    person. "This looks wrong, which one is right?" is answerable by pointing at
+    something; "this is not on this page" is answered by dropping the field, or
+    by realising it lives on a different page entirely."""
 
     @property
     def ready_for_review(self) -> bool:
@@ -228,27 +237,16 @@ async def repair_fields(
     escalates it to a human either way.
     """
 
-    from agentpilot.recipe.v2.steps import StepContext, run_steps
+    from agentpilot.recipe.v2.steps import run_steps
 
     leaves = all_leaf_fields(recipe.fields)
     wanted = {name: leaves[name] for name in rejected if name in leaves}
     if not wanted:
         return recipe, set()
 
-    reader = PageReader(session=session, registry=registry, driver=driver, base_url=url)
-    ctx = StepContext(
-        session=session, registry=registry, driver=driver, reader=reader, meta={},
-        defaults_timeout_ms=recipe.defaults.step_timeout_ms,
+    reader, ctx = await restore_page(
+        recipe, url, session=session, registry=registry, driver=driver
     )
-
-    # Put the page back into the state the fields were read from. Without the
-    # group's own steps a field behind an accordion is judged, rejected, and
-    # then re-proposed against a page where it is not visible -- so the repair
-    # would fail for a reason that has nothing to do with the rejection.
-    await _navigate_for_repair(recipe, url, session=session, registry=registry, driver=driver)
-    reader.invalidate()
-    if recipe.global_setup:
-        await run_steps(recipe.global_setup, ctx)
 
     repaired: set[str] = set()
     groups = list(recipe.field_groups)
@@ -270,6 +268,7 @@ async def repair_fields(
             structured_data=await reader.structured_data(),
             llm_config=llm_config,
             verify=reader.read,
+            page_url=url,
             failures={name: rejected[name] for name in targets},
             # The rejection is about *which element*, and a second opinion from
             # the same wrong source would not help. One pass is enough.
@@ -295,14 +294,26 @@ async def repair_fields(
     return recipe, repaired
 
 
-async def _navigate_for_repair(
+async def restore_page(
     recipe: Recipe,
     url: str,
     *,
     session: InteractiveSession,
     registry: RegistryProtocol,
     driver: BrowserDriver,
-) -> None:
+) -> tuple[PageReader, Any]:
+    """Load the page fresh and put it back into the state a recipe expects.
+
+    Navigate, then run `global_setup`. Both callers need exactly this and for
+    the same reason: whatever the session is currently showing is the state some
+    earlier step or some person left it in, and reasoning about a recipe against
+    that state is how a binding gets accepted here and fails on every real run.
+
+    Returns the reader and the step context, because the caller invariably wants
+    to run the group's own steps next.
+    """
+
+    from agentpilot.recipe.v2.steps import StepContext, run_steps
     from crawlpilot.session.interactive import execute_on_session
     from crawlpilot.spi import actions as spi_actions
 
@@ -317,6 +328,16 @@ async def _navigate_for_repair(
         driver=driver,
     )
 
+    reader = PageReader(session=session, registry=registry, driver=driver, base_url=url)
+    ctx = StepContext(
+        session=session, registry=registry, driver=driver, reader=reader, meta={},
+        defaults_timeout_ms=recipe.defaults.step_timeout_ms,
+    )
+    reader.invalidate()
+    if recipe.global_setup:
+        await run_steps(recipe.global_setup, ctx)
+    return reader, ctx
+
 
 async def verify_and_judge(
     recipe: Recipe,
@@ -328,6 +349,7 @@ async def verify_and_judge(
     llm_config: LLMConfig,
     max_repairs: int = DEFAULT_MAX_REPAIRS,
     sample_limit: int = DEFAULT_MAX_SAMPLE_RUNS,
+    on_progress: ProgressSink | None = None,
 ) -> tuple[Recipe, ReviewResult]:
     """Run it, judge it, repair what the judge rejected, run it again.
 
@@ -335,22 +357,45 @@ async def verify_and_judge(
     spent, or a repair round changing nothing -- that last one matters, because
     a model that cannot find a better locator will happily propose the same one
     forever.
+
+    `on_progress` narrates it. This phase is several page loads and two or three
+    model calls long, and it is the part where a person most wants to see what
+    is happening: it is deciding whether their recipe is any good. Without it
+    the UI showed one "checking..." line and then went dark for minutes.
     """
+
+    async def say(**payload: Any) -> None:
+        """Narrate, never at the cost of the work. A progress line that can fail
+        a build would be absurd."""
+
+        if on_progress is None:
+            return
+        try:
+            await on_progress({"phase": "verifying", "recipe": recipe.to_dict(), **payload})
+        except Exception:  # noqa: BLE001 - see docstring
+            log.debug("review.progress_write_failed", exc_info=True)
 
     result = ReviewResult()
     reader = PageReader(session=session, registry=registry, driver=driver)
+    # Fields repair has already had a go at, so a second rejection of the
+    # same field stops rather than starting another round.
+    tried: set[str] = set()
 
     for attempt in range(max_repairs + 1):
+        await say(step="replaying", attempt=attempt + 1,
+                  urls=sample_urls[:sample_limit])
         result.runs = await run_samples(
             recipe, sample_urls, session=session, registry=registry,
             driver=driver, limit=sample_limit,
         )
         data = merge_field_values(result.runs)
+        await say(step="replayed", runs=[r.to_dict() for r in result.runs], collected=data)
 
         reader.invalidate()
         snapshot = await reader.snapshot()
         page_text = serialize(snapshot).llm_text if snapshot is not None else ""
 
+        await say(step="judging", collected=data)
         result.verdict = await judge_collection(
             recipe.fields,
             data=data,
@@ -359,16 +404,33 @@ async def verify_and_judge(
             llm_config=llm_config,
         )
         rejected = result.verdict.rejected
-        if not rejected or attempt >= max_repairs:
+        result.absent = result.verdict.absent
+        await say(step="judged", verdict=result.verdict.to_dict(), collected=data)
+
+        # A field already re-bound once and rejected again is not converging.
+        # The model is picking a different wrong element each round, which is
+        # what happens when it is asked to find something that is not there and
+        # the judge has not said so outright. Two bites, then stop.
+        thrashing = {name: why for name, why in rejected.items() if name in tried}
+        if thrashing:
+            log.info("review.repair_thrashing", fields=sorted(thrashing))
+        repairable = {
+            name: why for name, why in rejected.items() if name not in tried
+        }
+
+        if not repairable or attempt >= max_repairs:
             result.unrepaired = rejected
             break
 
-        log.info("review.repairing", fields=sorted(rejected), attempt=attempt + 1)
+        log.info("review.repairing", fields=sorted(repairable), attempt=attempt + 1)
+        await say(step="repairing", attempt=attempt + 1, rejected=repairable)
+        tried.update(repairable)
         recipe, repaired = await repair_fields(
-            recipe, rejected, url=sample_urls[0] if sample_urls else "",
+            recipe, repairable, url=sample_urls[0] if sample_urls else "",
             session=session, registry=registry, driver=driver, llm_config=llm_config,
         )
         result.repairs += 1
+        await say(step="repaired", attempt=attempt + 1, fields=sorted(repaired))
         if not repaired:
             # Nothing changed, so another round would ask the same question of
             # the same page and get the same answer.

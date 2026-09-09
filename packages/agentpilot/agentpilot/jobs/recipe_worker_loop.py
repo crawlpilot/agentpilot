@@ -462,7 +462,6 @@ class RecipeWorkerLoop:
             )
             return
 
-        await publish({"phase": "verifying", "found": sorted(recipe.fields), "remaining": []})
 
         # Stages 6 and 7: run what was built, judge what it collected, repair
         # what the judge rejected. A draft reaches a human only once the judge
@@ -476,6 +475,7 @@ class RecipeWorkerLoop:
             llm_config=llm_config,
             max_repairs=cfg.max_judge_repairs,
             sample_limit=cfg.onboard_sample_runs,
+            on_progress=publish,
         )
 
         # Anything the agent could not find, and anything the judge rejected
@@ -483,7 +483,12 @@ class RecipeWorkerLoop:
         # is still sitting on. See `assist.py` for why the session staying open
         # is the whole point.
         asks = build_asks(
-            outcome.unresolved, review.unrepaired, step_trace=review.step_trace
+            outcome.unresolved,
+            review.unrepaired,
+            # Kept distinct all the way to the person: a field the page does
+            # not contain needs a decision, not another search.
+            absent=review.absent,
+            step_trace=review.step_trace,
         )
         if asks and cfg.assist_timeout_s > 0:
             recipe, unsettled = await self._await_assist(

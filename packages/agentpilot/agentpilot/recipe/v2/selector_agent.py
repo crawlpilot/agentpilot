@@ -30,12 +30,18 @@ from __future__ import annotations
 
 import json as _json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from typing import Any
+
+import structlog
 
 from agentpilot.llm.client import LLMConfig, chat_json_conversation
 from agentpilot.recipe.v2.models import Candidate, Locator
 from agentpilot.recipe.v2.schema import FieldSpec, render_fields_for_prompt
-from agentpilot.recipe.v2.transform import Transform, parse_transforms
+from agentpilot.recipe.v2.transform import Transform, TransformContext, parse_transforms
+
+log = structlog.get_logger(__name__)
 
 # Priority tiers written onto the accepted candidates. Structured data is the
 # most redesign-resistant source there is: a value in JSON-LD survives a
@@ -58,6 +64,12 @@ _MAX_STRUCTURED_CHARS = 12_000
 _MAX_SNAPSHOT_CHARS = 24_000
 
 MAX_CANDIDATES_PER_FIELD = 4
+
+# How much of a picked section's markup to show. A section is small by
+# construction -- that is the point of scoping -- and a cap this size only bites
+# on someone selecting most of the page, where scoping was buying nothing
+# anyway.
+_MAX_FRAGMENT_CHARS = 20_000
 
 # A callback that resolves one locator against the live page and returns the
 # raw value, or None. Injected -- see the module docstring.
@@ -250,6 +262,140 @@ async def propose_locators(
     return parse_proposals(raw, fields)
 
 
+_WITHIN_SYSTEM_PROMPT = """\
+A person has pointed at the REGION of a web page that contains a value they \
+want, and you are given that region's HTML. Find the value inside it.
+
+They pointed at the region, not the value, because the region is what a human \
+can see and the value is what you are better at locating. Expect the region to \
+contain a heading or label naming the thing -- that label is NOT the value. On \
+a specifications section, "Specifications" is the heading and the data is the \
+rows below it.
+
+Propose 1-4 css or xpath locators, best first, RELATIVE TO THE REGION. Do not \
+include the region's own selector in what you propose: it is applied \
+separately as a scope, so repeating it would look for the region inside \
+itself.
+
+Prefer a selector that would still work if the page around this region were \
+redesigned -- a `data-*` attribute, an `itemprop`, a semantic tag, a \
+relationship like `dt:has(+dd)`. Inside a region that is already scoped you \
+rarely need a class name at all.
+
+Use xpath for the one thing css cannot do: select a cell by its sibling's \
+text, e.g. `.//tr[th[normalize-space()='Item Weight']]/td`. Specification \
+tables are usually shaped that way. Keep xpath RELATIVE (`.//`, not `//`) -- \
+an absolute expression ignores the scope entirely and searches the whole page.
+
+Set `all` to true when the field is a list and the selector matches every item. \
+Set `attribute` to what you want to read: "text" (the default) reads \
+textContent and DOES see collapsed content, or name a real attribute like \
+"href" or "src".
+
+If the value genuinely is not in this region, return no candidates for it \
+rather than guessing. They may have pointed at the wrong region, and an empty \
+answer says so.\
+"""
+
+
+async def propose_within(
+    fields: dict[str, FieldSpec],
+    *,
+    scope: Locator,
+    fragment_html: str,
+    llm_config: LLMConfig,
+    verify: Verifier,
+    verified_on: int = 1,
+    page_url: str = "",
+) -> dict[str, list[Candidate]]:
+    """Locate fields inside a region a person pointed at.
+
+    The scoped counterpart to `propose_and_verify`, and it exists because the
+    two questions are different. Across a whole page the model is choosing among
+    thousands of nodes and the prompt is dominated by everything irrelevant;
+    inside a section it is choosing among dozens, and the person has already
+    supplied the piece of knowledge they actually had.
+
+    Every DOM proposal comes back carrying `within=scope`. That is not just
+    accuracy: a selector scoped to `#specifications` keeps working when the page
+    around it is redesigned, and stops matching a same-shaped table somewhere
+    else entirely.
+
+    Structured locators are deliberately NOT scoped. A `json_ld` path has no DOM
+    container, so attaching one would make it unresolvable -- and those are the
+    candidates worth keeping most.
+    """
+
+    # Imported here, matching the other call sites: this module is reached from
+    # the agent loop, and `agent.reliability` reaching back would close a cycle.
+    from agentpilot.agent.reliability import RetryStrategy
+
+    ctx = TransformContext(url=page_url)
+    user = (
+        f"Fields to find in this region:\n{render_fields_for_prompt(fields)}\n\n"
+        f"Region HTML:\n{fragment_html[:_MAX_FRAGMENT_CHARS]}"
+    )
+    raw = await RetryStrategy().execute(
+        lambda: chat_json_conversation(
+            [
+                {"role": "system", "content": _WITHIN_SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            config=llm_config,
+            json_schema=_JSON_SCHEMA,
+        )
+    )
+
+    verified: dict[str, list[Candidate]] = {}
+    for name, locators in parse_proposals(raw, fields).items():
+        scoped = [
+            loc if loc.is_structured else replace(loc, within=scope)
+            for loc in dedupe_locators(locators)
+        ]
+        # Verified against the live page like anything else. A person pointing
+        # at the right region does not make a proposal correct, and binding one
+        # unchecked would swap a known gap for a silent one.
+        spec = fields[name]
+        resolving, _reason = await verify_locators(
+            scoped, verify=verify, spec=spec, ctx=ctx
+        )
+        if not resolving:
+            continue
+        verified[name] = _to_candidates(spec, resolving, verified_on=verified_on)
+    return verified
+
+
+def _to_candidates(
+    spec: FieldSpec, verified: list[VerifiedLocator], *, verified_on: int
+) -> list[Candidate]:
+    """Ranked candidates from what actually produced a value.
+
+    The transform written onto each candidate is the one that was *run* during
+    verification, not one inferred again afterwards -- otherwise the recipe
+    could ship a pipeline nothing ever tested.
+    """
+
+    by_locator = {id(v.locator): v for v in verified}
+    out: list[Candidate] = []
+    for ranked in rank_candidates([v.locator for v in verified], verified_on=verified_on):
+        hit = by_locator.get(id(ranked.locator))
+        # `None` when the field carries its own pipeline, so `resolve_field`
+        # falls through to `spec.transform` -- which is the pipeline that was
+        # verified. Writing the inferred one here would shadow it at replay,
+        # exactly as it did at build time before `pipeline_for`.
+        transform = None if spec.transform else infer_transform(spec, ranked.locator)
+        out.append(
+            Candidate(
+                locator=ranked.locator,
+                priority=ranked.priority,
+                verified_on=ranked.verified_on,
+                transform=transform,
+                note="; ".join(hit.notes) if hit and hit.notes else None,
+            )
+        )
+    return out
+
+
 def rank_candidates(locators: list[Locator], *, verified_on: int = 1) -> list[Candidate]:
     """Turn verified locators into ordered candidates.
 
@@ -358,31 +504,120 @@ def infer_transform(spec: FieldSpec, locator: Locator) -> list[Transform] | None
     return None
 
 
-async def verify_locators(
-    locators: list[Locator], *, verify: Verifier
-) -> tuple[list[Locator], str | None]:
-    """Keep the locators that actually resolve to a non-empty value right now.
+@dataclass
+class VerifiedLocator:
+    """A locator that produced a usable value, and the value it produced."""
 
-    Returns the survivors and, when none survive, a reason to feed back to the
-    model on the retry -- which is the whole point of doing this per-step while
-    the page state that revealed the field is still live.
+    locator: Locator
+    raw: Any
+    value: Any
+    """What the field will actually contain -- the raw read with its transform
+    applied. Nothing at build time could see this before; it existed only at
+    replay, minutes later and behind a judge."""
+
+    notes: list[str] = dataclass_field(default_factory=list)
+    """Assertions this value fails. Recorded, not enforced: an assertion the
+    build guessed is a weaker claim than a value read off the page."""
+
+
+def pipeline_for(spec: FieldSpec, locator: Locator) -> list[Transform]:
+    """The cleanup a candidate on this locator will actually run.
+
+    An explicit `spec.transform` wins over the inferred one. `infer_transform`
+    is a rule-of-thumb -- numbers get digit extraction, urls get resolving --
+    while `spec.transform` is either the caller's own declaration or a pipeline
+    that was proposed against a real value and verified against it. A guess must
+    not override either.
+
+    Getting this backwards is not academic: it silently defeated the transform
+    repair, which writes its verified pipeline onto the spec and then watched
+    `infer_transform` shadow it on the very next read.
+
+    Never composed. `resolve_field` reads `cand.transform if cand.transform is
+    not None else spec.transform`, so a build that composed the two would
+    validate a pipeline replay never runs.
     """
 
-    from agentpilot.recipe.v2.resolve import is_empty
+    if spec.transform:
+        return spec.transform
+    return infer_transform(spec, locator) or []
 
-    resolving: list[Locator] = []
+
+async def verify_locators(
+    locators: list[Locator],
+    *,
+    verify: Verifier,
+    spec: FieldSpec | None = None,
+    ctx: TransformContext | None = None,
+) -> tuple[list[VerifiedLocator], str | None]:
+    """Keep the locators that produce a usable value right now.
+
+    "Usable" means what `resolve_field` means by it, and that is the point of
+    this function's existence in this shape. Replay's rule is:
+
+        Transforming before deciding is deliberate. A candidate that resolves
+        to markup which strips to nothing, or to a string that casts to None,
+        has not actually produced a value.
+
+    This used to check only that the RAW read was non-empty, throw the value
+    away, and accept. So a price reading "Contact us for pricing" verified
+    perfectly, `cast to price` turned it into nothing at replay, and the judge
+    was the first thing in the pipeline to notice -- a full page load and two
+    model calls later, to learn something that was knowable here.
+
+    Without `spec` the old raw-only behaviour is kept, for callers that have no
+    field to transform against.
+    """
+
+    from agentpilot.recipe.v2.resolve import evaluate_assertions, is_empty
+    from agentpilot.recipe.v2.transform import TransformError, apply_transforms
+
+    context = ctx or TransformContext()
+    resolving: list[VerifiedLocator] = []
     last_error: str | None = None
+
     for loc in locators:
         try:
-            value = await verify(loc)
+            raw = await verify(loc)
         except Exception as exc:  # noqa: BLE001 - a bad selector is data, not a crash
             last_error = f"{loc.kind} locator raised: {exc}"
             continue
-        if not is_empty(value):
-            resolving.append(loc)
+        if is_empty(raw):
+            continue
+
+        if spec is None:
+            resolving.append(VerifiedLocator(locator=loc, raw=raw, value=raw))
+            continue
+
+        pipeline = pipeline_for(spec, loc)
+        try:
+            value = apply_transforms(raw, pipeline, context) if pipeline else raw
+        except TransformError as exc:
+            last_error = f"read {_show(raw)} but the cleanup failed: {exc}"
+            continue
+        if is_empty(value):
+            last_error = f"read {_show(raw)} but cleaning it up left nothing"
+            continue
+
+        # Checked, not enforced. See `VerifiedLocator.notes`.
+        notes = [
+            f"{r.kind}: {r.detail}" if r.detail else r.kind
+            for r in evaluate_assertions(value, spec.assertions)
+            if not r.passed
+        ]
+        resolving.append(VerifiedLocator(locator=loc, raw=raw, value=value, notes=notes))
+
     if resolving:
         return resolving, None
     return [], last_error or "no proposed candidate resolved to a value"
+
+
+def _show(value: Any) -> str:
+    """A raw read, short enough to put in a reason a model will read back."""
+
+    text = value if isinstance(value, str) else _json.dumps(value, default=str)
+    text = " ".join(text.split())
+    return f'"{text[:120]}…"' if len(text) > 120 else f'"{text}"' 
 
 
 _DOM_KINDS = frozenset({"css", "xpath", "ax_role", "text"})
@@ -427,6 +662,7 @@ async def _add_dom_fallbacks(
     llm_config: LLMConfig,
     verify: Verifier,
     verified_on: int,
+    ctx: TransformContext,
 ) -> None:
     """One extra call for the fields that resolved only out of JSON.
 
@@ -454,26 +690,165 @@ async def _add_dom_fallbacks(
         dom_only = [loc for loc in locators if loc.kind in _DOM_KINDS]
         if not dom_only:
             continue
-        resolving, _reason = await verify_locators(dedupe_locators(dom_only), verify=verify)
+        spec = wanted[name]
+        resolving, _reason = await verify_locators(
+            dedupe_locators(dom_only), verify=verify, spec=spec, ctx=ctx
+        )
         if not resolving:
             continue
-        spec = wanted[name]
         existing = verified[name]
         # Ranked from the end of the existing chain so the JSON candidate keeps
         # winning: the fallback is for when the primary stops resolving, not a
         # competitor for the common case.
-        fallbacks = [
-            Candidate(
-                locator=c.locator,
-                priority=c.priority,
-                verified_on=verified_on,
-                transform=infer_transform(spec, c.locator),
-            )
-            for c in rank_candidates(resolving, verified_on=verified_on)
-        ]
+        fallbacks = _to_candidates(spec, resolving, verified_on=verified_on)
         verified[name] = sorted(
             [*existing, *fallbacks], key=lambda c: c.priority
         )[:MAX_CANDIDATES_PER_FIELD]
+
+
+_TRANSFORM_SYSTEM_PROMPT = """\
+A scraper read a value off a web page and could not clean it into the type the \
+caller asked for. You are given the raw text and the wanted type. Return the \
+pipeline that turns one into the other.
+
+The selector is not in question -- this text IS the right text. Your job is \
+only the cleanup, and the commonest reasons it failed are worth knowing: a \
+price with a range in it ("From $12.99 - $45.00"), a number with units \
+("2.5 kg"), a date wrapped in prose ("Ships in 3-5 days"), a label repeated \
+before the value ("Weight: 400g").
+
+Available ops, applied in order:
+- regex_extract {pattern, group} -- pull one part out. The commonest fix.
+- regex_replace {pattern, repl} -- strip separators, symbols, units.
+- trim, collapse_ws, strip_html, strip_accents
+- split {sep} then index {i} -- take one side of a range or a list.
+- cast {to} -- the last step, into the wanted type.
+- default {value} -- only when a missing value has a sensible stand-in.
+
+Prefer the shortest pipeline that works on the text you were shown, and prefer \
+extracting what you want over stripping everything you do not.
+
+If the text plainly does not contain the wanted value at all -- "Contact us \
+for pricing" is not a price in any cleanup -- return an EMPTY list. Saying so \
+is useful; a pipeline that cannot work is not.\
+"""
+
+_TRANSFORM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "transform": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "op": {"type": "string"},
+                    "pattern": {"type": ["string", "null"]},
+                    "group": {"type": ["integer", "null"]},
+                    "repl": {"type": ["string", "null"]},
+                    "sep": {"type": ["string", "null"]},
+                    "i": {"type": ["integer", "null"]},
+                    "to": {"type": ["string", "null"]},
+                    "value": {"type": ["string", "number", "null"]},
+                },
+                "required": ["op"],
+            },
+        }
+    },
+    "required": ["transform"],
+}
+
+
+async def propose_transform(
+    spec: FieldSpec, raw: Any, *, llm_config: LLMConfig
+) -> list[Transform] | None:
+    """A cleanup pipeline for a value that defeated the inferred one.
+
+    Returns None when the model declines or answers unusably. The caller must
+    treat that as "this text is not the value", not as an error: declining is a
+    real answer here and often the right one.
+    """
+
+    from agentpilot.agent.reliability import RetryStrategy
+
+    wanted = spec.type.value_type if spec.type.kind == "scalar" else spec.type.kind
+    user = (
+        f"Field: {spec.name}\n"
+        f"Wanted type: {wanted}\n"
+        f"{spec.description}\n\n"
+        f"Raw text read from the page:\n{_show(raw)}"
+    )
+    try:
+        answer = await RetryStrategy().execute(
+            lambda: chat_json_conversation(
+                [
+                    {"role": "system", "content": _TRANSFORM_SYSTEM_PROMPT},
+                    {"role": "user", "content": user},
+                ],
+                config=llm_config,
+                json_schema=_TRANSFORM_SCHEMA,
+            )
+        )
+    except Exception:  # noqa: BLE001 - a failed repair keeps the field unresolved
+        return None
+
+    raw_ops = answer.get("transform") or []
+    if not raw_ops:
+        return None
+    try:
+        return parse_transforms(raw_ops)
+    except Exception:  # noqa: BLE001 - a malformed pipeline is a declined answer
+        return None
+
+
+async def _repair_transform(
+    spec: FieldSpec,
+    locators: list[Locator],
+    *,
+    verify: Verifier,
+    ctx: TransformContext,
+    llm_config: LLMConfig,
+) -> FieldSpec | None:
+    """Ask for a pipeline that fits the value actually on the page, and only
+    keep it if it does.
+
+    The same propose-then-verify discipline this module applies to locators,
+    applied to the other half of a binding: the proposal is run against the very
+    text that defeated the inferred pipeline, so an answer that does not work
+    never reaches the recipe.
+    """
+
+    from agentpilot.recipe.v2.resolve import is_empty
+    from agentpilot.recipe.v2.transform import TransformError, apply_transforms
+
+    raw: Any = None
+    for loc in locators:
+        try:
+            candidate_raw = await verify(loc)
+        except Exception:  # noqa: BLE001 - already reported by verify_locators
+            continue
+        if not is_empty(candidate_raw):
+            raw = candidate_raw
+            break
+    if raw is None:
+        return None
+
+    pipeline = await propose_transform(spec, raw, llm_config=llm_config)
+    if not pipeline:
+        return None
+    try:
+        value = apply_transforms(raw, pipeline, ctx)
+    except TransformError:
+        return None
+    if is_empty(value):
+        return None
+
+    log.info("selector_agent.transform_repaired", field=spec.name,
+             ops=[t.op for t in pipeline])
+    # Written onto the FIELD, not a candidate: the text that defeated the
+    # inferred pipeline will look the same whichever locator read it, and
+    # `resolve_field` falls back to the field's pipeline for any candidate that
+    # carries none of its own.
+    return replace(spec, transform=pipeline)
 
 
 async def propose_and_verify(
@@ -487,6 +862,7 @@ async def propose_and_verify(
     verified_on: int = 1,
     dom_fallbacks: bool = True,
     failures: dict[str, str] | None = None,
+    page_url: str = "",
 ) -> dict[str, list[Candidate]]:
     """Propose -> verify -> (on total failure) retry with the failure fed back,
     then top up any JSON-only field with a DOM fallback.
@@ -510,6 +886,11 @@ async def propose_and_verify(
     verified: dict[str, list[Candidate]] = {}
     remaining = dict(fields)
     failures = dict(failures) if failures else None
+    ctx = TransformContext(url=page_url)
+    # One transform repair per field. If a pipeline proposed with the value in
+    # hand still does not work, another guess will not help -- that goes to a
+    # person, who can see the raw value and decide.
+    retyped: set[str] = set()
 
     for _attempt in range(max_retries + 1):
         if not remaining:
@@ -527,23 +908,34 @@ async def propose_and_verify(
             if not locators:
                 next_failures[name] = "model did not propose a locator for this field"
                 continue
+            spec = remaining[name]
+            deduped = dedupe_locators(locators)
             resolving, reason = await verify_locators(
-                dedupe_locators(locators), verify=verify
+                deduped, verify=verify, spec=spec, ctx=ctx
             )
+
+            if not resolving and name not in retyped:
+                # Every candidate read something and none survived its cleanup:
+                # that is a pipeline problem wearing a selector problem's
+                # clothes. Re-asking for a different locator -- which is what
+                # this used to do -- returns another one onto the same kind of
+                # text, and it fails the same way. Ask for the cleanup instead,
+                # with the value that broke it in hand.
+                retyped.add(name)
+                repaired = await _repair_transform(
+                    spec, deduped, verify=verify, ctx=ctx, llm_config=llm_config
+                )
+                if repaired is not None:
+                    spec = repaired
+                    remaining[name] = repaired
+                    resolving, reason = await verify_locators(
+                        deduped, verify=verify, spec=spec, ctx=ctx
+                    )
+
             if not resolving:
                 next_failures[name] = reason or "no candidate resolved"
                 continue
-            spec = remaining[name]
-            candidates = rank_candidates(resolving, verified_on=verified_on)
-            verified[name] = [
-                Candidate(
-                    locator=c.locator,
-                    priority=c.priority,
-                    verified_on=c.verified_on,
-                    transform=infer_transform(spec, c.locator),
-                )
-                for c in candidates
-            ]
+            verified[name] = _to_candidates(spec, resolving, verified_on=verified_on)
             del remaining[name]
         failures = next_failures
         if not failures:
@@ -558,6 +950,7 @@ async def propose_and_verify(
             llm_config=llm_config,
             verify=verify,
             verified_on=verified_on,
+            ctx=ctx,
         )
 
     return verified

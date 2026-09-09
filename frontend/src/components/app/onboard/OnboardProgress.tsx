@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { useRecipeRun } from '@/hooks/useRecipes'
 import { AssistPanel } from './AssistPanel'
 import { BuildProgress } from './BuildProgress'
+import { CheckProgress } from './CheckProgress'
 import { RecipeOverview } from './RecipeOverview'
 import type { PendingAsk, RunProgress } from '@/lib/api/types'
 import type { Recipe } from '@/lib/recipe/types'
@@ -159,7 +160,16 @@ export function OnboardProgress({
   // `BuildProgress` already renders an empty payload correctly: "Starting up…"
   // for the steps, and its own placeholder until the session exists.
   if (run.status === 'running') {
-    return <BuildProgress runId={runId} progress={(run.progress ?? {}) as RunProgress} />
+    const progress = (run.progress ?? {}) as RunProgress
+    // Two different screens for two different questions. While it explores,
+    // what matters is the page it is driving. Once it is checking, the page is
+    // no longer the interesting thing -- the recipe and what the reviewer makes
+    // of it are.
+    return progress.phase === 'verifying' ? (
+      <CheckProgress progress={progress} />
+    ) : (
+      <BuildProgress runId={runId} progress={progress} />
+    )
   }
 
   return (

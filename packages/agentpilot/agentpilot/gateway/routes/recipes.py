@@ -468,7 +468,7 @@ async def submit_assist(
             detail=(
                 "no usable resolutions: each must name a field this run is actually "
                 "waiting on, and carry what its action needs (`pick` needs locators, "
-                "`describe` needs a hint)"
+                "`scope` needs the region's locators, `describe` needs a hint)"
             ),
         )
 
@@ -481,6 +481,8 @@ async def submit_assist(
                 "action": r.action,
                 "locators": [loc.to_dict() for loc in r.locators],
                 "hint": r.hint,
+                "shape": r.shape,
+                "html": r.html,
             }
             for r in resolutions.values()
         ],

@@ -92,10 +92,13 @@ navigates away would otherwise take every later group with it.
 and stop at the first that yields a non-empty value. Do not merge them, do not \
 prefer the last, and do not collect them all.
 
-3. TRANSFORMS RUN IN ORDER, PER CANDIDATE. A candidate's own `transform` list \
-applies to what that candidate read, then the field's own `transform` applies \
-to the result. This split is deliberate: the same field read from JSON and from \
-the DOM needs different cleanup.
+3. A CANDIDATE'S TRANSFORM REPLACES THE FIELD'S, it does not add to it. Use \
+the candidate's `transform` when it has one, and the field's only when it does \
+not. NEVER run both: they are alternatives, not stages. The split exists \
+because the same field read from JSON and from the DOM needs different \
+cleanup -- JSON gives "9550" and the DOM gives "9,550.00" -- so applying the \
+DOM's digit-extraction to an already-clean JSON number is exactly the mistake \
+this design avoids. Within one list, ops run in order.
 
 A `repeat` produces one row per iteration:
 - `kind: "json"`   -- `rows_locator` resolves to a LIST in the page's JSON; one \

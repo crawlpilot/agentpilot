@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { HelpCircle, SkipForward } from 'lucide-react'
+import { Frame, HelpCircle, SkipForward } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -10,7 +10,7 @@ import { usePagePicker } from '@/hooks/usePagePicker'
 import { useSessionsList } from '@/hooks/useSessionsList'
 import { useSubmitAssist } from '@/hooks/useRecipes'
 import { useToast } from '@/components/ui/toast'
-import { detailPickToDraft } from '@/lib/recipe/fromPick'
+import { detailPickToDraft, scopeFromPick } from '@/lib/recipe/fromPick'
 import type { PendingAsk, RecipeResolution } from '@/lib/api/types'
 
 /**
@@ -37,6 +37,11 @@ export function AssistPanel({
   const { toast } = useToast()
   const submit = useSubmitAssist(recipeId, runId)
   const [answers, setAnswers] = useState<Record<string, RecipeResolution>>({})
+  // What a scope pick actually selected, so the person can see they hit the
+  // heading before they submit rather than after the run comes back with it.
+  const [scoped, setScoped] = useState<
+    Record<string, { selector: string; matched: number; preview: string }>
+  >({})
 
   // The run's own session is the one showing the stuck page. It is named after
   // the run, which is how it is found among whatever else is open.
@@ -50,6 +55,29 @@ export function AssistPanel({
   const picker = usePagePicker(active)
 
   const answered = useMemo(() => Object.keys(answers).length, [answers])
+
+  async function scopeFor(fieldName: string, shape: 'one' | 'values' | 'map' | 'rows') {
+    const payload = await picker.pick('detail')
+    if (!payload) return
+    const scope = scopeFromPick(payload)
+    if (scope.locators.length === 0) {
+      toast({ title: 'No usable selector for that region' })
+      return
+    }
+    const selector = (scope.locators[0] as { selector?: string }).selector ?? ''
+    const html = selector ? await picker.outerHtml(selector) : ''
+    setAnswers((prev) => ({
+      ...prev,
+      [fieldName]: {
+        field: fieldName,
+        action: 'scope',
+        locators: scope.locators as unknown as Array<Record<string, unknown>>,
+        shape,
+        html,
+      },
+    }))
+    setScoped((prev) => ({ ...prev, [fieldName]: { ...scope, selector } }))
+  }
 
   async function pickFor(fieldName: string) {
     const payload = await picker.pick('detail')
@@ -141,6 +169,8 @@ export function AssistPanel({
               pickerStatus={picker.status}
               onSelect={() => setSelected(ask.field)}
               onPick={() => void pickFor(ask.field)}
+              onScope={(shape) => void scopeFor(ask.field, shape)}
+              scoped={scoped[ask.field]}
               onCancelPick={picker.cancel}
               onRefinePick={picker.refine}
               onDescribe={(hint) =>
@@ -170,6 +200,24 @@ export function AssistPanel({
   )
 }
 
+const SHAPE_LABEL = {
+  one: 'one value',
+  values: 'a list',
+  map: 'key → value',
+  rows: 'rows',
+} as const
+
+const SHAPE_HELP = {
+  one: 'A single value somewhere in this region.',
+  values: 'Several values of the same kind — image URLs, bullet points.',
+  map: 'Labelled pairs whose keys come from the page — a specifications block.',
+  rows: 'Repeating rows with the same columns.',
+} as const
+
+function truncate(text: string): string {
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text
+}
+
 function AskRow({
   ask,
   answer,
@@ -178,6 +226,8 @@ function AskRow({
   pickerStatus,
   onSelect,
   onPick,
+  onScope,
+  scoped,
   onCancelPick,
   onRefinePick,
   onDescribe,
@@ -191,6 +241,8 @@ function AskRow({
   pickerStatus: ReturnType<typeof usePagePicker>['status']
   onSelect: () => void
   onPick: () => void
+  onScope: (shape: 'one' | 'values' | 'map' | 'rows') => void
+  scoped: { selector: string; matched: number; preview: string } | undefined
   onCancelPick: () => void
   onRefinePick: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
   onDescribe: (hint: string) => void
@@ -215,8 +267,12 @@ function AskRow({
     >
       <div className="flex items-center gap-2">
         <span className="font-mono text-xs font-medium">{ask.field}</span>
-        <Badge variant={ask.kind === 'rejected' ? 'warning' : 'outline'}>
-          {ask.kind === 'rejected' ? 'looked wrong' : 'not found'}
+        <Badge variant={ask.kind === 'unresolved' ? 'outline' : 'warning'}>
+          {ask.kind === 'rejected'
+            ? 'looked wrong'
+            : ask.kind === 'absent'
+              ? 'not on this page'
+              : 'not found'}
         </Badge>
         {answer && (
           <Badge variant="success" className="ml-auto">
@@ -226,6 +282,17 @@ function AskRow({
       </div>
 
       <p className="text-xs text-muted-foreground">{ask.reason}</p>
+
+      {ask.kind === 'absent' && (
+        // A different question from the other two. It stopped looking on
+        // purpose: searching harder for something that is not there is what
+        // produced a wrong element every round until the budget ran out.
+        <p className="rounded bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground">
+          It stopped looking rather than keep returning a different wrong element each
+          time. If this really is on the page, point at the section it&rsquo;s in &mdash;
+          otherwise drop it.
+        </p>
+      )}
 
       {failedSteps.length > 0 && (
         <p className="rounded bg-warning/10 px-2 py-1 text-[11px] text-muted-foreground">
@@ -242,12 +309,57 @@ function AskRow({
         <div className="flex flex-col gap-2">
           <PickerControls
             status={pickerStatus}
-            label="Point at it"
+            label="Point at the value"
             disabled={!canPick}
             onStart={onPick}
             onCancel={onCancelPick}
             onRefine={onRefinePick}
           />
+
+          <div className="flex flex-col gap-1 rounded-md border border-dashed border-border p-2">
+            <div className="flex items-center gap-1.5">
+              <Frame className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-[11px] font-medium">…or point at the section it&rsquo;s in</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Use <b>↑</b> to grow the selection past the heading until it covers the whole
+              block. A heading is not the value &mdash; select the region and the model finds
+              the value inside it.
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {(['one', 'values', 'map', 'rows'] as const).map((shape) => (
+                <Button
+                  key={shape}
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={!canPick}
+                  onClick={() => onScope(shape)}
+                  title={SHAPE_HELP[shape]}
+                >
+                  {SHAPE_LABEL[shape]}
+                </Button>
+              ))}
+            </div>
+            {scoped && (
+              <div className="flex flex-col gap-0.5 rounded bg-muted/50 px-2 py-1">
+                <code className="truncate text-[11px]" title={scoped.selector}>
+                  {scoped.selector}
+                </code>
+                <span className="text-[11px] text-muted-foreground">
+                  matches {scoped.matched || 1} element{scoped.matched === 1 ? '' : 's'}
+                  {scoped.preview ? ` · reads “${truncate(scoped.preview)}”` : ''}
+                </span>
+                {scoped.preview && scoped.preview.length < 40 && (
+                  // The exact Walmart mistake: a short reading means the
+                  // selection is probably still on the label, not the block.
+                  <span className="text-[11px] text-warning">
+                    That looks like a heading. Press ↑ to include the content under it.
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-1.5">
             <HelpCircle className="size-3.5 shrink-0 text-muted-foreground" />
             <Input
