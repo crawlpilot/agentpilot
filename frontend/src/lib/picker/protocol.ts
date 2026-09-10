@@ -12,7 +12,7 @@
  */
 
 /** Bumped when the injected contract changes, so a stale page re-installs. */
-export const PICKER_VERSION = 1
+export const PICKER_VERSION = 2
 
 /** The global the IIFE installs itself on inside the remote page. */
 export const PICKER_GLOBAL = '__cpPicker'
@@ -154,9 +154,27 @@ export interface PickerApi {
   version: number
   start(mode?: PickerMode, action?: 'extract' | 'click'): void
   cancel(): void
-  action(key: 'ArrowUp' | 'ArrowDown' | 'Enter'): void
+  /**
+   * `ArrowUp`/`ArrowDown` walk the tree and PIN the selection so a passing
+   * cursor cannot take it back; `Unpin` hands it back to hover; `Enter`
+   * commits. See `VisualElementPicker.pinned` for why pinning is needed here
+   * and was not upstream.
+   */
+  action(key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin'): void
+  /** What the selection is on right now, so the panel can describe it. */
+  selection(): { tag: string; text: string; pinned: boolean } | null
   take(): PickMessage | null
   isPicking(): boolean
+  /**
+   * Watch what the person does to the page and hand it back as reveal steps.
+   *
+   * Not a picker: nothing is swallowed and no overlay is drawn, because the
+   * page has to actually react or there is nothing to record. See `record.ts`.
+   */
+  startRecording(): void
+  stopRecording(): unknown[]
+  takeRecording(): unknown[]
+  isRecording(): boolean
   showHighlights(elements: HighlightField[]): void
   clearHighlights(): void
   testSelector(selector: string): number

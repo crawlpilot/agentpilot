@@ -55,6 +55,7 @@ from agentpilot.recipe.v2.models import (
     TargetSpec,
     UrlMatcher,
 )
+from agentpilot.recipe.v2.rows import RowBinding, propose_rows
 from agentpilot.recipe.v2.schema import (
     FieldSpec,
     all_leaf_fields,
@@ -86,17 +87,34 @@ _MAX_NARRATED_STEPS = 40
 # never there. The contract had no way to say "absent" -- only "not found yet"
 # -- so the search never stopped.
 #
-# Two is deliberate. One miss is uninformative: the field may be behind an
-# accordion the agent has not opened yet, which is the entire reason the loop
-# explores rather than reading once. Two consecutive misses *with no progress
-# anywhere on the page in between* is a different thing.
-_MAX_FIELD_ATTEMPTS = 2
+# One miss is uninformative: the field may be behind an accordion the agent has
+# not opened yet, which is the entire reason the loop explores rather than
+# reading once. Consecutive misses *with no progress anywhere on the page in
+# between* are a different thing.
+#
+# Four, not two, and the difference was measured rather than argued. A real
+# Walmart build gave up on `specifications` at step 3 and the agent opened the
+# spec dialog -- thirty name/value rows -- at step 4. Two was calibrated against
+# a scalar behind an accordion, which is one interaction away; a table is
+# routinely behind a dialog the agent has to *find* first, and that took three
+# steps here. The budget has to cover the search, not just the reveal.
+#
+# The cost of being wrong in this direction is bounded and small: at most four
+# wasted proposals for a field that genuinely is not there, against the fifteen
+# it was before any limit existed.
+_MAX_FIELD_ATTEMPTS = 4
 
 ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
 """Called after each exploration step with a snapshot of what the build is
 doing. Injected rather than imported so the module has no opinion about where
 progress is written -- the worker sends it to the run row, and a test can just
 collect it in a list."""
+
+StepDispatcher = Callable[[Step], Awaitable[Any]]
+"""Runs one step against the live page. Injected for the same reason the reader
+is: everything else here decides *what* a recipe should do, and a test of that
+should not need a browser. Only the dialog dismissal uses it, and None simply
+means the step is recorded without also being performed."""
 
 
 class BlockedError(Exception):
@@ -121,6 +139,48 @@ class OnboardOutcome:
         return not self.unresolved
 
 
+def looks_variable(segment: str) -> bool:
+    """Whether a path segment identifies *this* page rather than its kind.
+
+    The distinction a marketplace recipe lives or dies on. In
+    `/ip/<product-slug>/5013580` the `ip` says what kind of page this is and the
+    other two say which one; a matcher that keeps all three accepts exactly one
+    product, which is what `derive_target` used to emit from a single sample.
+
+    Deliberately cautious in the safe direction. Calling a structural segment
+    variable widens the recipe past what was verified; calling a variable one
+    structural only leaves the matcher narrow, which is visible and editable.
+    So a bare word is structural unless it carries positive evidence otherwise:
+    digits (`productpage.129.html`, `a-p041.html`, `5013580`), a long hyphenated
+    slug, or a long hex run.
+    """
+
+    if not segment:
+        return False
+    if any(c.isdigit() for c in segment) and len(segment) >= 3:
+        return True
+    if "-" in segment and len(segment) > 12:
+        return True
+    return len(segment) >= 16 and all(c in "0123456789abcdefABCDEF-" for c in segment)
+
+
+def _generalized_prefix(url: str) -> str | None:
+    """`https://host/path/up/to/` the first segment that identifies one page.
+
+    None when every segment looks structural -- there is nothing to generalise,
+    and the caller keeps its old everything-but-the-last-segment behaviour.
+    """
+
+    split = urlsplit(url)
+    authority = f"{split.scheme}://{split.netloc}"
+    segments = [s for s in split.path.split("/") if s]
+    for index, segment in enumerate(segments):
+        if looks_variable(segment):
+            kept = "".join(f"/{s}" for s in segments[:index])
+            return f"{authority}{kept}/"
+    return None
+
+
 def derive_target(urls: list[str]) -> TargetSpec:
     """A matcher for the pages this recipe applies to.
 
@@ -128,12 +188,20 @@ def derive_target(urls: list[str]) -> TargetSpec:
     it -- so this emits exactly one. Adding a host matcher "as well" would widen
     the recipe to the whole domain and make the path pattern decorative.
 
-    The pattern is the common prefix of the sample URLs, trimmed back to a path
-    boundary. With several URLs that lands on the real shared shape
-    (`https://www.zara.com/in/en/` for two products); with one it keeps
-    everything but the final segment, which is narrower than the host and
-    obviously editable in the studio. Guessing which parts of a single URL are
-    variable is not something one sample can support, so it does not try.
+    With several URLs the pattern is their common prefix, trimmed back to a path
+    boundary, which lands on the real shared shape
+    (`https://www.zara.com/in/en/` for two products).
+
+    With one URL the prefix is cut at the first segment that *identifies a
+    page* rather than describing its kind -- see `looks_variable`. This is the
+    difference between a marketplace recipe and a bookmark: keeping everything
+    but the final segment turns
+    `walmart.com/ip/<product-slug>/5013580` into a matcher for that one
+    product's sub-paths, and `replay_recipe` then refuses every other Walmart
+    product before it opens a browser. Cutting at the slug gives
+    `walmart.com/ip/*`, which is the kind of page the recipe was actually built
+    against. A URL with no variable-looking segment keeps the old rule, because
+    there is nothing there to generalise from.
 
     The prefix is never allowed to stop inside the authority. `https://` is a
     common prefix of every URL on the internet, so samples on two different
@@ -151,6 +219,11 @@ def derive_target(urls: list[str]) -> TargetSpec:
     if len(hosts) > 1 or not next(iter(hosts)):
         return TargetSpec()
     host = next(iter(hosts))
+
+    if len(kept) == 1:
+        generalized = _generalized_prefix(kept[0])
+        if generalized is not None:
+            return TargetSpec(match=[UrlMatcher(kind="glob", pattern=f"{generalized}*")])
 
     prefix = kept[0]
     for url in kept[1:]:
@@ -172,6 +245,25 @@ def derive_target(urls: list[str]) -> TargetSpec:
         return TargetSpec(match=[UrlMatcher(kind="host", pattern=host)])
 
     return TargetSpec(match=[UrlMatcher(kind="glob", pattern=f"{prefix[: boundary + 1]}*")])
+
+
+def _without_last_click(steps: list[Step]) -> list[Step]:
+    """The route with its final click removed, wait and all.
+
+    A table satisfied by clicking one representative option has that click
+    superseded by the group's own `RepeatSpec`, which clicks every option
+    itself -- so leaving it in the reveal steps clicks the representative one
+    twice. The `wait_for_selector` that followed it goes too: it was waiting on
+    what that click revealed.
+
+    Searches backwards rather than checking the last element, because the route
+    now ends with the wait rather than the click.
+    """
+
+    for index in range(len(steps) - 1, -1, -1):
+        if steps[index].op == "click":
+            return steps[:index]
+    return list(steps)
 
 
 def bindings_by_field(groups: list[FieldGroup]) -> dict[str, list[Candidate]]:
@@ -226,8 +318,10 @@ class ExplorationState:
         max_repeat_iterations: int = DEFAULT_MAX_REPEAT_ITERATIONS,
         verify_max_retries: int = 1,
         on_progress: ProgressSink | None = None,
+        dispatch_step: StepDispatcher | None = None,
     ) -> None:
         self._on_progress = on_progress
+        self._dispatch_step = dispatch_step
         self._steps: list[dict[str, Any]] = []
         self._all_fields = fields
         self._unfound = all_leaf_fields(fields)
@@ -237,14 +331,22 @@ class ExplorationState:
         self._max_repeat_iterations = max_repeat_iterations
         self._verify_max_retries = verify_max_retries
 
-        self._last_snapshot: Any = None
+        # The reveal route: everything the agent did to this page since it
+        # loaded, in order. A group's steps are ALL of this -- see `_route_for`.
+        self._path: list[Step] = []
+        # The page the route belongs to. A navigation invalidates it.
+        self._here: str | None = None
+        # Whether the freshly-loaded page has been checked for a site popup yet.
+        self._cleanup_probed = False
         self._pending_steps: list[Step] = []
-        self._global_setup_captured = False
         self._failures: dict[str, str] = {}
         # Consecutive misses per field, and what that count is allowed to
         # conclude. See `_MAX_FIELD_ATTEMPTS`.
         self._misses: dict[str, int] = {}
         self.presumed_absent: set[str] = set()
+        # The page each group was frozen on. Two groups can only share a page
+        # load if nothing navigated between them.
+        self._group_urls: list[str] = []
 
         self.global_setup: list[Step] = []
         self.field_groups: list[FieldGroup] = []
@@ -253,14 +355,155 @@ class ExplorationState:
     def unfound_fields(self) -> dict[str, FieldSpec]:
         return self._unfound
 
+    def _record_step(self, step: Step) -> None:
+        """Add a step to the running route, and to the batch being frozen."""
+
+        self._path.append(step)
+        self._pending_steps.append(step)
+
+    async def _reset_route_if_navigated(self) -> None:
+        """Drop the route when the page underneath it changed.
+
+        A route is a sequence of things done to *one* page. Carrying it across a
+        navigation would have replay re-load the URL, run `global_setup`, and
+        then replay clicks that belong to a page it is no longer on -- which
+        either fails silently or, worse, hits a same-named control somewhere
+        else.
+
+        The first page load is not a navigation in this sense: there is no route
+        yet to lose.
+        """
+
+        here = await self._reader.current_url()
+        if self._here is None:
+            self._here = here
+            return
+        if here == self._here:
+            return
+
+        log.info("onboard.route_reset", frm=self._here, to=here, dropped=len(self._path))
+        self._here = here
+        self._path = []
+        self._pending_steps = []
+        # A new page can throw its own popup, so it is worth probing again.
+        self._cleanup_probed = False
+
+    async def _probe_site_popup(self) -> None:
+        """Clear whatever the SITE put in the way, and remember it as setup.
+
+        `global_setup` and a group's reveal steps are different in kind and are
+        kept apart rather than sliced out of one list:
+
+        - **Setup is cleanup after a navigation.** A cookie wall, a newsletter
+          modal, a region interstitial -- things the site shows on load, that
+          nobody asked for, and that must be cleared again on *every* page load.
+          Replay runs `global_setup` after each of its navigations for exactly
+          this.
+        - **A reveal opens something on a page already loaded** to expose data:
+          an accordion, a "More details" dialog. It belongs to the field it
+          reveals, and running it before every group would have one field's
+          drawer covering another field's control.
+
+        Telling them apart does not need a guess about intent, only about
+        timing: this runs while the route is still empty, so anything open is
+        something the page did to itself. Anything that appears later, the agent
+        opened -- and `_close_any_dialog` handles that one, into the route.
+        """
+
+        if self._cleanup_probed or self._path:
+            return
+        self._cleanup_probed = True
+
+        overlay = await self._reader.overlay()
+        step = capture.dismiss_step_for(overlay)
+        if step is None:
+            return
+
+        self.global_setup.append(step)
+        log.info(
+            "onboard.site_popup_dismissed",
+            close=overlay.get("close"), locked=overlay.get("locked"), op=step.op,
+        )
+        if self._dispatch_step is None:
+            return
+        try:
+            await self._dispatch_step(step)
+        except Exception:  # noqa: BLE001 - a dismissal that fails is not a failed build
+            log.debug("onboard.dismiss_failed", exc_info=True)
+            return
+        self._reader.invalidate()
+
+    def _record_wait(
+        self,
+        scalar: dict[str, list[Candidate]],
+        rows: dict[str, RowBinding],
+        by_table: dict[str, dict[str, list[Candidate]]],
+    ) -> None:
+        """Append the wait for whatever this batch just revealed, to the route.
+
+        One wait for the batch rather than one per group. The groups frozen
+        together were revealed by the same interaction, and the question the
+        wait answers -- has the reveal rendered? -- has one answer for all of
+        them.
+        """
+
+        if not self._path or self._path[-1].op not in capture.REVEALING_OPS:
+            return
+
+        candidates = [c for chain in scalar.values() for c in chain]
+        for columns in by_table.values():
+            candidates += [c for chain in columns.values() for c in chain]
+        repeat = next((b.repeat for b in rows.values()), None)
+        for binding in rows.values():
+            candidates += [c for chain in binding.bindings.values() for c in chain]
+
+        wait = capture.wait_step_for(candidates=candidates, repeat=repeat)
+        if wait is not None:
+            self._path.append(wait)
+
+    def _route_for(self) -> list[Step]:
+        """The whole way from a loaded, cleaned-up page to the state being frozen.
+
+        **Not the steps since the last freeze**, which is what this used to
+        hand out. `replay.py` re-navigates before EVERY group and then runs
+        `global_setup` plus that group's steps -- so a group's steps have to
+        stand on their own from a cold page. Handing it only its own slice
+        means a group frozen after an earlier one silently loses whatever the
+        earlier freeze consumed: the Walmart specifications group carried
+        `click "More details"` and not the accordion click that puts it on
+        screen, so it read an empty page on every run and said nothing about
+        why.
+
+        Reveals only. Site-popup cleanup is `global_setup` and is never mixed in
+        here -- see `_probe_site_popup`.
+
+        The cost is that a group replays reveals it does not need. That is the
+        right way round -- every step is `optional`/`on_error: continue`, so a
+        redundant one costs seconds where a missing one costs the field -- and
+        it is why closing a dialog afterwards matters: a redundant click into
+        an open modal is where a harmless extra step turns harmful.
+        """
+
+        return list(self._path)
+
     @property
     def failures(self) -> dict[str, str]:
-        """Why each still-unfound field failed, most recent attempt wins."""
+        """Why each still-unfound field failed, most recent attempt wins.
 
-        return {
-            name: self._failures.get(name, "not located during exploration")
-            for name in self._unfound
-        }
+        A table's unfound columns collapse into ONE entry under the table's own
+        name. Columns are how a table gets located, not something the caller
+        asked for: putting `value` to a person as an unanswered field asks them
+        about a field they never declared, three times over for a three-column
+        table, when what they declared was `specifications`.
+        """
+
+        out: dict[str, str] = {}
+        for name in self._unfound:
+            key = self._column_to_table.get(name) or name
+            out.setdefault(
+                key, self._failures.get(name, "not located during exploration")
+            )
+        return out
 
     async def _narrate(self, step_record: AgentStepRecord, just_found: list[str]) -> None:
         """Say what happened, for whoever is watching a build that takes
@@ -298,19 +541,62 @@ class ExplorationState:
         if snapshot is None:
             return
 
-        # Refs were allocated against the state the agent *observed*, so the
-        # pre-action snapshot is the right thing to resolve them against. On the
-        # very first step there is no prior snapshot, and v1 simply dropped that
-        # batch -- which threw away the cookie-banner dismissal, the single most
-        # common thing `global_setup` is for. Falling back to the post-action
-        # snapshot recovers it: a ref is a backend node id, stable across the
-        # click for any element the click did not remove.
-        reference = self._last_snapshot if self._last_snapshot is not None else snapshot
+        # Refs are only meaningful in the tree they were allocated from -- a ref
+        # is `e{backend_node_id}`, and a click that re-renders a subtree gets
+        # every id in it reassigned. So actions are resolved against the tree
+        # the agent actually chose them from, which the loop now hands over.
+        #
+        # This used to resolve against "the snapshot taken at the end of the
+        # previous step", which is a different tree taken at a different moment.
+        # On a static page the two agree; on a React page they do not, and
+        # `find_node` misses. The miss is silent -- `stabilize_action` returns
+        # None both for an unresolvable ref and for an action that is simply not
+        # a reveal step -- so a build recorded no steps at all and looked exactly
+        # like a page that needed none. That is why the Walmart specifications
+        # clicks never reached the recipe.
+        #
+        # `observed_tree` is None only for a step the loop failed to observe, and
+        # falling back to the post-action snapshot there is better than dropping
+        # the batch: it is what recovers a cookie-banner dismissal on step one.
+        reference = step_record.observed_tree
+        if reference is None:
+            reference = snapshot
+        # A route is only a route on one page. If the agent navigated, whatever
+        # came before belongs to a page this one no longer is, and replaying it
+        # after a fresh load would replay someone else's clicks. Checked BEFORE
+        # this batch's steps are recorded, so a batch that navigated and then
+        # acted keeps the acting part.
+        await self._reset_route_if_navigated()
+
+        # Whatever the site itself put in the way of a freshly loaded page.
+        # Runs while the route is still empty, which is what distinguishes a
+        # popup the page threw from a dialog the agent opened.
+        await self._probe_site_popup()
+
+        # This batch's steps only. `_freeze` clears it too, but a batch that
+        # froze nothing never reaches `_freeze`.
+        self._pending_steps = []
+        acted = False
         for action_dict in step_record.actions:
             step = capture.stabilize_action_dict(action_dict, reference)
             if step is not None:
-                self._pending_steps.append(step)
-        self._last_snapshot = snapshot
+                self._record_step(step)
+                acted = True
+
+        try:
+            await self._look(step_record, snapshot=snapshot, clicked_ref=clicked_ref)
+        finally:
+            # After the reads, always. The batch that opens a dialog is very
+            # often the batch that binds nothing -- which is exactly when this
+            # used not to run, because it was tied to a successful freeze. A
+            # dialog blocks the agent either way.
+            if acted:
+                await self._close_any_dialog()
+
+    async def _look(
+        self, step_record: AgentStepRecord, *, snapshot: Any, clicked_ref: str | None
+    ) -> None:
+        """Propose, verify and freeze whatever this page state can satisfy."""
 
         structured = await self._reader.structured_data()
         snapshot_text = serialize(snapshot).llm_text
@@ -328,25 +614,64 @@ class ExplorationState:
             await self._narrate(step_record, [])
             return
 
-        verified = await propose_and_verify(
-            looking_for,
-            snapshot_text=snapshot_text,
-            structured_data=structured,
-            llm_config=self._llm_config,
-            verify=self._reader.read,
-            max_retries=self._verify_max_retries,
-            verified_on=1,
-            # `url_resolve` needs it, and without it every url field would
-            # validate a relative href against nothing and pass.
-            page_url=self._reader.base_url,
+        # A table's columns are ONE question, asked of `propose_rows`. Asking
+        # for them individually here is what produced a spec table as two
+        # document-wide `all: true` lists zipped into a single row -- see
+        # `rows.py`. Scalars are unaffected and go the way they always did.
+        scalars, tables = self._split_by_shape(looking_for)
+
+        row_bindings: dict[str, RowBinding] = {}
+        for table_name, table_spec in tables.items():
+            binding = await propose_rows(
+                table_spec,
+                snapshot_text=snapshot_text,
+                structured_data=structured,
+                reader=self._reader,
+                llm_config=self._llm_config,
+                page_url=self._reader.base_url,
+                max_rows=self._max_repeat_iterations,
+            )
+            if binding is not None:
+                row_bindings[table_name] = binding
+                continue
+            # Not row-shaped on this page. That is a real answer -- a size/price
+            # variant set genuinely has to be clicked through -- so its columns
+            # fall back to the per-column path, where the agent's representative
+            # click becomes a `dom` repeat.
+            scalars.update({
+                name: spec
+                for name, spec in looking_for.items()
+                if self._column_to_table.get(name) == table_name
+            })
+
+        verified = (
+            await propose_and_verify(
+                scalars,
+                snapshot_text=snapshot_text,
+                structured_data=structured,
+                llm_config=self._llm_config,
+                verify=self._reader.read,
+                max_retries=self._verify_max_retries,
+                verified_on=1,
+                # `url_resolve` needs it, and without it every url field would
+                # validate a relative href against nothing and pass.
+                page_url=self._reader.base_url,
+            )
+            if scalars
+            else {}
         )
         # A step that found something is evidence the page moved somewhere
         # useful, so every field gets its patience back: what was invisible a
         # moment ago may be on screen now. A step that found nothing is not, so
         # the counters advance.
-        progressed = bool(verified)
+        progressed = bool(verified or row_bindings)
+        found = set(verified) | {
+            column
+            for table in row_bindings
+            for column in self._all_fields[table].type.columns
+        }
         for name in looking_for:
-            if name in verified:
+            if name in found:
                 self._misses.pop(name, None)
                 continue
             if progressed:
@@ -365,7 +690,7 @@ class ExplorationState:
             else:
                 self._failures[name] = "no proposed locator resolved on this page state"
 
-        if not verified:
+        if not verified and not row_bindings:
             await self._narrate(step_record, [])
             return
 
@@ -373,20 +698,45 @@ class ExplorationState:
         # rows could not be iterated resolved to a value and still has no way to
         # produce rows, so it stays unfound and reaches the assist loop -- rather
         # than being dropped for having been "verified".
-        frozen = self._freeze(verified, snapshot=snapshot, clicked_ref=clicked_ref)
+        frozen = await self._freeze(
+            verified, row_bindings, snapshot=snapshot, clicked_ref=clicked_ref
+        )
         for name in frozen:
             self._unfound.pop(name, None)
             self._failures.pop(name, None)
         await self._narrate(step_record, sorted(frozen))
 
-    def _freeze(
+    def _split_by_shape(
+        self, looking_for: dict[str, FieldSpec]
+    ) -> tuple[dict[str, FieldSpec], dict[str, FieldSpec]]:
+        """Leaves that are their own field, and the table fields whose columns
+        are among them.
+
+        The table's OWN spec is what comes back -- columns and all -- because
+        the question `propose_rows` asks is about the table, not about any one
+        column of it.
+        """
+
+        scalars: dict[str, FieldSpec] = {}
+        tables: dict[str, FieldSpec] = {}
+        for name, spec in looking_for.items():
+            table = self._column_to_table.get(name)
+            if table and table in self._all_fields:
+                tables[table] = self._all_fields[table]
+            else:
+                scalars[name] = spec
+        return scalars, tables
+
+    async def _freeze(
         self,
         verified: dict[str, list[Candidate]],
+        row_bindings: dict[str, RowBinding] | None = None,
         *,
         snapshot: Any,
         clicked_ref: str | None,
     ) -> set[str]:
         """Returns the names that made it into a group."""
+        rows = dict(row_bindings or {})
         by_table: dict[str, dict[str, list[Candidate]]] = {}
         scalar: dict[str, list[Candidate]] = {}
         for name, candidates in verified.items():
@@ -396,32 +746,83 @@ class ExplorationState:
             else:
                 scalar[name] = candidates
 
-        # When a table field is satisfied by this batch, its trailing click is
-        # the representative-option click -- superseded by the group's own
-        # RepeatSpec, so it must not also appear as a reveal step or the option
-        # gets clicked twice. Stripped once, shared by every group frozen here:
-        # a scalar satisfied in the same batch as a table's representative click
-        # would then miss that click in its own path. Rare, and an accepted
-        # limitation rather than a silent misbehaviour.
-        steps = list(self._pending_steps)
-        if by_table and steps and steps[-1].op == "click":
-            steps = steps[:-1]
+        # The reveal has to have landed before anything reads, and -- because
+        # routes are cumulative -- before the NEXT reveal acts. So the wait goes
+        # into the route, not just into this group's copy of it. A route of two
+        # clicks with no wait between them races: the driver returns from a
+        # click as soon as it is dispatched, so the second one fires against the
+        # page as it was before the first drawer opened.
+        self._record_wait(scalar, rows, by_table)
 
-        if not self._global_setup_captured:
-            self.global_setup = steps
-            group_steps: list[Step] = []
-        else:
-            group_steps = steps
+        group_steps = self._route_for()
+
+        # When a table is satisfied by a representative CLICK, that click is
+        # superseded by the group's own RepeatSpec and must not also appear as a
+        # reveal step, or the option gets clicked twice. Stripped from this
+        # group's copy only -- it is a real interaction and the route keeps it
+        # for whatever is frozen later.
+        #
+        # Only for the click-through kind. A `json` or `dom_rows` table has no
+        # representative click, so the trailing click is an ordinary reveal --
+        # stripping it would delete the very step that opened the drawer the
+        # rows are in.
+        if by_table:
+            group_steps = _without_last_click(group_steps)
 
         frozen: set[str] = set()
+        here = await self._reader.current_url()
 
         if scalar:
-            self.field_groups.append(
-                self._group(list(scalar), scalar, group_steps, repeat=None)
-            )
+            if not await self._absorb(scalar, group_steps, here):
+                self.field_groups.append(
+                    self._group(list(scalar), scalar, group_steps, repeat=None)
+                )
+                self._group_urls.append(here)
             frozen |= set(scalar)
 
+        for table_name, binding in rows.items():
+            # A `json` or `dom_rows` table reads what is already on the page, so
+            # unlike the click-through kind it mutates nothing -- but it still
+            # gets its own group, because `_replay_repeat` and `_replay_scalar`
+            # are alternatives for one group and a group cannot do both.
+            self.field_groups.append(
+                self._group(
+                    [table_name], binding.bindings, group_steps, repeat=binding.repeat
+                )
+            )
+            self._group_urls.append(here)
+            frozen |= set(binding.bindings)
+            log.info(
+                "onboard.table_bound_as_rows",
+                field=table_name, kind=binding.repeat.kind, rows=len(binding.rows),
+            )
+
         for table_name, columns in by_table.items():
+            # Every declared column, or none of them. A table bound to half its
+            # columns emits rows in a shape the caller did not ask for, and the
+            # missing column looks like the page not having a value rather than
+            # like the recipe never looking for one.
+            #
+            # Observed rather than anticipated: a real Walmart build bound
+            # `name` and had `value` rejected by the scalar/list guard, and
+            # froze a `dom` repeat producing `{name: ...}` rows. Waiting costs
+            # nothing -- the columns keep their place in `_unfound` and the next
+            # exploration step, or a person, can still satisfy them.
+            declared = set(self._all_fields[table_name].type.columns)
+            missing = declared - set(columns)
+            if missing:
+                log.info(
+                    "onboard.table_partially_bound",
+                    field=table_name, missing=sorted(missing), got=sorted(columns),
+                )
+                for column in columns:
+                    self._failures[column] = (
+                        "found this column but not "
+                        + ", ".join(sorted(missing))
+                        + " -- a table needs every column it declares"
+                    )
+                continue
+
             repeat: RepeatSpec | None = None
             if clicked_ref is not None:
                 repeat = capture.generalize_option_locator(
@@ -445,14 +846,146 @@ class ExplorationState:
                         "found the value but could not work out how to iterate its rows"
                     )
                 continue
+            # Never merged. A repeat mutates the page -- it clicks through an
+            # option set -- so anything sharing its page load would be read
+            # against whichever option happened to be selected last.
             self.field_groups.append(
                 self._group([table_name], columns, group_steps, repeat=repeat)
             )
+            self._group_urls.append(here)
             frozen |= set(columns)
 
         self._pending_steps = []
-        self._global_setup_captured = True
         return frozen
+
+    async def _close_any_dialog(self) -> None:
+        """Shut a modal this batch left open.
+
+        Two things happen and both are needed. The dismissal is **dispatched**,
+        because otherwise the agent spends the rest of its step budget clicking
+        at a page under an overlay -- the exact failure that produced a build
+        where the specifications dialog was never closed. And it is **appended
+        to the route**, so replay does the same thing at the same point.
+
+        Called after every batch that did something, not only after a
+        successful freeze. A dialog blocks the agent whether or not the freeze
+        worked, and the batch that opens one is very often the batch that fails
+        to bind anything -- which is precisely when this used not to run.
+
+        Appending to the route, rather than to the group just frozen, is the
+        only correct position: a group reads *after* its steps run, and the
+        fields just frozen are usually inside the dialog. So this group keeps
+        the open dialog it read from, and every group frozen later gets the
+        dismissal ahead of its own reveals.
+        """
+
+        overlay = await self._reader.overlay()
+        step = capture.dismiss_step_for(overlay)
+        if step is None:
+            return
+
+        self._path.append(step)
+        log.info(
+            "onboard.dialog_left_open",
+            close=overlay.get("close"), locked=overlay.get("locked"), op=step.op,
+        )
+        if self._dispatch_step is None:
+            return
+        try:
+            await self._dispatch_step(step)
+        except Exception:  # noqa: BLE001 - a dismissal that fails is not a failed build
+            log.debug("onboard.dismiss_failed", exc_info=True)
+            return
+        self._reader.invalidate()
+
+    async def _absorb(
+        self,
+        scalar: dict[str, list[Candidate]],
+        group_steps: list[Step],
+        here: str,
+    ) -> bool:
+        """Fold these fields into the previous group instead of starting a new
+        one. True when it worked.
+
+        **Every group costs a page load.** `replay.py` re-navigates before each
+        one so that one group's clicks cannot leak into the next, which is the
+        right default and the wrong price to pay when nothing needed isolating.
+        A build that opens four accordions on one page produced four groups and
+        therefore four full page loads, to read a page that never changed.
+
+        Merging is allowed only when the evidence says the page state is
+        genuinely shared:
+
+        - **Nothing navigated.** If the URL moved, the earlier fields belong to
+          a different page. Merging would re-read them after the navigation and
+          silently collect the wrong page's values -- a wrong answer that looks
+          like a right one.
+        - **The earlier fields still read.** This is checked, not assumed.
+          Opening a second accordion usually leaves the first open; switching to
+          a second *tab* usually does not, and nothing about a step says which
+          kind it is. So the previous group's bindings are re-read against the
+          page as it stands now, which is the only thing that actually answers
+          the question -- and it is free, because the page is already open.
+
+        A group carrying a repeat is never a merge target: it clicks through an
+        option set, so anything sharing its page load would be read against
+        whichever option was selected last.
+        """
+
+        if not self.field_groups:
+            return False
+        previous = self.field_groups[-1]
+        if previous.repeat is not None:
+            return False
+        if self._group_urls and self._group_urls[-1] != here:
+            log.info("onboard.no_merge_navigated", frm=self._group_urls[-1], to=here)
+            return False
+
+        if group_steps and not await self._still_reads(previous):
+            log.info("onboard.no_merge_state_lost", group=previous.group_id)
+            return False
+
+        # The newer route REPLACES the older one; it does not extend it.
+        #
+        # Both groups' steps are now the whole way from a cold page (see
+        # `_route_for`), and the merged group is frozen at the later point, so
+        # the later route is the one that reaches it. Concatenating them -- what
+        # this did while a group carried only its own slice -- would replay the
+        # shared prefix twice and add a second `wait_for_selector` for the same
+        # reveal.
+        bindings = {**previous.bindings, **scalar}
+        self.field_groups[-1] = self._group(
+            [*previous.field_names, *scalar],
+            bindings,
+            group_steps,
+            repeat=None,
+            group_id=previous.group_id,
+        )
+        log.info(
+            "onboard.merged_group",
+            group=previous.group_id, added=sorted(scalar), steps=len(group_steps),
+        )
+        return True
+
+    async def _still_reads(self, group: FieldGroup) -> bool:
+        """Whether everything the group already binds still resolves right now.
+
+        The empirical answer to "did the step I just ran close what the last one
+        opened?", which no amount of reading the step could tell us.
+        """
+
+        from agentpilot.recipe.v2.resolve import is_empty
+
+        for chain in group.bindings.values():
+            if not chain:
+                continue
+            try:
+                value = await self._reader.read(chain[0].locator)
+            except Exception:  # noqa: BLE001 - a locator that raises has not read
+                return False
+            if is_empty(value):
+                return False
+        return True
 
     def _group(
         self,
@@ -461,6 +994,7 @@ class ExplorationState:
         steps: list[Step],
         *,
         repeat: RepeatSpec | None,
+        group_id: str | None = None,
     ) -> FieldGroup:
         steps = list(steps)
         # The reveal has to have landed before the group reads. The driver
@@ -474,7 +1008,7 @@ class ExplorationState:
             if wait is not None:
                 steps.append(wait)
         return FieldGroup(
-            group_id=f"group-{len(self.field_groups)}-{uuid.uuid4().hex[:6]}",
+            group_id=group_id or f"group-{len(self.field_groups)}-{uuid.uuid4().hex[:6]}",
             field_names=field_names,
             bindings=bindings,
             steps=steps,
@@ -506,9 +1040,14 @@ async def onboard_recipe(
     page rather than starting over.
     """
 
+    from agentpilot.recipe.v2.steps import StepContext, dispatch_step
+
     samples = [u for u in (sample_urls or [url]) if u]
     reader = PageReader(
         session=session, registry=registry, driver=driver, base_url=url
+    )
+    step_ctx = StepContext(
+        session=session, registry=registry, driver=driver, reader=reader, meta={}
     )
 
     state = ExplorationState(
@@ -517,6 +1056,7 @@ async def onboard_recipe(
         llm_config=llm_config,
         max_repeat_iterations=max_repeat_iterations,
         on_progress=on_progress,
+        dispatch_step=lambda step: dispatch_step(step, step_ctx, 0),
     )
 
     run_result = await run_agent_loop(

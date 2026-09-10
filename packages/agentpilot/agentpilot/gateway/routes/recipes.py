@@ -483,6 +483,11 @@ async def submit_assist(
                 "hint": r.hint,
                 "shape": r.shape,
                 "html": r.html,
+                # Re-serialised from the parsed `Step`s rather than passed
+                # through from the request, so what the worker replays is what
+                # `parse_recorded_steps` accepted -- an xpath target or an
+                # unknown op is dropped here, not discovered on every run.
+                "steps": [s.to_dict() for s in r.steps],
             }
             for r in resolutions.values()
         ],

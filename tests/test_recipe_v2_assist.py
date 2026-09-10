@@ -21,6 +21,7 @@ from agentpilot.recipe.v2.assist import (
     PendingAsk,
     build_asks,
     drop_field,
+    parse_recorded_steps,
     parse_resolutions,
 )
 from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator, Recipe, TargetSpec
@@ -406,3 +407,102 @@ def test_an_unknown_shape_falls_back_to_a_single_value() -> None:
         _asks(),
     )
     assert got["price"].shape == "one"
+
+
+# --- a recorded route -------------------------------------------------------
+
+
+def test_a_recording_becomes_replayable_steps() -> None:
+    """The answer to "how do I get to it?", which pointing at an element cannot
+    give. A field behind three clicks and a scroll has no selector describing
+    the route."""
+
+    steps = parse_recorded_steps([
+        {"op": "click", "kind": "css", "selector": "#specs", "text": "Specifications"},
+        {"op": "scroll"},
+        {"op": "fill", "kind": "css", "selector": "#q", "text": "hello"},
+        {"op": "press", "text": "Escape"},
+        {"op": "select_option", "kind": "css", "selector": "#size", "text": "M"},
+    ])
+
+    assert [s.op for s in steps] == ["click", "scroll", "fill", "press", "select_option"]
+    assert steps[0].target is not None and steps[0].target.selector == "#specs"
+    assert steps[0].label == 'click "Specifications"'
+    assert steps[2].args == {"text": "hello"}
+    assert steps[3].args == {"key": "Escape"}
+    assert steps[4].args == {"values": ["M"]}
+    # A recording is mostly reveals, and a reveal that does not land is an empty
+    # field rather than a failed run -- the rule every step here follows.
+    assert all(s.optional and s.on_error == "continue" for s in steps)
+
+
+def test_a_step_the_driver_could_never_dispatch_is_dropped() -> None:
+    """`steps.py` resolves selectors with `querySelector` and has no XPath
+    engine, so an xpath target passes `validate_document` and then fails on
+    every single run. Dropping it here is the same gate the exploration capture
+    applies."""
+
+    steps = parse_recorded_steps([
+        {"op": "click", "kind": "xpath", "selector": "//div[1]"},
+        {"op": "click", "kind": "css", "selector": ".ok"},
+    ])
+    assert len(steps) == 1
+    assert steps[0].target is not None and steps[0].target.selector == ".ok"
+
+
+def test_an_op_a_recording_cannot_produce_is_dropped() -> None:
+    """Replay issues its own navigate, and an unknown op should not first be
+    discovered inside a stored recipe."""
+
+    assert parse_recorded_steps([
+        {"op": "navigate", "selector": "#x"},
+        {"op": "execute_js", "selector": "#x"},
+        {"op": "nonsense"},
+        "not even a dict",
+    ]) == []
+
+
+def test_an_op_that_needs_a_target_and_has_none_is_dropped() -> None:
+    steps = parse_recorded_steps([
+        {"op": "click"},
+        {"op": "fill", "text": "x"},
+        # These two are legitimately page-level.
+        {"op": "press", "text": "Enter"},
+        {"op": "scroll"},
+    ])
+    assert [s.op for s in steps] == ["press", "scroll"]
+
+
+def test_a_recorded_answer_needs_steps_to_be_an_answer() -> None:
+    assert parse_resolutions(
+        [{"field": "specs", "action": "steps", "steps": []}],
+        [PendingAsk(field="specs", kind="unresolved", reason="")],
+    ) == {}
+
+    got = parse_resolutions(
+        [{"field": "specs", "action": "steps",
+          "steps": [{"op": "click", "selector": "#s"}]}],
+        [PendingAsk(field="specs", kind="unresolved", reason="")],
+    )
+    assert got["specs"].action == "steps"
+    assert len(got["specs"].steps) == 1
+
+
+def test_a_recording_survives_the_park_and_resume_round_trip() -> None:
+    """The browser sends `{op, selector, text}`; the run parks; what comes back
+    out of the store is `Step.to_dict()`. Both are the same recording, and a
+    `fill` whose text lives in `args` by then must not come back empty."""
+
+    sent = parse_recorded_steps([
+        {"op": "click", "kind": "css", "selector": "#specs", "text": "Specifications"},
+        {"op": "fill", "kind": "css", "selector": "#q", "text": "hello"},
+        {"op": "press", "text": "Escape"},
+    ])
+    stored = [s.to_dict() for s in sent]
+    back = parse_recorded_steps(stored)
+
+    assert [s.op for s in back] == ["click", "fill", "press"]
+    assert back[1].args == {"text": "hello"}
+    assert back[2].args == {"key": "Escape"}
+    assert back[0].target is not None and back[0].target.selector == "#specs"
+    assert all(s.optional and s.on_error == "continue" for s in back)

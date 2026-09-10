@@ -53,13 +53,26 @@ WebSocket, not a shorter interval.
 
 ## Divergences from upstream
 
-Three, all deliberate, all documented at their site:
+Four, all deliberate, all documented at their site:
 
 1. **`VisualElementPicker.ts` — the `chrome.*` seam.** Upstream delivered a
    finished selection via `chrome.runtime.sendMessage` in four places. There is
    no extension runtime here, so those became one `emit` sink that `entry.ts`
-   points at `window.__cpPickResult`. This is the *only* edit inside `vendor/`
-   beyond mechanical `import type` conversions for `verbatimModuleSyntax`.
+   points at `window.__cpPickResult`.
+
+1b. **`VisualElementPicker.ts` — `pinned`.** ↑/↓ now hold the selection still
+   until `Unpin`, and `handleMouseMove` returns early while they do. This
+   cannot be dropped on a re-sync without reintroducing a real bug, and the
+   bug only exists here: upstream drove ↑ from a **keystroke**, so the cursor
+   never moved. This picker is driven from a panel *outside* the page, so
+   reaching the ↑ button means dragging the cursor across the live view — and
+   `LiveViewCanvas` forwards every pixel of that journey into the page as a
+   `mousemove`, which reset `currentElement` back to whatever was underneath.
+   Expansion appeared to work and Enter committed the leaf. `pin.test.ts` is
+   the guard.
+
+   These two are the *only* edits inside `vendor/` beyond mechanical
+   `import type` conversions for `verbatimModuleSyntax`.
 
 2. **`enrich.ts` — detail picks lose their candidate chain.**
    `DetailSelectionStrategy` computes the full ranked list, keeps only the best
@@ -76,7 +89,7 @@ Three, all deliberate, all documented at their site:
 ## Re-syncing
 
 Keep `vendor/` a copy, not a fork. To pull upstream changes: re-copy the tree,
-re-apply divergence 1, re-run the `import type` conversions, then
+re-apply divergences 1 and 1b, re-run the `import type` conversions, then
 `npm run build:picker && npm test`. The four upstream test suites came across
 unchanged and are the regression net — if a re-sync alters the selector or
 schema heuristics, they fail.

@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { ArrowRight, MousePointerClick } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { SourceBadge } from '@/components/app/wizard/SourceBadge'
+import { targetAccepts } from '@/lib/recipe/urlmatch'
 import type { Candidate, FieldGroup, Recipe, Step } from '@/lib/recipe/types'
 
 /**
@@ -60,22 +62,58 @@ export function RecipeOverview({
   )
 }
 
+/**
+ * Which URLs the recipe will accept, and a box to check one against it.
+ *
+ * The matcher is guessed from the sample URLs and decides, before a browser is
+ * ever opened, whether this is a reusable recipe or a bookmark. Too narrow is
+ * the failure that hides: everything looks right, and the first time anyone
+ * finds out is when a perfectly good recipe refuses their URL. So the check is
+ * offered here, where the person still has the page in front of them, using the
+ * same matching code the worker runs.
+ */
 function TargetLine({ recipe }: { recipe: Recipe }) {
   const match = recipe.target?.match ?? []
+  const [probe, setProbe] = useState('')
+  const trimmed = probe.trim()
+  const accepted = trimmed ? targetAccepts(recipe.target ?? {}, trimmed) : null
+
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="text-muted-foreground">Applies to</span>
-      {match.length === 0 ? (
-        // `validate_document` warns about this too. It is worth surfacing here
-        // rather than only in the linter: a recipe in a shared catalogue that
-        // accepts any URL will be pointed at pages it was never built for.
-        <Badge variant="warning">any URL — worth narrowing before publishing</Badge>
-      ) : (
-        match.map((matcher, i) => (
-          <code key={i} className="rounded bg-muted px-1.5 py-0.5 font-mono">
-            {matcher.pattern}
-          </code>
-        ))
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Applies to</span>
+        {match.length === 0 ? (
+          // `validate_document` warns about this too. It is worth surfacing here
+          // rather than only in the linter: a recipe in a shared catalogue that
+          // accepts any URL will be pointed at pages it was never built for.
+          <Badge variant="warning">any URL — worth narrowing before publishing</Badge>
+        ) : (
+          match.map((matcher, i) => (
+            <code key={i} className="rounded bg-muted px-1.5 py-0.5 font-mono">
+              {matcher.pattern}
+            </code>
+          ))
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          className="h-6 min-w-0 flex-1 rounded border border-border bg-transparent px-1.5 font-mono text-[11px]"
+          value={probe}
+          placeholder="try another page of the same kind…"
+          onChange={(e) => setProbe(e.target.value)}
+        />
+        {accepted !== null &&
+          (accepted ? (
+            <Badge variant="success">accepted</Badge>
+          ) : (
+            <Badge variant="destructive">refused</Badge>
+          ))}
+      </div>
+      {accepted === false && (
+        <p className="text-[11px] text-muted-foreground">
+          Widen the pattern in the studio&rsquo;s Target tab — usually by replacing the part of
+          the path that names one page with <code className="font-mono">*</code>.
+        </p>
       )}
     </div>
   )

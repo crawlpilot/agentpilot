@@ -47,6 +47,22 @@ class AgentStepRecord:
     screenshot: bytes | None = None
     """Raw viewport PNG captured this step under vision. Persisted to BYTEA and
     served by its own image route; never inlined into the step-list payload."""
+    observed_tree: Any = None
+    """The fused DOM+AX tree this step's actions were chosen against.
+
+    **In memory only, and never persisted** -- it is a live tree, not run
+    history. `agent_store` writes named columns, so nothing picks it up by
+    accident, and `render_summary` does not read it.
+
+    It exists because `ref`s are only meaningful in the tree they came from:
+    `node_ref` is `e{backend_node_id}`, and a click that re-renders a subtree
+    gets new ids. An `on_step` hook that re-snapshots the page after the actions
+    ran -- which is all `recipe/v2/onboard.py` could do -- resolves the agent's
+    refs against a *different* tree, so `find_node` misses whenever anything
+    re-rendered. That failure is silent (a missed ref and a declined `navigate`
+    both return None) and it is why reveal steps were captured on some pages and
+    not others. Handing over the tree the refs were allocated from removes the
+    guess rather than tuning it."""
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

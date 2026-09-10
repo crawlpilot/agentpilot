@@ -492,7 +492,7 @@ class RecipeResolutionIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     field: str
-    action: Literal["pick", "scope", "describe", "skip"]
+    action: Literal["pick", "scope", "steps", "describe", "skip"]
     locators: list[dict[str, Any]] = []
     """`pick`: the element they clicked. `scope`: the REGION they pointed at,
     which becomes a `within` for whatever the model finds inside it.
@@ -511,6 +511,14 @@ class RecipeResolutionIn(BaseModel):
     element rather than re-read server-side. Prompt context only: every proposal
     is still verified against the live page, so a stale fragment costs accuracy,
     never correctness."""
+    steps: list[dict[str, Any]] = Field(default=[], max_length=60)
+    """`steps`: the route they recorded to the field -- what they clicked,
+    filled and scrolled to make it visible. The answer to "how do I get to it?",
+    which pointing at an element cannot give.
+
+    Bounded because a recording is meant to be read and edited by a person;
+    `record.ts` caps itself at the same number. Every step is re-checked
+    server-side against a *freshly loaded* page before anything is bound."""
 
 
 class RecipeAssistRequest(BaseModel):

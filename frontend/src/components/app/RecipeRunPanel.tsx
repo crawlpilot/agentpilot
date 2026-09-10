@@ -93,19 +93,24 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        {hasOwnUrl ? (
+        {hasOwnUrl && (
           <Button size="sm" variant="outline" onClick={handleRun} disabled={runRecipe.isPending}>
             <Play className="size-3.5" />
             Run
           </Button>
-        ) : (
-          <Button size="sm" asChild>
-            <Link to={`/marketplace/${recipeId}`}>
-              <Play className="size-3.5" />
-              Run on your URLs
-            </Link>
-          </Button>
         )}
+        {/*
+          Offered whether or not the recipe has a URL of its own. It used to
+          appear only when it had none, which is backwards: a recipe built
+          against a real page is the one most worth applying to other pages of
+          the same kind, and it was the only one that never offered the door.
+        */}
+        <Button size="sm" variant={hasOwnUrl ? 'outline' : 'default'} asChild>
+          <Link to={`/marketplace/${recipeId}`}>
+            <Play className="size-3.5" />
+            Run on your URLs
+          </Link>
+        </Button>
         <Button
           size="sm"
           variant="outline"

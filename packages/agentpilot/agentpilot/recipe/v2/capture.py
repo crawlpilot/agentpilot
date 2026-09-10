@@ -229,6 +229,45 @@ def wait_step_for(
     )
 
 
+def dismiss_step_for(overlay: dict[str, Any]) -> Step | None:
+    """The step that closes a modal a reveal left open, or None.
+
+    A dialog opened to expose one field covers everything under it and
+    scroll-locks the document, so the next click and every later scroll act
+    against a page that will not accept them. During exploration that costs the
+    agent its remaining steps; inside a merged group at replay it costs the
+    fields behind it. Nothing about the step that opened it says it opened a
+    dialog rather than an accordion -- `PageReader.overlay` asks the page
+    instead.
+
+    Escape when there is no close control, because a great many dialogs answer
+    it and the alternative is no step at all. Always `optional` and
+    `on_error: continue`: a dialog that did not appear this time is not a failed
+    run, which is the rule every reveal step here already follows.
+    """
+
+    if not overlay.get("open") and not overlay.get("locked"):
+        return None
+
+    close = overlay.get("close")
+    if isinstance(close, str) and close:
+        label = overlay.get("label") or "close"
+        return Step(
+            op="click",
+            target=Locator(kind="css", selector=close),
+            on_error="continue",
+            optional=True,
+            label=f"close the dialog ({label})",
+        )
+    return Step(
+        op="press",
+        args={"key": "Escape"},
+        on_error="continue",
+        optional=True,
+        label="close the dialog",
+    )
+
+
 def generalize_option_locator(
     *,
     snapshot: EnhancedDOMTreeNode,
@@ -318,6 +357,7 @@ def last_click_ref(actions: list[dict[str, Any]]) -> str | None:
 __all__ = [
     "REVEALING_OPS",
     "REVEAL_TIMEOUT_MS",
+    "dismiss_step_for",
     "dispatchability_error",
     "document_scoped_selector",
     "generalize_option_locator",

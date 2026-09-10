@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, CornerDownLeft, MousePointerClick, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, CornerDownLeft, MousePointerClick, Pin, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 
@@ -7,7 +7,7 @@ interface Props {
   label: string
   onStart: () => void
   onCancel: () => void
-  onRefine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
+  onRefine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => void
   disabled?: boolean
 }
 
@@ -20,6 +20,13 @@ interface Props {
  * focus, and during a pick the studio panel generally does, so those keys
  * never leave the browser. The extension hit the same wall from its side
  * panel and added an explicit action message for exactly this.
+ *
+ * That indirection is also why the picker has to PIN what Wider/Narrower
+ * select. Reaching these buttons means dragging the cursor across the live
+ * view, and every pixel of that journey is a forwarded `mousemove` -- which
+ * used to reset the selection back to whatever was underneath, so Wider
+ * appeared to work and Use-this committed the leaf anyway. See
+ * `VisualElementPicker.pinned`.
  */
 export function PickerControls({ status, label, onStart, onCancel, onRefine, disabled }: Props) {
   if (status === 'idle') {
@@ -52,6 +59,16 @@ export function PickerControls({ status, label, onStart, onCancel, onRefine, dis
           onClick={() => onRefine('Enter')}>
           <CornerDownLeft className="size-3.5" />
           Use this
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 px-2"
+          title="Wider/Narrower hold the selection still. Click to follow the cursor again."
+          onClick={() => onRefine('Unpin')}
+        >
+          <Pin className="size-3.5" />
+          Follow cursor
         </Button>
       </div>
       <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onCancel}>

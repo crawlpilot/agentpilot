@@ -329,6 +329,23 @@ export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
         continue
       }
 
+      if (step.op === 'press') {
+        // Targetless by design: a recorded Escape closes whatever has focus,
+        // and a recorded Enter submits it. Both are about the page's current
+        // state rather than about one element, which is why `Step.press` in the
+        // contract carries a key and no target either.
+        const key = step.text || 'Enter'
+        const to = (document.activeElement as HTMLElement) || document.body
+        for (const type of ['keydown', 'keypress', 'keyup']) {
+          to.dispatchEvent(
+            new KeyboardEvent(type, { key, bubbles: true, cancelable: true }),
+          )
+        }
+        await sleep(300)
+        out.push({ op: step.op, status: 'ok' })
+        continue
+      }
+
       const el = step.selector ? pickOne(step.selector, step.kind === 'xpath') : null
 
       if (step.op === 'scroll') {
@@ -375,6 +392,12 @@ export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
         else input.value = step.text ?? ''
         input.dispatchEvent(new Event('input', { bubbles: true }))
         input.dispatchEvent(new Event('change', { bubbles: true }))
+      } else if (step.op === 'select_option') {
+        const select = el as HTMLSelectElement
+        select.value = step.text ?? ''
+        select.dispatchEvent(new Event('input', { bubbles: true }))
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        await sleep(300)
       } else if (step.op === 'wait_for_selector') {
         // Already resolved above, so it is present.
       } else {

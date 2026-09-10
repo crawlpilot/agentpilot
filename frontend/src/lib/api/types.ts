@@ -794,7 +794,7 @@ export interface PendingAsk {
 
 export interface RecipeResolution {
   field: string
-  action: 'pick' | 'scope' | 'describe' | 'skip'
+  action: 'pick' | 'scope' | 'steps' | 'describe' | 'skip'
   /**
    * `pick`: the element clicked. `scope`: the REGION pointed at, which becomes
    * a `within` for whatever the model finds inside it.
@@ -806,6 +806,13 @@ export interface RecipeResolution {
   shape?: 'one' | 'values' | 'map' | 'rows'
   /** `scope`: the region's markup, as prompt context. Verified against the live page regardless. */
   html?: string
+  /**
+   * `steps`: the route a person recorded to the field — what they clicked,
+   * filled and scrolled to make it visible. Replayed against a *freshly
+   * loaded* page before anything is bound, because the route they recorded
+   * probably started from a page they had already opened.
+   */
+  steps?: Array<Record<string, unknown>>
 }
 
 export interface RecipeAssistRequest {

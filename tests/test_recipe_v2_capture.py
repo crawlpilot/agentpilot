@@ -276,3 +276,49 @@ def test_the_reveal_timeout_matches_the_frontends() -> None:
     found = re.search(r"const REVEAL_TIMEOUT_MS = ([0-9_]+)", source)
     assert found is not None
     assert int(found.group(1).replace("_", "")) == capture.REVEAL_TIMEOUT_MS
+
+
+# --- closing what a reveal left open -----------------------------------------
+
+
+def _overlay(**over):
+    base = {"open": False, "locked": False, "close": None, "label": None}
+    base.update(over)
+    return base
+
+
+def test_a_dialog_with_a_close_control_is_closed_by_clicking_it() -> None:
+    step = capture.dismiss_step_for(
+        _overlay(open=True, close='button[aria-label="Close"]', label="Close")
+    )
+    assert step is not None
+    assert step.op == "click"
+    assert step.target is not None
+    assert step.target.selector == 'button[aria-label="Close"]'
+    # A dialog that did not appear this time is not a failed run -- the rule
+    # every reveal step in this system already follows.
+    assert step.optional is True
+    assert step.on_error == "continue"
+
+
+def test_a_dialog_with_no_close_control_gets_escape() -> None:
+    """Not a guess for its own sake: a great many dialogs answer Escape, and the
+    alternative here is no step at all -- which leaves the overlay covering
+    every later click and scroll."""
+
+    step = capture.dismiss_step_for(_overlay(open=True))
+    assert step is not None
+    assert step.op == "press"
+    assert step.args == {"key": "Escape"}
+    assert step.optional is True
+
+
+def test_a_scroll_lock_with_no_visible_dialog_still_gets_a_dismissal() -> None:
+    """The lock is the thing that breaks a later `scroll` step, and it outlives
+    a dialog that has faded its overlay out without removing it."""
+
+    assert capture.dismiss_step_for(_overlay(locked=True)) is not None
+
+
+def test_a_clear_page_gets_no_step() -> None:
+    assert capture.dismiss_step_for(_overlay()) is None

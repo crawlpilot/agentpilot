@@ -35,7 +35,7 @@ import structlog
 
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.v2.evaluate import PageReader
-from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator, Recipe
+from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator, Recipe, Step
 from agentpilot.recipe.v2.selector_agent import rank_candidates, verify_locators
 from crawlpilot.session.interactive import InteractiveSession
 from crawlpilot.session.registry import RegistryProtocol
@@ -44,8 +44,16 @@ from crawlpilot.spi.driver import BrowserDriver
 log = structlog.get_logger(__name__)
 
 AskKind = Literal["unresolved", "rejected", "absent"]
-ResolutionAction = Literal["pick", "scope", "describe", "skip"]
+ResolutionAction = Literal["pick", "scope", "steps", "describe", "skip"]
 ScopeShape = Literal["one", "values", "map", "rows"]
+
+# Ops a recording is allowed to carry. Everything else the page might produce is
+# either not a reveal (`navigate` -- replay issues its own) or not something the
+# recorder emits, and a stored recipe should not be the first place an unknown
+# op is discovered.
+_RECORDABLE_OPS = frozenset({
+    "click", "fill", "select_option", "press", "scroll", "scroll_into_view", "hover",
+})
 
 
 @dataclass(frozen=True)
@@ -98,11 +106,18 @@ class Resolution:
     element. Prompt context only; every proposal is still verified against the
     live page."""
 
+    steps: list[Step] = field(default_factory=list)
+    """`steps`: what the person did to the page, recorded in their browser.
+
+    The answer to "how do I get to it?", which pointing at an element cannot
+    give. A field behind three clicks, a scroll and a dismissal has no selector
+    that describes the route -- and this is the route."""
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Resolution | None:
         name = str(d.get("field") or "")
         action = d.get("action")
-        if not name or action not in ("pick", "scope", "describe", "skip"):
+        if not name or action not in ("pick", "scope", "steps", "describe", "skip"):
             return None
         locators: list[Locator] = []
         for raw in d.get("locators") or []:
@@ -112,9 +127,12 @@ class Resolution:
                 except Exception:  # noqa: BLE001 - a bad locator is not a bad request
                     continue
         hint = str(d.get("hint") or "").strip()
+        steps = parse_recorded_steps(d.get("steps") or [])
         if action in ("pick", "scope") and not locators:
             return None
         if action == "describe" and not hint:
+            return None
+        if action == "steps" and not steps:
             return None
         shape = d.get("shape")
         return cls(
@@ -124,7 +142,104 @@ class Resolution:
             hint=hint,
             shape=shape if shape in ("one", "values", "map", "rows") else "one",
             html=str(d.get("html") or ""),
+            steps=steps,
         )
+
+
+def parse_recorded_steps(raw: list[Any]) -> list[Step]:
+    """Recorded browser events as replayable `Step`s.
+
+    Two filters, and both exist because a step that gets past them fails on
+    every single run rather than here:
+
+    - **Only ops a recording can honestly produce.** An unknown op should not
+      first be discovered inside a stored recipe.
+    - **Only targets the driver can dispatch.** `capture.dispatchability_error`
+      is the same gate the exploration capture uses -- an xpath target or a css
+      target carrying an index passes `validate_document` and then fails
+      forever, because the driver resolves selectors with `querySelector` and
+      has no notion of the nth match.
+
+    Everything is `optional` with `on_error: continue`, matching every reveal
+    step this system emits: a cookie banner that did not appear this time is not
+    a failed run, and a recording is mostly reveals.
+    """
+
+    from agentpilot.recipe.v2.capture import dispatchability_error
+
+    out: list[Step] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        op = str(item.get("op") or "")
+        if op not in _RECORDABLE_OPS:
+            continue
+
+        # Two shapes reach here and both are the same steps. The browser sends
+        # `{op, selector, kind, text}`; the run is then parked, and what comes
+        # back out of the store is `Step.to_dict()`. Re-parsing rather than
+        # re-deriving keeps the round trip lossless -- a `fill`'s text lives in
+        # `args` by then, not in `text`, and rebuilding from the recorder shape
+        # would silently empty it.
+        if "target" in item or "args" in item:
+            try:
+                step = Step.from_dict(item)
+            except Exception:  # noqa: BLE001 - a malformed step is not a bad request
+                continue
+            if dispatchability_error(step.target, step.op) is None:
+                out.append(step)
+            continue
+
+        selector = str(item.get("selector") or "").strip()
+        # The declared kind, not an assumed one. `record.ts` only ever emits
+        # css, but forcing `kind="css"` here would turn an xpath expression that
+        # arrived some other way into a css selector carrying `//div[1]` --
+        # which sails past the dispatchability gate below and then throws inside
+        # `querySelector` on every run. Honouring the kind is what lets the gate
+        # see it for what it is.
+        kind = "xpath" if item.get("kind") == "xpath" else "css"
+        target = Locator(kind=kind, selector=selector) if selector else None
+        # `press` and a page-level `scroll` legitimately have no target; every
+        # other op needs one, and one without is not replayable.
+        if target is None and op not in ("press", "scroll"):
+            continue
+        if dispatchability_error(target, op) is not None:
+            continue
+
+        text = str(item.get("text") or "")
+        args: dict[str, Any] = {}
+        if op == "fill":
+            args = {"text": text}
+        elif op == "select_option":
+            args = {"values": [text]} if text else {}
+        elif op == "press":
+            args = {"key": text or "Enter"}
+        elif op == "scroll":
+            args = {"direction": "down"}
+
+        out.append(
+            Step(
+                op=op,  # type: ignore[arg-type]
+                target=target,
+                args=args,
+                on_error="continue",
+                optional=True,
+                label=_recorded_label(op, item.get("text")),
+            )
+        )
+    return out
+
+
+def _recorded_label(op: str, text: Any) -> str:
+    """What the person did, in their words, so a recipe reads as a sequence
+    rather than as anonymous selectors."""
+
+    said = str(text or "").strip()
+    if op == "click" and said:
+        return f'click "{said[:40]}"'
+    if op == "press" and said:
+        return f"press {said}"
+    return f"recorded {op}"
 
 
 def parse_resolutions(
@@ -248,6 +363,7 @@ async def apply_resolutions(
     skips = [r for r in resolutions.values() if r.action == "skip"]
     picks = [r for r in resolutions.values() if r.action == "pick"]
     scopes = [r for r in resolutions.values() if r.action == "scope"]
+    recordings = [r for r in resolutions.values() if r.action == "steps"]
     describes = {r.field: r.hint for r in resolutions.values() if r.action == "describe"}
 
     for resolution in skips:
@@ -292,6 +408,14 @@ async def apply_resolutions(
         if problem:
             unsettled[resolution.field] = problem
 
+    for resolution in recordings:
+        recipe, problem = await _apply_steps(
+            recipe, resolution, url=url, session=session, registry=registry,
+            driver=driver, llm_config=llm_config,
+        )
+        if problem:
+            unsettled[resolution.field] = problem
+
     if describes:
         recipe, repaired = await repair_fields(
             recipe, describes, url=url, session=session, registry=registry,
@@ -302,6 +426,135 @@ async def apply_resolutions(
                 unsettled[name] = "could not find it from that description either"
 
     return recipe, unsettled
+
+
+async def _apply_steps(
+    recipe: Recipe,
+    resolution: Resolution,
+    *,
+    url: str,
+    session: InteractiveSession,
+    registry: RegistryProtocol,
+    driver: BrowserDriver,
+    llm_config: LLMConfig,
+) -> tuple[Recipe, str | None]:
+    """Bind a field from the route a person recorded to it.
+
+    **On a fresh page, not on theirs.** Someone answering an ask has usually
+    already opened the thing they were about to record -- it is the natural way
+    to go looking for it -- so their first recorded click may land on something
+    only their session has. Replaying the recording against a reloaded page is
+    the only way to find out, and the alternative is a recipe that verifies here
+    and returns nothing on every real run. `_apply_scope` reloads for the same
+    reason.
+
+    Then the ordinary selector agent looks at what the route revealed. The
+    person contributed the part they knew -- how to get there -- and the model
+    contributes the part it is good at, which is which node holds the value.
+    """
+
+    from agentpilot.recipe.v2.review import restore_page
+    from agentpilot.recipe.v2.schema import all_leaf_fields
+    from agentpilot.recipe.v2.selector_agent import propose_and_verify
+    from agentpilot.recipe.v2.steps import run_steps
+    from crawlpilot.dom.serializer import serialize
+
+    leaves = all_leaf_fields(recipe.fields)
+    table = recipe.fields.get(resolution.field)
+    is_table = table is not None and table.type.is_rows
+    spec = table if is_table else leaves.get(resolution.field)
+    if spec is None:
+        return recipe, "that field is not in this recipe any more"
+
+    reader, ctx = await restore_page(
+        recipe, url, session=session, registry=registry, driver=driver
+    )
+    trace, policy = await run_steps(resolution.steps, ctx)
+    reader.invalidate()
+
+    ran = [o for o in trace if o.status in ("ok", "recovered")]
+    if not ran:
+        # Every step is `optional`, so a recording that matches nothing anywhere
+        # is completely silent -- and would bind the field against the page as
+        # loaded, which is not what the person recorded.
+        return recipe, (
+            "none of the recorded steps found anything on a freshly loaded page. "
+            "The route probably starts from something your session already had "
+            "open -- reload the page and record it again from the top."
+        )
+
+    snapshot = await reader.snapshot()
+    if snapshot is None:
+        return recipe, "could not read the page after replaying those steps"
+
+    if is_table:
+        from agentpilot.recipe.v2.rows import propose_rows
+
+        binding = await propose_rows(
+            spec,
+            snapshot_text=serialize(snapshot).llm_text,
+            structured_data=await reader.structured_data(),
+            reader=reader,
+            llm_config=llm_config,
+            page_url=url,
+        )
+        if binding is None:
+            return recipe, (
+                "those steps ran, but what they revealed does not read as "
+                "repeating rows"
+            )
+        recipe = _bind_repeat(recipe, spec.name, binding)
+        return _with_steps(recipe, spec.name, resolution.steps), None
+
+    verified = await propose_and_verify(
+        {resolution.field: spec},
+        snapshot_text=serialize(snapshot).llm_text,
+        structured_data=await reader.structured_data(),
+        llm_config=llm_config,
+        verify=reader.read,
+        page_url=url,
+    )
+    candidates = verified.get(resolution.field)
+    if not candidates:
+        return recipe, (
+            f"those steps ran ({len(ran)} of {len(resolution.steps)} did something), "
+            "but the field still could not be located on what they revealed"
+        )
+
+    log.info(
+        "assist.bound_from_recording",
+        field=resolution.field, steps=len(resolution.steps), ran=len(ran),
+        policy=policy,
+    )
+    recipe = _bind(recipe, resolution.field, candidates)
+    return _with_steps(recipe, resolution.field, resolution.steps), None
+
+
+def _with_steps(recipe: Recipe, name: str, steps: list[Step]) -> Recipe:
+    """Put the recorded route onto the group that owns the field.
+
+    Replaces rather than appends: the recording is the whole route from a fresh
+    page, which is exactly what a group's `steps` are, and running whatever was
+    there before it would repeat half of it.
+    """
+
+    from agentpilot.recipe.v2.schema import column_to_table_map
+
+    owner = column_to_table_map(recipe.fields).get(name) or name
+    groups = list(recipe.field_groups)
+    for index, group in enumerate(groups):
+        if name in group.bindings or owner in group.field_names:
+            groups[index] = FieldGroup(
+                group_id=group.group_id,
+                field_names=list(group.field_names),
+                bindings=dict(group.bindings),
+                steps=list(steps),
+                repeat=group.repeat,
+                expect=group.expect,
+            )
+            recipe.field_groups = groups
+            return recipe
+    return recipe
 
 
 async def _apply_scope(
@@ -338,7 +591,13 @@ async def _apply_scope(
     from agentpilot.recipe.v2.steps import run_steps
 
     leaves = all_leaf_fields(recipe.fields)
-    spec = leaves.get(resolution.field)
+    # A table field has no entry in `leaves` -- its columns are the leaves -- so
+    # looking only there rejected every ask about a table with "that field is
+    # not in this recipe any more", which is exactly the ask a person is most
+    # likely to be answering by pointing at a section.
+    table = recipe.fields.get(resolution.field)
+    is_table = table is not None and table.type.is_rows
+    spec = table if is_table else leaves.get(resolution.field)
     if spec is None:
         return recipe, "that field is not in this recipe any more"
 
@@ -358,6 +617,12 @@ async def _apply_scope(
             "to open it first. Point at whatever you clicked to reveal it."
         )
 
+    if is_table:
+        return await _bind_rows_in(
+            recipe, spec, scope,
+            reader=reader, llm_config=llm_config, url=url, html=resolution.html,
+        )
+
     verified = await propose_within(
         {resolution.field: _shaped(spec, resolution.shape)},
         scope=scope,
@@ -372,6 +637,85 @@ async def _apply_scope(
 
     recipe.fields[resolution.field] = _shaped(spec, resolution.shape)
     return _bind(recipe, resolution.field, candidates), None
+
+
+async def _bind_rows_in(
+    recipe: Recipe,
+    spec: Any,
+    scope: Locator,
+    *,
+    reader: PageReader,
+    llm_config: LLMConfig,
+    url: str,
+    html: str,
+) -> tuple[Recipe, str | None]:
+    """Bind a table field from the region a person pointed at.
+
+    The same question `propose_rows` asks during a build -- where are the rows,
+    and where inside a row is each column -- with the search narrowed to what
+    the person supplied. That narrowing is the whole value of the ask: across a
+    page the model is choosing among thousands of nodes, inside a section among
+    dozens, and the person has already contributed the piece of knowledge they
+    actually had.
+    """
+
+    from agentpilot.recipe.v2.rows import propose_rows
+
+    binding = await propose_rows(
+        spec,
+        snapshot_text=html,
+        structured_data=await reader.structured_data(),
+        reader=reader,
+        llm_config=llm_config,
+        page_url=url,
+        scope=scope,
+    )
+    if binding is None:
+        return recipe, (
+            "that section does not read as repeating rows -- every row came back "
+            "the same, or the columns were not inside one. If it is not a table, "
+            "pick a different shape for it."
+        )
+
+    log.info(
+        "assist.table_bound_as_rows",
+        field=spec.name, kind=binding.repeat.kind, rows=len(binding.rows),
+    )
+    return _bind_repeat(recipe, spec.name, binding), None
+
+
+def _bind_repeat(recipe: Recipe, name: str, binding: Any) -> Recipe:
+    """Put a repeat and its column chains onto the group that owns the table.
+
+    Distinct from `_bind`, which writes a single candidate chain: a table is
+    satisfied by its group's `RepeatSpec` plus one binding per column, and
+    `validate_document` rejects a table group carrying no repeat.
+    """
+
+    groups = list(recipe.field_groups)
+    for index, group in enumerate(groups):
+        if name in group.field_names:
+            groups[index] = FieldGroup(
+                group_id=group.group_id,
+                field_names=list(group.field_names),
+                bindings=binding.bindings,
+                steps=list(group.steps),
+                repeat=binding.repeat,
+                expect=group.expect,
+            )
+            recipe.field_groups = groups
+            return recipe
+
+    groups.append(
+        FieldGroup(
+            group_id=f"assist-{name}",
+            field_names=[name],
+            bindings=binding.bindings,
+            repeat=binding.repeat,
+        )
+    )
+    recipe.field_groups = groups
+    return recipe
 
 
 async def _resolves(reader: PageReader, locator: Locator) -> bool:

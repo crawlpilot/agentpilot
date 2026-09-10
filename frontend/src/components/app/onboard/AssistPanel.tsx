@@ -10,7 +10,9 @@ import { usePagePicker } from '@/hooks/usePagePicker'
 import { useSessionsList } from '@/hooks/useSessionsList'
 import { useSubmitAssist } from '@/hooks/useRecipes'
 import { useToast } from '@/components/ui/toast'
+import { StepRecorder } from './StepRecorder'
 import { detailPickToDraft, scopeFromPick } from '@/lib/recipe/fromPick'
+import type { PreviewStep } from '@/lib/picker/preview'
 import type { PendingAsk, RecipeResolution } from '@/lib/api/types'
 
 /**
@@ -52,9 +54,35 @@ export function AssistPanel({
   const active = sessionId ?? runSession?.session_id ?? sessions[0]?.session_id ?? null
 
   const [selected, setSelected] = useState<string>(asks[0]?.field ?? '')
+  // The route recorded for each field, kept here rather than in the row so a
+  // recording survives the row re-rendering under it.
+  const [recorded, setRecorded] = useState<Record<string, PreviewStep[]>>({})
   const picker = usePagePicker(active)
 
-  const answered = useMemo(() => Object.keys(answers).length, [answers])
+  /**
+   * Everything to send: what was picked/described/skipped, plus a `steps`
+   * answer for each field with a recording that nothing else has answered.
+   *
+   * Assembled here rather than as the recording happens, so a recording in
+   * progress does not count as a finished answer and collapse the row it is
+   * being made in. An explicit pick wins: choosing one after recording is a
+   * correction, not an addition.
+   */
+  const resolutions = useMemo(() => {
+    const out = { ...answers }
+    for (const [field, steps] of Object.entries(recorded)) {
+      if (steps.length && !out[field]) {
+        out[field] = {
+          field,
+          action: 'steps',
+          steps: steps as unknown as Array<Record<string, unknown>>,
+        }
+      }
+    }
+    return out
+  }, [answers, recorded])
+
+  const answered = useMemo(() => Object.keys(resolutions).length, [resolutions])
 
   async function scopeFor(fieldName: string, shape: 'one' | 'values' | 'map' | 'rows') {
     const payload = await picker.pick('detail')
@@ -102,7 +130,7 @@ export function AssistPanel({
   }
 
   function send() {
-    submit.mutate(Object.values(answers), {
+    submit.mutate(Object.values(resolutions), {
       onSuccess: (resp) =>
         toast({
           title: 'Sent',
@@ -173,6 +201,11 @@ export function AssistPanel({
               scoped={scoped[ask.field]}
               onCancelPick={picker.cancel}
               onRefinePick={picker.refine}
+              picker={picker}
+              steps={recorded[ask.field] ?? []}
+              onSteps={(steps) =>
+                setRecorded((prev) => ({ ...prev, [ask.field]: steps }))
+              }
               onDescribe={(hint) =>
                 setAnswers((prev) => ({
                   ...prev,
@@ -233,6 +266,9 @@ function AskRow({
   onDescribe,
   onSkip,
   onClear,
+  picker,
+  steps,
+  onSteps,
 }: {
   ask: PendingAsk
   answer: RecipeResolution | undefined
@@ -244,10 +280,13 @@ function AskRow({
   onScope: (shape: 'one' | 'values' | 'map' | 'rows') => void
   scoped: { selector: string; matched: number; preview: string } | undefined
   onCancelPick: () => void
-  onRefinePick: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
+  onRefinePick: (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => void
   onDescribe: (hint: string) => void
   onSkip: () => void
   onClear: () => void
+  picker: ReturnType<typeof usePagePicker>
+  steps: PreviewStep[]
+  onSteps: (steps: PreviewStep[]) => void
 }) {
   const [hint, setHint] = useState('')
 
@@ -360,6 +399,13 @@ function AskRow({
               </div>
             )}
           </div>
+          <StepRecorder
+            picker={picker}
+            disabled={!canPick}
+            steps={steps}
+            onChange={onSteps}
+          />
+
           <div className="flex items-center gap-1.5">
             <HelpCircle className="size-3.5 shrink-0 text-muted-foreground" />
             <Input

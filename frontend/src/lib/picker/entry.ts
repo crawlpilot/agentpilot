@@ -42,6 +42,7 @@ import {
 } from './protocol'
 import { enrich } from './enrich'
 import { runPreview, runPreviewRows, runSteps } from './preview'
+import { Recorder } from './record'
 
 const TEST_HIGHLIGHT_CLASS = 'crawlpilot-test-highlight'
 
@@ -89,9 +90,41 @@ function cancel() {
   }
 }
 
-/** ↑ / ↓ / Enter, driven from the studio's buttons. See `usePagePicker`. */
-function action(key: 'ArrowUp' | 'ArrowDown' | 'Enter') {
+/** ↑ / ↓ / Enter / Unpin, driven from the studio's buttons. See `usePagePicker`. */
+function action(key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') {
   picker?.handleExternalAction(key)
+}
+
+function selection() {
+  return picker?.selection ?? null
+}
+
+/**
+ * Recording lives outside `picker`, and must.
+ *
+ * The two are opposites -- one swallows events to choose an element, the other
+ * lets them through so the page reacts -- and they are used at different
+ * moments in the same session. Tying the recorder's lifetime to the picker's
+ * would mean a `start()` silently ended a recording, or a completed pick
+ * (which calls `deactivate`) did.
+ */
+const recorder = new Recorder()
+
+function startRecording() {
+  cancel()
+  recorder.start()
+}
+
+function stopRecording() {
+  return recorder.stop()
+}
+
+function takeRecording() {
+  return recorder.take()
+}
+
+function isRecording(): boolean {
+  return recorder.isRecording
 }
 
 /** Destructive read -- a result is handed to the studio exactly once. */
@@ -220,8 +253,13 @@ const api: PickerApi = {
   start,
   cancel,
   action,
+  selection,
   take,
   isPicking,
+  startRecording,
+  stopRecording,
+  takeRecording,
+  isRecording,
   showHighlights,
   clearHighlights,
   testSelector,

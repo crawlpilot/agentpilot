@@ -36,6 +36,21 @@ export class VisualElementPicker {
     private lastHighlightedElement: HTMLElement | null = null;
     private lastSiblings: HTMLElement[] = [];
     private rafPending = false;
+    /**
+     * Set once the user has adjusted the selection with ↑/↓, which stops hover
+     * from taking it back.
+     *
+     * DIVERGENCE from upstream, and the reason for it: this picker is driven
+     * from a panel *outside* the page. `handleMouseMove` resets
+     * `currentElement` to whatever is under the cursor on every mouse movement,
+     * and `LiveViewCanvas` forwards every movement over the live view into the
+     * page -- so travelling from the element to the studio's own ↑ button
+     * overwrote the expansion before the click on it landed, and Enter then
+     * committed the leaf. Expansion did not half-work; it was undone between
+     * the two actions the user has to perform. In the extension, ↑ was a real
+     * keystroke and the cursor never had to move, so the bug could not arise.
+     */
+    private pinned = false;
 
     constructor() {
         this.handleMouseMove = this.handleMouseMove.bind(this);
@@ -65,16 +80,25 @@ export class VisualElementPicker {
         this.removeUI();
         this.removeEventListeners();
         this.currentElement = null;
+        this.pinned = false;
         console.log('❌ VisualElementPicker deactivated');
     }
 
     public handleExternalAction(action: string) {
+        if (action === 'Unpin') {
+            this.pinned = false;
+            return;
+        }
         if (!this.isActive || !this.currentElement) return;
 
         if (action === 'ArrowUp') {
             const parent = this.currentElement.parentElement;
             if (parent && parent !== document.body && parent !== document.documentElement) {
                 this.currentElement = parent;
+                // Pin BEFORE redrawing: the user is about to move the cursor
+                // back to the panel, and every pixel of that journey is a
+                // forwarded mousemove that would otherwise undo this.
+                this.pinned = true;
                 if (this.strategy) this.strategy.handleHover(this.currentElement, this);
             }
         }
@@ -87,6 +111,7 @@ export class VisualElementPicker {
             );
             if (firstMeaningful) {
                 this.currentElement = firstMeaningful;
+                this.pinned = true;
                 if (this.strategy) this.strategy.handleHover(this.currentElement, this);
             }
         }
@@ -96,6 +121,18 @@ export class VisualElementPicker {
                 this.strategy.handleClick(this.currentElement, this, (msg) => emit(msg));
             }
         }
+    }
+
+    /** What the selection is currently on, for the panel to describe. */
+    public get selection(): { tag: string; text: string; pinned: boolean } | null {
+        if (!this.currentElement) return null;
+        return {
+            tag: this.currentElement.tagName.toLowerCase(),
+            text: (this.currentElement.innerText || this.currentElement.textContent || '')
+                .trim()
+                .slice(0, 120),
+            pinned: this.pinned,
+        };
     }
 
     private createUI() {
@@ -230,6 +267,9 @@ export class VisualElementPicker {
     }
 
     private handleMouseMove(e: MouseEvent) {
+        // The user has adjusted the selection deliberately; a cursor that
+        // happens to pass over the page must not undo that. See `pinned`.
+        if (this.pinned) return;
         if (this.rafPending || !this.overlay || !this.strategy) return;
         this.rafPending = true;
 
@@ -423,6 +463,7 @@ export class VisualElementPicker {
             const parent = this.currentElement.parentElement;
             if (parent && parent !== document.body && parent !== document.documentElement) {
                 this.currentElement = parent;
+                this.pinned = true;
                 if (this.strategy) this.strategy.handleHover(this.currentElement, this);
             }
         }
@@ -437,6 +478,7 @@ export class VisualElementPicker {
             );
             if (firstMeaningful) {
                 this.currentElement = firstMeaningful;
+                this.pinned = true;
                 if (this.strategy) this.strategy.handleHover(this.currentElement, this);
             }
         }

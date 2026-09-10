@@ -196,6 +196,70 @@ _TEXT_PRESENT_JS = """() => {
   return (document.body ? document.body.innerText : '').includes(opts.text);
 }"""
 
+# Is a modal covering the page, and what would close it?
+#
+# A reveal that opens a dialog leaves it open. Everything after it -- the next
+# click, a scroll, and at replay every later field in the same group -- then acts
+# against a page that will not accept them, because the overlay is on top and the
+# body is scroll-locked. The step that opened it looks identical to one that
+# opened an accordion, so nothing static can tell them apart; this asks the page.
+#
+# `aria-modal`/`role=dialog` first because they are declared intent rather than
+# inference. The geometric fallback exists because a great many real dialogs
+# declare neither, and a fixed element covering most of the viewport at a high
+# stacking order is one whatever it calls itself.
+_OVERLAY_JS = """() => {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const CLOSE = [
+    '[aria-label*="close" i]', '[data-testid*="close" i]', '[data-automation-id*="close" i]',
+    'button[class*="close" i]', '[class*="modal-close" i]', '[aria-label*="dismiss" i]'
+  ];
+  const sel = (el) => {
+    if (!el) return null;
+    if (el.id) return '#' + CSS.escape(el.id);
+    for (const a of ['data-testid', 'data-automation-id', 'aria-label', 'role']) {
+      const v = el.getAttribute && el.getAttribute(a);
+      if (v) return el.tagName.toLowerCase() + '[' + a + '="' + v.replace(/"/g, '\\\\"') + '"]';
+    }
+    return null;
+  };
+  const visible = (el) => {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+    const b = el.getBoundingClientRect();
+    return b.width > 0 && b.height > 0;
+  };
+  let found = null;
+  const declared = document.querySelectorAll(
+    '[aria-modal="true"], [role="dialog"], [role="alertdialog"], dialog[open]'
+  );
+  for (const el of declared) { if (visible(el)) { found = el; break; } }
+  if (!found) {
+    for (const el of document.querySelectorAll('div, section, aside')) {
+      const s = getComputedStyle(el);
+      if (s.position !== 'fixed') continue;
+      if ((parseInt(s.zIndex, 10) || 0) < 100) continue;
+      if (!visible(el)) continue;
+      const b = el.getBoundingClientRect();
+      if (b.width >= vw * 0.5 && b.height >= vh * 0.5) { found = el; break; }
+    }
+  }
+  const body = document.body ? getComputedStyle(document.body).overflow : '';
+  const html = document.documentElement ? getComputedStyle(document.documentElement).overflow : '';
+  const locked = body === 'hidden' || html === 'hidden';
+  if (!found) return {open: false, locked: locked, close: null, label: null};
+  let close = null, label = null;
+  for (const q of CLOSE) {
+    const el = found.querySelector(q);
+    if (el && visible(el)) {
+      close = sel(el);
+      label = (el.getAttribute('aria-label') || el.innerText || '').trim().slice(0, 60);
+      if (close) break;
+    }
+  }
+  return {open: true, locked: locked, close: close, label: label};
+}"""
+
 
 class LocatorError(Exception):
     """A locator could not be evaluated -- a malformed selector or path. A
@@ -249,6 +313,26 @@ class PageReader:
             got = await self._eval_js("location.href")
             self._url = str(got) if isinstance(got, str) else ""
         return self._url
+
+    async def overlay(self) -> dict[str, Any]:
+        """Whether a modal is covering the page, and what would close it.
+
+        `{"open": bool, "locked": bool, "close": str | None, "label": str | None}`
+        -- `locked` is the document being scroll-locked, which a dialog does
+        even when it does not cover much, and which is what stops a later
+        `scroll` step from going anywhere.
+
+        Never raises. This informs an optional dismissal step; a probe that can
+        fail a build would be worse than no probe.
+        """
+
+        try:
+            got = await self._eval_js(_OVERLAY_JS)
+        except Exception:  # noqa: BLE001 - see the docstring
+            return {"open": False, "locked": False, "close": None, "label": None}
+        if not isinstance(got, dict):
+            return {"open": False, "locked": False, "close": None, "label": None}
+        return got
 
     async def structured_data(self) -> dict[str, Any]:
         if self._structured is None:

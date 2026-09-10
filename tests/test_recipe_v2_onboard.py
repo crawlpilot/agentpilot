@@ -16,7 +16,12 @@ from fusion_fixtures import fnode
 from agentpilot.agent.state import AgentStepRecord
 from agentpilot.recipe.v2 import onboard as onboard_mod
 from agentpilot.recipe.v2.models import Candidate, Locator
-from agentpilot.recipe.v2.onboard import ExplorationState, OnboardOutcome, derive_target
+from agentpilot.recipe.v2.onboard import (
+    ExplorationState,
+    OnboardOutcome,
+    derive_target,
+    looks_variable,
+)
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
 from agentpilot.recipe.v2.validate import validate_document
 
@@ -42,8 +47,23 @@ class _Reader:
     # page it was read from -- so the fake has to carry one too.
     base_url = "https://x.test/p/1"
 
-    def __init__(self) -> None:
+    def __init__(self, url: str = "https://x.test/p/1") -> None:
         self.invalidated = 0
+        self.url = url
+        # What an earlier group's bindings read when re-checked. `None` means
+        # "still there"; set it to simulate a step that closed what a previous
+        # one opened.
+        self.reads: object = "value"
+        # What `PageReader.overlay` reports. No dialog, unless a test says so.
+        self.dialog: dict[str, Any] = {
+            "open": False, "locked": False, "close": None, "label": None,
+        }
+
+    async def overlay(self) -> dict[str, Any]:
+        return self.dialog
+
+    async def current_url(self) -> str:
+        return self.url
 
     def invalidate(self) -> None:
         self.invalidated += 1
@@ -55,7 +75,7 @@ class _Reader:
         return {"json_ld": [], "metadata": {}, "hydration": {}}
 
     async def read(self, locator):
-        return "value"
+        return self.reads
 
 
 def _css(selector: str) -> list[Candidate]:
@@ -71,13 +91,23 @@ def _step(actions: list[dict[str, Any]]) -> AgentStepRecord:
 
 @pytest.fixture
 def patched(monkeypatch):
-    """Route `propose_and_verify` at a per-state stub."""
+    """Route `propose_and_verify` and `propose_rows` at per-state stubs.
+
+    `rows` defaults to finding nothing, which is what sends a table down the
+    click-through path -- the behaviour every test written before `rows.py`
+    assumed, so they keep testing what they were written to test.
+    """
 
     async def fake(fields, **kwargs):
         # The stub lives on the state; the module-level patch just forwards.
         return fake.answer(dict(fields))  # type: ignore[attr-defined]
 
+    async def fake_rows(spec, **kwargs):
+        return fake.rows(spec)  # type: ignore[attr-defined]
+
+    fake.rows = lambda spec: None
     monkeypatch.setattr(onboard_mod, "propose_and_verify", fake)
+    monkeypatch.setattr(onboard_mod, "propose_rows", fake_rows)
     return fake
 
 
@@ -95,21 +125,78 @@ WITH_TABLE = {
 }
 
 
-async def test_steps_before_the_first_field_become_global_setup(patched) -> None:
-    """Replay re-navigates before every group, so anything needed to make the
-    *first* field readable is needed for all of them."""
+async def test_a_reveal_belongs_to_the_field_it_revealed_not_to_global_setup(
+    patched,
+) -> None:
+    """`global_setup` runs before EVERY group, so promoting a field-specific
+    reveal into it makes every other group perform that reveal too -- and a
+    drawer opened for one field is exactly the thing that covers the control
+    another field needs.
+
+    So the batch that satisfied a field keeps its own steps; only batches that
+    bound nothing are groundwork."""
 
     patched.answer = lambda unfound: {"title": _css("h1")}
     state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
 
     await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
 
+    assert state.global_setup == []
+    assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
+
+
+async def test_groundwork_before_any_field_is_global_setup(patched) -> None:
+    """The cookie banner, which is what `global_setup` exists for: dismissed in
+    a batch that bound nothing, so it is not a reveal for anything and every
+    group needs it."""
+
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
+
     assert [s.op for s in state.global_setup] == ["click"]
-    # ...and the group that was satisfied by it does not repeat it.
-    assert state.field_groups[0].steps == []
+    # ...and the group's own route starts after it, with the reveal that
+    # actually satisfied the field.
+    assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
 
 
-async def test_later_steps_are_scoped_to_their_own_group(patched) -> None:
+async def test_a_group_carries_the_whole_route_from_a_cold_page(patched) -> None:
+    """THE defect this round exists for. Replay re-navigates before every group
+    and then runs that group's steps, so a group's steps have to stand alone
+    from a freshly loaded page.
+
+    Handing a group only the steps since the last freeze is what left the
+    Walmart specifications group carrying `click "More details"` without the
+    accordion click that puts it on screen -- so it read an empty page on every
+    run and said nothing about why."""
+
+    state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    # Batch 1 opens the accordion and satisfies the scalars.
+    patched.answer = lambda unfound: {"title": _css("h1"), "price": _css("#p")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    # Batch 2 opens the dialog and satisfies the table's columns.
+    patched.answer = lambda unfound: {"size": _css(".size"), "stock": _css(".stock")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e12"}]))
+
+    table = state.field_groups[-1]
+    assert table.repeat is not None
+    # Both clicks, in order -- not just the one from its own batch. The trailing
+    # click is the representative option, superseded by the repeat.
+    assert [s.op for s in table.steps] == ["click", "wait_for_selector"]
+    assert table.steps[0].target is not None
+    assert table.steps[0].target.name_contains == "Details"
+
+
+async def test_reveals_on_one_page_share_one_group(patched) -> None:
+    """Every group costs a page load: `replay.py` re-navigates before each one.
+    Opening a second accordion on a page that is already open needs no reload,
+    so it must not buy one."""
+
     state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
 
     patched.answer = lambda unfound: {"title": _css("h1")}
@@ -117,10 +204,64 @@ async def test_later_steps_are_scoped_to_their_own_group(patched) -> None:
     patched.answer = lambda unfound: {"price": _css("#price")}
     await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
 
+    assert len(state.field_groups) == 1
+    assert sorted(state.field_groups[0].bindings) == ["price", "title"]
+    assert state.global_setup == []
+    # One route covering both reveals, rather than two groups and two loads.
+    assert [s.op for s in state.field_groups[0].steps] == [
+        "click", "wait_for_selector", "click", "wait_for_selector",
+    ]
+
+
+async def test_a_navigation_forces_a_new_group(patched) -> None:
+    """The earlier fields belong to a different page now. Merging would re-read
+    them after the navigation and collect the wrong page's values -- a wrong
+    answer that looks like a right one."""
+
+    reader = _Reader()
+    state = ExplorationState(fields=SCALARS, reader=reader, llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+    reader.url = "https://x.test/p/2"
+    patched.answer = lambda unfound: {"price": _css("#price")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
+
     assert len(state.field_groups) == 2
-    assert [s.op for s in state.global_setup] == ["click"]
-    # The second group carries its own click, plus the synthesised wait.
-    assert [s.op for s in state.field_groups[1].steps] == ["click", "wait_for_selector"]
+
+
+async def test_a_step_that_closed_the_last_one_forces_a_new_group(patched) -> None:
+    """Opening a second accordion usually leaves the first open; switching to a
+    second TAB usually does not, and nothing about the step says which it was.
+    So the previous group's bindings are re-read against the page as it stands,
+    which is the only thing that actually answers it."""
+
+    reader = _Reader()
+    state = ExplorationState(fields=SCALARS, reader=reader, llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+    # The earlier field no longer reads: the tab that held it was replaced.
+    reader.reads = None
+    patched.answer = lambda unfound: {"price": _css("#price")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
+
+    assert len(state.field_groups) == 2
+
+
+async def test_a_group_with_a_repeat_is_never_merged_into(patched) -> None:
+    """It clicks through an option set, so anything sharing its page load would
+    be read against whichever option happened to be selected last."""
+
+    state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {"size": _css(".size"), "stock": _css(".stock")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e12"}]))
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([]))
+
+    assert len(state.field_groups) == 2
+    assert state.field_groups[0].repeat is not None
 
 
 async def test_a_revealing_step_is_followed_by_a_wait(patched) -> None:
@@ -134,9 +275,8 @@ async def test_a_revealing_step_is_followed_by_a_wait(patched) -> None:
     patched.answer = lambda unfound: {"price": _css("#details .price")}
     await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
 
-    wait = state.field_groups[1].steps[-1]
+    wait = state.field_groups[0].steps[-1]
     assert wait.op == "wait_for_selector"
-    assert wait.target.selector == "#details .price"
     assert wait.optional is True
 
 
@@ -147,7 +287,9 @@ async def test_no_wait_is_added_after_a_non_revealing_step(patched) -> None:
     patched.answer = lambda unfound: {"price": _css("#price")}
     await state.on_step(_step([{"type": "WaitAction", "ms": 100}]))
 
-    assert [s.op for s in state.field_groups[1].steps] == ["wait"]
+    # No wait synthesised: `wait` is not a revealing op, so there is nothing
+    # whose rendering has to be waited for.
+    assert [s.op for s in state.field_groups[0].steps] == ["wait"]
 
 
 async def test_a_table_field_gets_a_repeat_and_is_keyed_by_column(patched) -> None:
@@ -180,20 +322,145 @@ async def test_the_representative_click_is_not_also_a_reveal_step(patched) -> No
     assert state.field_groups[0].steps == []
 
 
+async def test_a_dialog_left_open_is_closed_before_the_next_reveal(patched) -> None:
+    """A modal opened to expose one field covers everything under it. The
+    dismissal goes at the head of the NEXT batch, never the tail of this one:
+    the fields just frozen are often inside the dialog, so appending it here
+    would close the thing being read."""
+
+    reader = _Reader()
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        reader.dialog = {"open": False, "locked": False, "close": None, "label": None}
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    reader.dialog = {
+        "open": True, "locked": True, "close": "#close", "label": "Close",
+    }
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    # Dispatched, so the agent's remaining steps are not spent under an overlay.
+    assert [s.op for s in dispatched] == ["click"]
+    # ...and the group that read from inside the dialog kept its own bindings.
+    assert state.field_groups[0].bindings == {"title": _css("h1")}
+
+    patched.answer = lambda unfound: {"price": _css("#price")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
+
+    # The dismissal leads the steps that follow, so the next reveal is not
+    # clicking at a page under an overlay.
+    steps = [s.op for s in state.field_groups[-1].steps]
+    assert steps[0] == "click"
+    assert state.field_groups[-1].steps[0].label is not None
+    assert "close the dialog" in state.field_groups[-1].steps[0].label
+
+
+async def test_no_dialog_means_no_step(patched) -> None:
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+    patched.answer = lambda unfound: {"price": _css("#price")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
+
+    labels = [s.label for group in state.field_groups for s in group.steps]
+    assert not any(label and "close the dialog" in label for label in labels)
+
+
+async def test_a_table_read_as_rows_keeps_the_click_that_revealed_it(patched) -> None:
+    """The trailing click is stripped only for the click-through kind, where it
+    is the representative-option click the RepeatSpec supersedes. A `dom_rows`
+    table has no such click, so the trailing one is an ordinary reveal -- and
+    stripping it deletes the very step that opened the drawer the rows are in."""
+
+    from agentpilot.recipe.v2.models import RepeatSpec
+    from agentpilot.recipe.v2.rows import RowBinding
+
+    state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    patched.answer = lambda unfound: {}
+    patched.rows = lambda spec: RowBinding(
+        repeat=RepeatSpec(
+            kind="dom_rows", row_field="variants", max_iterations=20,
+            rows_locator=Locator(kind="css", selector="tr"),
+        ),
+        bindings={"size": _css("th"), "stock": _css("td")},
+        rows=[{"size": "S", "stock": "in"}, {"size": "M", "stock": "out"}],
+    )
+
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert len(state.field_groups) == 1
+    group = state.field_groups[0]
+    assert group.repeat is not None and group.repeat.kind == "dom_rows"
+    assert sorted(group.bindings) == ["size", "stock"]
+    # The click became global_setup rather than being thrown away.
+    assert [s.op for s in state.global_setup] == ["click"]
+    # The columns are satisfied by the repeat; only the scalars nobody proposed
+    # are still outstanding.
+    assert sorted(state.unfound_fields) == ["price", "title"]
+
+
+async def test_a_click_through_table_still_loses_its_representative_click(patched) -> None:
+    """Unchanged, and the reason it must stay: the RepeatSpec clicks each option
+    itself, so leaving the click as a reveal step clicks the option twice."""
+
+    state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    patched.answer = lambda unfound: {"size": _css(".size"), "stock": _css(".stock")}
+
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e12"}]))
+
+    assert state.global_setup == []
+    group = state.field_groups[0]
+    assert group.repeat is not None and group.repeat.kind == "dom"
+
+
+async def test_a_table_bound_to_only_some_of_its_columns_is_not_frozen(patched) -> None:
+    """Seen in a real Walmart build: `name` bound, `value` rejected by the
+    scalar/list guard, and a `dom` repeat frozen that would emit `{name: ...}`
+    rows for ever. A missing column then looks like the page not having a value
+    rather than like the recipe never looking for one.
+
+    Waiting costs nothing: the columns keep their place among the unfound, so a
+    later step or a person can still satisfy them."""
+
+    state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    patched.answer = lambda unfound: {"size": _css(".size")}
+
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e12"}]))
+
+    assert state.field_groups == []
+    assert "variants" in state.failures
+    assert "stock" in state.failures["variants"]
+    assert sorted(state.unfound_fields) == ["price", "size", "stock", "title"]
+
+
 async def test_a_table_whose_rows_cannot_be_iterated_stays_unresolved(patched) -> None:
     """`validate_document` rejects a table group with no repeat, so emitting one
     would produce a document that cannot be saved. It goes to the assist loop
     with a reason instead."""
 
     state = ExplorationState(fields=WITH_TABLE, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
-    patched.answer = lambda unfound: {"size": _css(".size")}
+    # Both columns, so this reaches the repeat check rather than stopping at the
+    # every-column guard above it.
+    patched.answer = lambda unfound: {"size": _css(".size"), "stock": _css(".stock")}
 
     # No click in the batch, so there is no representative option to generalise.
     await state.on_step(_step([{"type": "WaitAction", "ms": 10}]))
 
     assert state.field_groups == []
-    assert "size" in state.failures
-    assert "iterate" in state.failures["size"]
+    # Reported under the TABLE, not under `size`. The columns are how a table
+    # gets located; what the caller asked for was `variants`, and that is the
+    # only name a person answering the ask can act on.
+    assert "variants" in state.failures
+    assert "size" not in state.failures
+    assert "iterate" in state.failures["variants"]
 
 
 async def test_unfound_fields_are_reported_with_a_reason(patched) -> None:
@@ -233,11 +500,56 @@ async def test_the_document_it_builds_passes_the_server_side_lint(patched) -> No
 # --- target derivation ------------------------------------------------------
 
 
-def test_a_single_url_keeps_everything_but_the_last_segment() -> None:
+def test_a_single_url_is_cut_at_its_first_identifying_segment() -> None:
+    """`productpage.129.html` carries the product number, so it identifies this
+    page; `en_in` describes what kind of page it is."""
+
     target = derive_target(["https://www2.hm.com/en_in/productpage.129.html"])
     assert [(m.kind, m.pattern) for m in target.match] == [
         ("glob", "https://www2.hm.com/en_in/*")
     ]
+
+
+def test_a_single_url_generalises_past_a_slug_and_not_just_the_last_segment() -> None:
+    """THE bug this exists for. Keeping everything but the final segment turns a
+    Walmart product URL into a matcher for that one product's sub-paths, and
+    `replay_recipe` then refuses every other Walmart product before it opens a
+    browser -- so a recipe sold as reusable cannot be run on a second page."""
+
+    from agentpilot.recipe.v2.urlmatch import target_accepts
+
+    target = derive_target([
+        "https://www.walmart.com/ip/Bodycology-Moisturizing-Body-Cream-8-oz/5013580"
+    ])
+    assert [(m.kind, m.pattern) for m in target.match] == [
+        ("glob", "https://www.walmart.com/ip/*")
+    ]
+    assert target_accepts(target, "https://www.walmart.com/ip/Something-Else/998877")
+    # Generalised, not merely loosened: another site's /ip/ is still refused.
+    assert not target_accepts(target, "https://evil.test/ip/anything/1")
+
+
+def test_a_url_with_nothing_identifying_in_it_keeps_the_old_rule() -> None:
+    """One sample cannot support a guess it has no evidence for, and being too
+    narrow is visible and editable where being too wide is neither."""
+
+    target = derive_target(["https://a.test/shop/all"])
+    assert [(m.kind, m.pattern) for m in target.match] == [("glob", "https://a.test/shop/*")]
+
+
+def test_what_counts_as_identifying_a_page() -> None:
+    assert looks_variable("5013580")
+    assert looks_variable("productpage.129.html")
+    assert looks_variable("a-p041.html")
+    assert looks_variable("Bodycology-Moisturizing-Body-Cream")
+    assert looks_variable("9f8e7d6c5b4a3210")
+
+    # Structural: these say what kind of page it is, not which one.
+    assert not looks_variable("ip")
+    assert not looks_variable("dp")
+    assert not looks_variable("en_in")
+    assert not looks_variable("products")
+    assert not looks_variable("")
 
 
 def test_several_urls_find_their_shared_shape() -> None:
@@ -402,11 +714,14 @@ async def test_a_field_that_keeps_missing_stops_being_proposed(patched) -> None:
     state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
     patched.answer = answer
 
-    for _ in range(4):
+    for _ in range(onboard_mod._MAX_FIELD_ATTEMPTS + 3):
         await state.on_step(_step([]))
 
-    # Asked twice, then it stopped asking.
-    assert asked == [["price", "title"], ["price", "title"]]
+    # Asked its budget of times, then it stopped asking. The budget itself is
+    # read from the module rather than written here: it is a calibration
+    # against real pages and has already been raised once, and a test that
+    # hardcodes it fails for the wrong reason when it moves again.
+    assert asked == [["price", "title"]] * onboard_mod._MAX_FIELD_ATTEMPTS
     assert state.presumed_absent == {"price", "title"}
     assert "may simply not be on this page" in state.failures["price"]
 
@@ -435,8 +750,8 @@ async def test_giving_up_on_one_field_does_not_stop_the_others(patched) -> None:
     state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
 
     patched.answer = lambda unfound: {}
-    await state.on_step(_step([]))
-    await state.on_step(_step([]))
+    for _ in range(onboard_mod._MAX_FIELD_ATTEMPTS):
+        await state.on_step(_step([]))
     assert state.presumed_absent == {"price", "title"}
 
     # Nothing left worth asking about, so no proposal call is made at all.

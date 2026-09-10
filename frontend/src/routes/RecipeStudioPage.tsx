@@ -12,6 +12,7 @@ import { FieldsTab } from '@/components/app/studio/FieldsTab'
 import { TransformsTab } from '@/components/app/studio/TransformsTab'
 import { VariantsTab } from '@/components/app/studio/VariantsTab'
 import { QualityTab } from '@/components/app/studio/QualityTab'
+import { TargetTab } from '@/components/app/studio/TargetTab'
 import { JsonTab } from '@/components/app/studio/JsonTab'
 import { LintPanel } from '@/components/app/studio/LintPanel'
 import { useRecipeDoc } from '@/hooks/useRecipeDoc'
@@ -129,7 +130,7 @@ export function RecipeStudioPage() {
         <aside className="flex min-h-0 flex-col">
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
             <TabsList className="m-2 w-fit shrink-0">
-              {['steps', 'fields', 'transforms', 'variants', 'quality', 'json'].map((t) => (
+              {['steps', 'fields', 'transforms', 'target', 'variants', 'quality', 'json'].map((t) => (
                 <TabsTrigger key={t} value={t} className="capitalize">
                   {t}
                 </TabsTrigger>
@@ -151,6 +152,9 @@ export function RecipeStudioPage() {
               </TabsContent>
               <TabsContent value="transforms">
                 <TransformsTab recipe={doc} update={update} luaEnabled={luaEnabled} />
+              </TabsContent>
+              <TabsContent value="target">
+                <TargetTab recipe={doc} update={update} />
               </TabsContent>
               <TabsContent value="variants">
                 <VariantsTab recipe={doc} update={update} />

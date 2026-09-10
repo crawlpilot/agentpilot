@@ -96,8 +96,15 @@ export interface UsePagePicker {
   pick: (mode: PickerMode, action?: 'extract' | 'click') => Promise<PickPayload | null>
   /** Stop an in-flight pick. */
   cancel: () => void
-  /** ↑ / ↓ / Enter, from the panel's own buttons. */
-  refine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
+  /** ↑ / ↓ / Enter / Unpin, from the panel's own buttons. */
+  refine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => void
+  /** What the selection is on right now, for showing it back to the user. */
+  selection: () => Promise<{ tag: string; text: string; pinned: boolean } | null>
+  /** Watch what the user does to the page; resolves with the recorded steps. */
+  startRecording: () => Promise<void>
+  stopRecording: () => Promise<PreviewStep[]>
+  /** What has been recorded so far, without ending the recording. */
+  takeRecording: () => Promise<PreviewStep[]>
   /** Flash a selector's matches in the page; resolves with the match count. */
   testSelector: (selector: string) => Promise<number>
   /** A region's markup, for handing the model something to search inside. */
@@ -145,16 +152,51 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
   }, [run])
 
   const refine = useCallback(
-    (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => {
+    (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => {
       // Driven from buttons rather than keystrokes on purpose. The live view
       // forwards keys from `window` only when nothing editable has focus, and
       // during a pick the studio's own panel usually does -- so the arrow keys
       // the picker listens for would never leave the browser. The extension
       // hit the same wall and added an explicit action message for it.
+      //
+      // That indirection is also what made expansion unusable until the picker
+      // learned to pin: reaching this button means dragging the cursor across
+      // the live view, and every pixel of that was a forwarded `mousemove` that
+      // reset the selection back to whatever was underneath.
       void run(`window.${PICKER_GLOBAL}.action(${JSON.stringify(key)})`).catch(() => {})
     },
     [run],
   )
+
+  const selection = useCallback(async () => {
+    try {
+      const got = await run(`window.${PICKER_GLOBAL}.selection()`)
+      return (got as { tag: string; text: string; pinned: boolean } | null) ?? null
+    } catch {
+      return null
+    }
+  }, [run])
+
+  const startRecording = useCallback(async () => {
+    await run(`window.${PICKER_GLOBAL}.startRecording()`)
+  }, [run])
+
+  const stopRecording = useCallback(async (): Promise<PreviewStep[]> => {
+    const out = await run(`window.${PICKER_GLOBAL}.stopRecording()`)
+    return Array.isArray(out) ? (out as PreviewStep[]) : []
+  }, [run])
+
+  const takeRecording = useCallback(async (): Promise<PreviewStep[]> => {
+    // Polled while recording so the panel can show the steps arriving. A
+    // navigation mid-recording tears the page down and the listeners with it,
+    // so a throw here is expected rather than exceptional.
+    try {
+      const out = await run(`window.${PICKER_GLOBAL}.takeRecording()`)
+      return Array.isArray(out) ? (out as PreviewStep[]) : []
+    } catch {
+      return []
+    }
+  }, [run])
 
   const testSelector = useCallback(
     async (selector: string): Promise<number> => {
@@ -277,7 +319,8 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
   )
 
   return {
-    status, error, pick, cancel, refine, testSelector, outerHtml,
+    status, error, pick, cancel, refine, selection, testSelector, outerHtml,
     preview, previewRows, applySteps, showHighlights,
+    startRecording, stopRecording, takeRecording,
   }
 }

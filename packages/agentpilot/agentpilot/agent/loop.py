@@ -372,6 +372,12 @@ async def run_agent_loop(
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             screenshot=screenshot,
+            # The tree these actions were chosen against, for an `on_step` hook
+            # that needs to resolve their refs. It has to be *this* tree and not
+            # a fresh snapshot: a ref is `e{backend_node_id}`, and a click that
+            # re-renders a subtree invalidates every id in it. See
+            # `AgentStepRecord.observed_tree`.
+            observed_tree=tree,
         )
         history.add(step_record)
         _log_step_completion(step_record, step_outcome)

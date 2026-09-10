@@ -589,6 +589,22 @@ async def verify_locators(
             resolving.append(VerifiedLocator(locator=loc, raw=raw, value=raw))
             continue
 
+        if spec.type.kind == "scalar" and isinstance(raw, list):
+            # One value was asked for and many came back, which is what an
+            # `all: true` locator on a scalar field means. It used to be
+            # accepted: the read is non-empty, and the scalar cleanup maps over
+            # a list element-wise, so nothing objected until the data was used.
+            #
+            # This is how a table's columns became parallel arrays -- see
+            # `rows.py`. The guard is here rather than only there because the
+            # same function verifies what a *person* picks in the assist panel,
+            # where pointing at a container is just as easy to do by accident.
+            last_error = (
+                f"reads {len(raw)} values but this field is one value -- the "
+                "selector is matching a whole set rather than a single element"
+            )
+            continue
+
         pipeline = pipeline_for(spec, loc)
         try:
             value = apply_transforms(raw, pipeline, context) if pipeline else raw
