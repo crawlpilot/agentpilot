@@ -43,6 +43,28 @@ class StealthProfile:
         return asdict(self)
 
 
+def _browser_executable(config: BrowserConfig) -> str | None:
+    """The binary that will launch, for asking its version.
+
+    Best-effort and never fatal: this runs while assembling a stealth profile,
+    and a browser that cannot be located is a problem for the launch path to
+    report properly, not something to surface from here as a fingerprint error.
+    A channel launch resolves to no path at all, which is a legitimate `None` --
+    the caller then keeps its configured version.
+    """
+
+    from crawlpilot.driver import browser_discovery
+
+    try:
+        launch = browser_discovery.resolve_browser(
+            executable_path=config.launch.executable_path,
+            channel=config.launch.channel,
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        return None
+    return launch.executable_path
+
+
 def resolve(
     identity: IdentityRef,
     tier: str,
@@ -86,7 +108,14 @@ def resolve(
     fp = generate_fingerprint(
         identity.slug(),
         region=proxy.country if proxy else None,
-        chrome_version=config.fingerprint.chrome_version,
+        # The version the browser about to launch actually reports, not the
+        # pinned constant -- unless an operator pinned one deliberately. The
+        # constant had drifted twenty majors behind the deployed Chrome, which
+        # put a contradiction between the UA and the real Client Hints into
+        # every request. See `browser_discovery.browser_version`.
+        chrome_version=config.fingerprint.resolved_chrome_version(
+            _browser_executable(config)
+        ),
     )
     return StealthProfile(
         locale=locale or fp.geo.locale,

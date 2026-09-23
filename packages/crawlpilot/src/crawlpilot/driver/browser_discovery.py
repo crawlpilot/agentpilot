@@ -28,8 +28,11 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
+import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 # Playwright channels we pass straight through rather than resolving ourselves.
@@ -130,6 +133,44 @@ class Launch:
     def __post_init__(self) -> None:
         if bool(self.channel) == bool(self.executable_path):
             raise ValueError("a Launch names exactly one of channel / executable_path")
+
+
+_VERSION_RE = re.compile(r"(\d+\.\d+\.\d+\.\d+)")
+
+
+@lru_cache(maxsize=8)
+def browser_version(executable_path: str | None = None) -> str | None:
+    """The full version of the browser that will actually launch, or None.
+
+    Asked of the binary itself (`--version`) rather than of a pinned constant,
+    because the pinned constant is what goes stale. `config.DEFAULT_CHROME_VERSION`
+    says it "must track the Chrome actually deployed", and on this machine it
+    read `131.0.6778.86` while the browser launching was `151.0.7922.137` --
+    twenty majors apart, on every request, in the UA and Sec-CH-UA of every
+    identity. That is precisely the cross-check the constant's own docstring
+    warns about, and it drifts again on the next Chrome release because keeping
+    it accurate is a human's job.
+
+    Cached: this shells out, and the answer cannot change while the process
+    lives. `None` when the binary cannot be asked -- a channel launch names a
+    registry entry rather than a path, a container may not permit exec -- and
+    the caller keeps its configured value in that case.
+    """
+
+    if not executable_path:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603 - our own resolved browser binary
+            [executable_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = _VERSION_RE.search(f"{out.stdout} {out.stderr}")
+    return found.group(1) if found else None
 
 
 def resolve_browser(

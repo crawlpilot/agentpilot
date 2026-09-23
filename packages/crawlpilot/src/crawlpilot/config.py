@@ -72,10 +72,37 @@ def _env(suffix: str, default: str = "") -> str:
 class FingerprintConfig:
     chrome_version: str = DEFAULT_CHROME_VERSION
 
+    pinned: bool = False
+    """Whether `chrome_version` was chosen deliberately.
+
+    A value that came from `CRAWLPILOT_CHROME_VERSION` is an operator's
+    decision and is used as-is. The default is only a fallback, and
+    `resolved_chrome_version` prefers the version of the browser that is
+    actually going to launch -- see `browser_discovery.browser_version` for why
+    the constant cannot be trusted to be current.
+    """
+
     @classmethod
     def from_env(cls) -> FingerprintConfig:
-        raw = _env("CHROME_VERSION", DEFAULT_CHROME_VERSION)
-        return cls(chrome_version=raw or DEFAULT_CHROME_VERSION)
+        raw = _env("CHROME_VERSION", "")
+        if raw:
+            return cls(chrome_version=raw, pinned=True)
+        return cls(chrome_version=DEFAULT_CHROME_VERSION, pinned=False)
+
+    def resolved_chrome_version(self, executable_path: str | None) -> str:
+        """The version to claim in the UA and Client Hints.
+
+        An explicit pin wins. Otherwise the binary is asked, because claiming a
+        different Chrome from the one running is a deterministic mismatch that
+        WAFs cross-check -- and the hardcoded default had already drifted
+        twenty majors behind the deployed browser.
+        """
+
+        from crawlpilot.driver.browser_discovery import browser_version
+
+        if self.pinned:
+            return self.chrome_version
+        return browser_version(executable_path) or self.chrome_version
 
 
 @dataclass(frozen=True)

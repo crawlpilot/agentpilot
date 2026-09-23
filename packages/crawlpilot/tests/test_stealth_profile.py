@@ -188,3 +188,104 @@ def test_the_wait_reaches_the_driver_as_its_own_kwarg() -> None:
     kwargs = stealth_profile.resolve(IDENTITY, "stealth", detect_blocks=False).as_open_kwargs()
     assert kwargs["wait_abck"] is True
     assert kwargs["detect_blocks"] is False
+
+
+# --- the claimed Chrome version tracks the real one --------------------------
+#
+# `DEFAULT_CHROME_VERSION`'s own docstring says it "must track the Chrome
+# actually deployed ... a stale pin here while the browser reports a newer build
+# is a hard, deterministic bot tell for WAFs that cross-check UA against Client
+# Hints". Keeping that true was a human's job, and on the machine this was
+# written on it had drifted from 131 to the browser's real 153 -- twenty-two
+# majors, in the UA and Sec-CH-UA of every request from every identity.
+
+
+def test_an_operator_pin_is_honoured(monkeypatch) -> None:
+    """An explicitly configured version is a decision, not a default, and must
+    not be second-guessed by probing the binary."""
+
+    from crawlpilot.config import FingerprintConfig
+
+    monkeypatch.setenv("CRAWLPILOT_CHROME_VERSION", "120.0.1.2")
+    cfg = FingerprintConfig.from_env()
+
+    assert cfg.pinned is True
+    assert cfg.resolved_chrome_version("/nonexistent/browser") == "120.0.1.2"
+
+
+def test_an_unpinned_version_follows_the_binary(monkeypatch) -> None:
+    from crawlpilot.config import FingerprintConfig
+    from crawlpilot.driver import browser_discovery
+
+    monkeypatch.delenv("CRAWLPILOT_CHROME_VERSION", raising=False)
+    monkeypatch.delenv("AGENTPILOT_CHROME_VERSION", raising=False)
+    monkeypatch.setattr(browser_discovery, "browser_version", lambda p: "151.0.7922.137")
+
+    cfg = FingerprintConfig.from_env()
+    assert cfg.pinned is False
+    assert cfg.resolved_chrome_version("/usr/bin/google-chrome") == "151.0.7922.137"
+
+
+def test_an_unaskable_binary_falls_back_to_the_default(monkeypatch) -> None:
+    """A channel launch names a registry entry rather than a path, and a locked
+    down container may refuse to exec. Neither is a reason to fail."""
+
+    from crawlpilot.config import DEFAULT_CHROME_VERSION, FingerprintConfig
+    from crawlpilot.driver import browser_discovery
+
+    monkeypatch.delenv("CRAWLPILOT_CHROME_VERSION", raising=False)
+    monkeypatch.delenv("AGENTPILOT_CHROME_VERSION", raising=False)
+    monkeypatch.setattr(browser_discovery, "browser_version", lambda p: None)
+
+    cfg = FingerprintConfig.from_env()
+    assert cfg.resolved_chrome_version(None) == DEFAULT_CHROME_VERSION
+
+
+def test_browser_version_survives_a_binary_that_cannot_be_run() -> None:
+    from crawlpilot.driver.browser_discovery import browser_version
+
+    assert browser_version("/definitely/not/a/browser") is None
+    assert browser_version(None) is None
+
+
+# --- negative signals --------------------------------------------------------
+
+
+def test_webrtc_is_neutered_without_being_removed() -> None:
+    """The one patch here that closes a LEAK rather than smoothing a difference.
+
+    WebRTC never goes through an HTTP proxy, so a page that opens a peer
+    connection and reads the ICE candidates gets the host's real address --
+    undoing the whole per-identity proxy pin. Deleting `RTCPeerConnection` is
+    its own tell (every real desktop Chrome has it, and ordinary sites
+    feature-detect it), so the constructor stays and the candidates go.
+    """
+
+    from crawlpilot.identity.fingerprint import generate
+
+    script = generate("tenant/example.com/slot-0").init_script()
+    assert "RTCPeerConnection" in script
+    assert "icecandidate" in script
+    assert "stopImmediatePropagation" in script
+    # Not deleted -- feature detection must still find it.
+    assert "delete window.RTCPeerConnection" not in script
+
+
+def test_no_flag_that_marks_the_browser_as_driven() -> None:
+    """Scrapling refuses five flags as automation markers
+    (`engines/constants.py::HARMFUL_ARGS`). We were passing one of them for
+    tidiness, which is not worth a signal."""
+
+    from crawlpilot.identity.fingerprint import generate
+
+    args = generate("tenant/example.com/slot-0").launch_args()
+    harmful = {
+        "--enable-automation",
+        "--disable-popup-blocking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-extensions",
+    }
+    assert not (set(args) & harmful)
+    # And still never our own `--disable-blink-features`, which Patchright owns.
+    assert not any(a.startswith("--disable-blink-features") for a in args)

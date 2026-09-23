@@ -512,6 +512,49 @@ _INIT_SCRIPT_TEMPLATE = """
     define(navigator, 'plugins', arrayLike(plugins, PluginArray.prototype, 'name'));
     define(navigator, 'mimeTypes', arrayLike(mimes, MimeTypeArray.prototype, 'type'));
   } catch (e) {}
+  // WebRTC: force it to respect the proxy, or rather to stop routing around it.
+  //
+  // This is the one patch here that closes a LEAK rather than smoothing a
+  // difference. Everything else makes the browser look more ordinary; this
+  // stops it volunteering the answer. A page that opens an RTCPeerConnection
+  // and reads the ICE candidates gets the host's real local and public
+  // addresses straight from the OS network stack -- WebRTC never goes through
+  // an HTTP proxy -- so a single JS call undoes the entire per-identity proxy
+  // pin that `identity/proxy_pinning.py` works to maintain.
+  //
+  // Deleting RTCPeerConnection outright is its own tell: it exists in every
+  // real desktop Chrome and a number of ordinary sites feature-detect it. So
+  // the constructor stays, and the candidates it would emit are dropped --
+  // which is indistinguishable from a browser behind a symmetric NAT that
+  // gathered nothing, a completely unremarkable state.
+  try {
+    const Native = window.RTCPeerConnection || window.webkitRTCPeerConnection;
+    if (Native) {
+      const Guarded = function (...args) {
+        const pc = new Native(...args);
+        const origGather = pc.createDataChannel && pc.createDataChannel.bind(pc);
+        if (origGather) {
+          const guardedChannel = function (...a) { return origGather(...a); };
+          patched.add(guardedChannel);
+          pc.createDataChannel = guardedChannel;
+        }
+        // `icecandidate` is where the addresses surface. Swallowing the
+        // event's candidates leaves gathering to complete normally -- the
+        // null end-of-candidates event still fires, so callers waiting on it
+        // do not hang.
+        pc.addEventListener('icecandidate', (event) => {
+          if (event && event.candidate && event.candidate.candidate) {
+            event.stopImmediatePropagation();
+          }
+        }, true);
+        return pc;
+      };
+      Guarded.prototype = Native.prototype;
+      patched.add(Guarded);
+      window.RTCPeerConnection = Guarded;
+      if (window.webkitRTCPeerConnection) window.webkitRTCPeerConnection = Guarded;
+    }
+  } catch (e) {}
   // permissions.query: headless Chrome answers 'denied' for notifications
   // while Notification.permission says 'default' -- a self-contradiction no
   // real browser produces.
