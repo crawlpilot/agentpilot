@@ -38,12 +38,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agentpilot.llm.client import LLMConfig, chat_json_conversation
-from agentpilot.recipe.v2.schema import FieldSpec, render_fields_for_prompt
+from agentpilot.recipe.v2.schema import FieldSpec, is_free_text, render_fields_for_prompt
 
 # The judge only needs enough page to corroborate a value, and a full snapshot
 # of a product page routinely runs past 100 KB.
 _MAX_PAGE_CHARS = 16_000
 _MAX_VALUE_CHARS = 600
+# Free text gets more room, because for prose the truncation was itself a
+# source of false rejections. A product description routinely runs past 600
+# chars, so the judge was shown a fragment ending mid-sentence and asked
+# whether it matched a page it could only see 16 000 characters of -- and a
+# value it cannot corroborate reads as a suspicious one. Lists keep the tight
+# cap: what matters there is how many items there are, not what each one says.
+_MAX_TEXT_VALUE_CHARS = 2_000
 
 
 @dataclass(frozen=True)
@@ -133,6 +140,21 @@ recommended, sponsored or related?
 truncated to whatever the first container held?
 - For rows: do they line up, and is the column labelled `x` really x?
 
+You are judging WHAT THE VALUE IS ABOUT, not how tidy it is. A value that \
+contains what the field asked for PLUS adjacent text from the same region of \
+the page is CORRECT: ok=true. Descriptions carry country of origin, shipping \
+and returns notes, care instructions, warranty blurbs, size guidance and \
+legal disclaimers, because that is what the page puts there -- "100% cotton. \
+Imported from China." is a correct description, not a contaminated one. Extra \
+text is a cleanup problem for a transform, never a wrong value. Say so in the \
+note and pass it.
+
+Rejecting on noise is the most expensive mistake available to you: the field \
+already reads the right part of the page, and your reason sends a component \
+off to bind somewhere else, so a working recipe is traded for a worse one. \
+Reserve ok=false for a value that is about a DIFFERENT SUBJECT -- another \
+product, a sponsored tile, a breadcrumb, a navigation label.
+
 Answer ok=false ONLY when the page text gives you a concrete reason. A value \
 you cannot corroborate either way is ok=true with a short note -- an unproven \
 value is not a wrong one, and a false rejection sends a working recipe back to \
@@ -176,11 +198,11 @@ _JSON_SCHEMA: dict[str, Any] = {
 }
 
 
-def _render_value(value: Any) -> str:
+def _render_value(value: Any, limit: int = _MAX_VALUE_CHARS) -> str:
     text = _json.dumps(value, ensure_ascii=False, default=str)
-    if len(text) <= _MAX_VALUE_CHARS:
+    if len(text) <= limit:
         return text
-    return f"{text[:_MAX_VALUE_CHARS]}... (truncated, {len(text)} chars total)"
+    return f"{text[:limit]}... (truncated, {len(text)} chars total)"
 
 
 def build_user_message(
@@ -192,12 +214,13 @@ def build_user_message(
 ) -> str:
     lines = [f"Fields the caller asked for:\n{render_fields_for_prompt(fields)}", ""]
     lines.append("What the scraper returned:")
-    for name in fields:
+    for name, spec in fields.items():
         if name not in data:
             continue
         source = (provenance or {}).get(name, {}).get("source")
         origin = f"  [read from: {source}]" if source else ""
-        lines.append(f"- {name} = {_render_value(data[name])}{origin}")
+        limit = _MAX_TEXT_VALUE_CHARS if is_free_text(spec) else _MAX_VALUE_CHARS
+        lines.append(f"- {name} = {_render_value(data[name], limit)}{origin}")
     lines.append("")
     lines.append(f"Rendered page text:\n{page_text[:_MAX_PAGE_CHARS]}")
     return "\n".join(lines)

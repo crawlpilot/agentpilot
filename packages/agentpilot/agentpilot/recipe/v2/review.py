@@ -35,7 +35,12 @@ from agentpilot.recipe.v2.judge import DataVerdict, judge_collection
 from agentpilot.recipe.v2.models import Candidate, FieldGroup, Recipe, RunInput
 from agentpilot.recipe.v2.onboard import ProgressSink
 from agentpilot.recipe.v2.replay import replay_recipe
-from agentpilot.recipe.v2.schema import all_leaf_fields, column_to_table_map
+from agentpilot.recipe.v2.schema import (
+    FieldSpec,
+    all_leaf_fields,
+    column_to_table_map,
+    is_free_text,
+)
 from agentpilot.recipe.v2.selector_agent import propose_and_verify
 from crawlpilot.dom.serializer import serialize
 from crawlpilot.session.interactive import InteractiveSession
@@ -339,6 +344,38 @@ async def restore_page(
     return reader, ctx
 
 
+# Where a string stops being a label and starts being prose. A title, a brand,
+# an SKU, a breadcrumb -- the things relocation genuinely fixes -- are all short.
+_PROSE_CHARS = 200
+
+
+def repairable_by_relocating(spec: FieldSpec | None, value: Any) -> bool:
+    """Whether a rejection of this value is worth sending back to the selector
+    agent, as opposed to straight to a person.
+
+    Repair rebinds the field somewhere else, so it only helps when "wrong" means
+    *read from the wrong place*. For a short string it usually does: `name`
+    bound to the breadcrumb trail is the case this whole stage exists for, and
+    the h1 below it is a better element that the agent can actually find.
+
+    Long free text is the opposite. A description is rejected for carrying
+    shipping boilerplate or a country of origin -- text the page really does put
+    inside the description -- so there is no better element to move to. Repair
+    then swaps a selector that reads the right region for one that reads less of
+    it, and the judge, handed a shorter value, is no happier. The field arrives
+    at a human anyway, two model calls later and now bound to something worse
+    than it started with.
+
+    So: prose goes to a person with its binding intact, and they can keep the
+    value (`accept`) or point somewhere else. Everything with a shape to check
+    against -- a price, a date, anything carrying assertions -- keeps repairing.
+    """
+
+    if not is_free_text(spec):
+        return True
+    return len(str(value or "")) < _PROSE_CHARS
+
+
 async def verify_and_judge(
     recipe: Recipe,
     *,
@@ -414,8 +451,22 @@ async def verify_and_judge(
         thrashing = {name: why for name, why in rejected.items() if name in tried}
         if thrashing:
             log.info("review.repair_thrashing", fields=sorted(thrashing))
+        # A rejected value that relocation cannot improve goes straight to a
+        # person, with its binding left alone. See `repairable_by_relocating`:
+        # repairing one trades a selector that reads the right region for one
+        # that reads less of it.
+        leaves = all_leaf_fields(recipe.fields)
+        prose = {
+            name: why
+            for name, why in rejected.items()
+            if not repairable_by_relocating(leaves.get(name), data.get(name))
+        }
+        if prose:
+            log.info("review.rejection_not_relocatable", fields=sorted(prose))
         repairable = {
-            name: why for name, why in rejected.items() if name not in tried
+            name: why
+            for name, why in rejected.items()
+            if name not in tried and name not in prose
         }
 
         if not repairable or attempt >= max_repairs:

@@ -23,6 +23,7 @@ from agentpilot.recipe.v2.review import (
     ReviewResult,
     SampleRun,
     merge_field_values,
+    repairable_by_relocating,
     verify_and_judge,
 )
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
@@ -375,3 +376,124 @@ async def test_a_failing_progress_sink_cannot_fail_the_check(stubs) -> None:
 
     _recipe_out, result = await _run(stubs, on_progress=boom)
     assert result.ready_for_review is True
+
+
+# --- rejections repair cannot help -------------------------------------------
+#
+# The judge is a model and its rejections are not all correct. For long free
+# text they are wrong in one particular, repeatable way: a description carries
+# the shipping note, the country of origin and the care instructions because
+# that is what the page puts inside the description, and the judge reads the
+# extra text as contamination. Repairing that rebinds the field somewhere
+# narrower -- trading a selector that reads the right region for one that reads
+# less of it -- and the field lands on a human anyway, two model calls later
+# and now bound to something worse. See `repairable_by_relocating`.
+
+_PROSE = (
+    "A relaxed-fit shirt cut from 100% organic cotton, with a button-down "
+    "collar, a single chest pocket and a curved hem. Machine wash cold with "
+    "like colours, tumble dry low, warm iron if needed, do not bleach. "
+    "Imported from China. Free returns within 30 days of delivery."
+)
+
+
+def _prose_recipe() -> Recipe:
+    return Recipe(
+        recipe_id="r", tenant="t", name="n", version=1, target=TargetSpec(),
+        fields={"description": FieldSpec(name="description", type=TypeSpec(kind="scalar"))},
+        field_groups=[
+            FieldGroup(
+                group_id="g0",
+                field_names=["description"],
+                bindings={
+                    "description": [Candidate(locator=Locator(kind="css", selector=".desc"))]
+                },
+            )
+        ],
+    )
+
+
+def test_long_free_text_is_not_something_relocation_can_fix() -> None:
+    spec = FieldSpec(name="description", type=TypeSpec(kind="scalar"))
+    assert repairable_by_relocating(spec, _PROSE) is False
+
+
+def test_a_short_string_still_repairs() -> None:
+    """The case the judge earns its keep on: `name` bound to the breadcrumb
+    trail. A label IS relocatable -- there is a better element and the agent can
+    find it."""
+
+    spec = FieldSpec(name="name", type=TypeSpec(kind="scalar"))
+    assert repairable_by_relocating(spec, "Home / Tops") is True
+
+
+def test_a_typed_field_always_repairs_however_long() -> None:
+    """A price has a shape to check against, so "wrong" really does mean read
+    from the wrong place."""
+
+    spec = FieldSpec(name="price", type=TypeSpec(kind="scalar", value_type="price"))
+    assert repairable_by_relocating(spec, "x" * 5000) is True
+
+
+def test_a_field_with_assertions_always_repairs() -> None:
+    from agentpilot.recipe.v2.schema import Assertion
+
+    spec = FieldSpec(
+        name="description",
+        type=TypeSpec(kind="scalar"),
+        assertions=[Assertion(kind="not_empty")],
+    )
+    assert repairable_by_relocating(spec, _PROSE) is True
+
+
+def test_an_unknown_field_repairs_rather_than_parking(stubs) -> None:
+    """No spec means no reason to treat it specially."""
+
+    assert repairable_by_relocating(None, _PROSE) is True
+
+
+async def test_a_noisy_description_goes_to_a_person_with_its_binding_intact(
+    stubs,
+) -> None:
+    """The regression. The judge rejects a correct description for carrying
+    "Imported from China"; that must not send the selector agent off to rebind
+    a field that was already reading the right region."""
+
+    stubs["data"] = {"description": _PROSE}
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={
+            "description": FieldVerdict(
+                "description", False,
+                "this is the description plus shipping and import boilerplate",
+            ),
+        }),
+    ]
+
+    recipe_out, result = await verify_and_judge(
+        _prose_recipe(), sample_urls=["https://x.test/p/1"],
+        session=None, registry=None, driver=None, llm_config=None, max_repairs=2,
+    )
+
+    assert stubs["repairs"] == [], "a prose rejection must not be fed back to repair"
+    assert result.repairs == 0
+    assert "description" in result.unrepaired
+    # The binding the person will be shown is the one that produced the value.
+    assert recipe_out.field_groups[0].bindings["description"][0].locator.selector == ".desc"
+
+
+async def test_the_page_is_only_replayed_once_when_nothing_is_repairable(stubs) -> None:
+    """The other half of the saving: no repair round means no second replay."""
+
+    stubs["data"] = {"description": _PROSE}
+    stubs["verdicts"] = [
+        DataVerdict(passed=False, verdicts={
+            "description": FieldVerdict("description", False, "carries boilerplate"),
+        }),
+    ]
+
+    await verify_and_judge(
+        _prose_recipe(), sample_urls=["https://x.test/p/1"],
+        session=None, registry=None, driver=None, llm_config=None, max_repairs=2,
+    )
+
+    assert stubs["replays"] == 1

@@ -36,6 +36,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from agentpilot.control.identity import tenant_of
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.wiring import get_wiring
+from crawlpilot.spi.errors import DriverError
 from crawlpilot.spi.streaming import (
     InputEvent,
     KeyEvent,
@@ -193,7 +194,29 @@ async def live_view(
         return
 
     await websocket.accept()
-    queue = await driver.start_screencast(session.ctx, page_id)
+    try:
+        queue = await driver.start_screencast(session.ctx, page_id)
+    except DriverError as exc:
+        # The page can be gone between the client resolving a `page_id` and
+        # this connection reaching the driver -- a tab the script closed, or a
+        # session torn down mid-reconnect, which `useLiveView`'s
+        # reconnect-on-`page_id`-resolution dance makes a routine race rather
+        # than a rare one. Uncaught, this escaped into the app-level handlers
+        # in `gateway/errors.py`, which answer every `DriverError` with a
+        # `JSONResponse`: on an already-accepted websocket that is an ASGI
+        # protocol violation (`Expected ASGI message 'websocket.send' ...`),
+        # so uvicorn killed the connection with a bare 1006 -- which
+        # `liveView.ts` reads as "retry", reconnecting into the same
+        # `TabNotFound` every second forever. 4404 is one of its terminal
+        # codes, so the client stops and shows the error.
+        log.info(
+            "live_view.page_gone",
+            session_id=session_id,
+            page_id=page_id,
+            error=str(exc),
+        )
+        await websocket.close(code=_NOT_FOUND, reason="no such page")
+        return
     sender = asyncio.create_task(_send_frames(websocket, queue))
     try:
         if mode == "interact":
@@ -211,4 +234,9 @@ async def live_view(
         sender.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sender
-        await driver.stop_screencast(session.ctx, page_id)
+        # Same race as `start_screencast` above, one step later: the tab can
+        # close while the stream is running, and teardown's own
+        # `_require_page` raises then too. A failed teardown must not become
+        # the connection's exit path.
+        with contextlib.suppress(DriverError):
+            await driver.stop_screencast(session.ctx, page_id)

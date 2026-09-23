@@ -44,7 +44,7 @@ from crawlpilot.spi.driver import BrowserDriver
 log = structlog.get_logger(__name__)
 
 AskKind = Literal["unresolved", "rejected", "absent"]
-ResolutionAction = Literal["pick", "scope", "steps", "describe", "skip"]
+ResolutionAction = Literal["pick", "scope", "steps", "describe", "accept", "skip"]
 ScopeShape = Literal["one", "values", "map", "rows"]
 
 # Ops a recording is allowed to carry. Everything else the page might produce is
@@ -80,6 +80,16 @@ class PendingAsk:
     that. The strings come straight from `verify_locators` and
     `rows._problems_with`, which write them to be read."""
 
+    value: str = ""
+    """What the run actually collected, for a `rejected` ask.
+
+    Without it the panel asks somebody to overrule a judgement it cannot show
+    them: "looked wrong" and a reason, but not the value the reason is about.
+    That is unanswerable for the case this exists for -- a description rejected
+    for carrying "Imported from China" is *correct*, and the only way to see
+    that is to read it. With the value in hand, `accept` becomes a real
+    answer."""
+
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "field": self.field,
@@ -89,6 +99,8 @@ class PendingAsk:
         }
         if self.tried:
             out["tried"] = self.tried
+        if self.value:
+            out["value"] = self.value
         return out
 
     @classmethod
@@ -99,6 +111,7 @@ class PendingAsk:
             reason=str(d.get("reason") or ""),
             step_trace=list(d.get("step_trace") or []),
             tried=str(d.get("tried") or ""),
+            value=str(d.get("value") or ""),
         )
 
 
@@ -110,6 +123,13 @@ class Resolution:
     action: ResolutionAction
     locators: list[Locator] = field(default_factory=list)
     """`pick`: what they clicked, already turned into locators by the picker."""
+    spec: dict[str, Any] = field(default_factory=dict)
+    """`pick`: the type and cleanup the picker derived for what was clicked.
+
+    A `FieldSpec` fragment. The browser knows what the locator cannot carry --
+    that a link pick needs `url_resolve`, that an array pick needs
+    `filter_empty` -- and this is the only route for it. `_apply_scope` already
+    retypes through `_shaped`; this is the plain pick's equivalent."""
     hint: str = ""
     """`describe`: e.g. "it's inside the Details accordion, open that first"."""
     shape: ScopeShape = "one"
@@ -140,7 +160,9 @@ class Resolution:
     def from_dict(cls, d: dict[str, Any]) -> Resolution | None:
         name = str(d.get("field") or "")
         action = d.get("action")
-        if not name or action not in ("pick", "scope", "steps", "describe", "skip"):
+        if not name or action not in (
+            "pick", "scope", "steps", "describe", "accept", "skip"
+        ):
             return None
         locators: list[Locator] = []
         for raw in d.get("locators") or []:
@@ -158,10 +180,12 @@ class Resolution:
         if action == "steps" and not steps:
             return None
         shape = d.get("shape")
+        raw_spec = d.get("spec")
         return cls(
             field=name,
             action=action,
             locators=locators,
+            spec=raw_spec if isinstance(raw_spec, dict) else {},
             hint=hint,
             shape=shape if shape in ("one", "values", "map", "rows") else "one",
             html=str(d.get("html") or ""),
@@ -289,6 +313,7 @@ def build_asks(
     absent: dict[str, str] | None = None,
     step_trace: list[dict[str, Any]] | None = None,
     tried: dict[str, str] | None = None,
+    collected: dict[str, Any] | None = None,
 ) -> list[PendingAsk]:
     """The asks, easiest to answer first.
 
@@ -308,11 +333,16 @@ def build_asks(
 
     trace = list(step_trace or [])
     attempted = tried or {}
+    values = collected or {}
 
     def ask(name: str, kind: AskKind, reason: str) -> PendingAsk:
+        # Only a `rejected` ask has a value to show: the other two kinds are
+        # about a field that read nothing at all.
+        raw = values.get(name) if kind == "rejected" else None
         return PendingAsk(
             field=name, kind=kind, reason=reason, step_trace=trace,
             tried=attempted.get(name, ""),
+            value="" if raw is None else str(raw),
         )
 
     gone = absent or {}
@@ -390,6 +420,11 @@ async def apply_resolutions(
     unsettled: dict[str, str] = {}
 
     skips = [r for r in resolutions.values() if r.action == "skip"]
+    # "The judge was wrong, keep what it read." Nothing to apply -- the binding
+    # is already on the recipe and is what produced the value the person just
+    # looked at. The whole effect is that the field does not come back as
+    # unsettled, which is what would otherwise strip it from the build.
+    accepts = [r for r in resolutions.values() if r.action == "accept"]
     # A pick carrying a recorded route is a different operation: it has to be
     # verified against the page that route produces, not against the state the
     # person's own session happened to be in. See `_apply_pick_after_steps`.
@@ -402,6 +437,9 @@ async def apply_resolutions(
     for resolution in skips:
         recipe = drop_field(recipe, resolution.field)
         log.info("assist.field_skipped", field=resolution.field)
+
+    for resolution in accepts:
+        log.info("assist.value_accepted", field=resolution.field)
 
     for resolution in routed_picks:
         recipe, problem = await _apply_pick_after_steps(
@@ -421,13 +459,29 @@ async def apply_resolutions(
         leaves = all_leaf_fields(recipe.fields)
         ctx = TransformContext(url=url)
         for resolution in picks:
+            spec = leaves.get(resolution.field)
+            if spec is None:
+                # The same guard the routed-pick path has. Without it `spec=None`
+                # sends `verify_locators` into raw-only checking, which accepts
+                # anything that reads a non-empty string -- so a pick at a field
+                # that is a table, or that was renamed during the build, bound
+                # silently and wrongly instead of saying so.
+                unsettled[resolution.field] = "that field is not in this recipe any more"
+                continue
+            # What the browser worked out about the pick that the locator cannot
+            # carry: a link needs `url_resolve`, an array needs `filter_empty`.
+            # Applied BEFORE verification, because `verify_locators` transforms
+            # and then decides -- applying it after would reject the very value
+            # the transform exists to clean up.
+            spec = _respec(spec, resolution.spec)
+            recipe.fields = {**recipe.fields, resolution.field: spec}
             # Held to the same rule as anything the model proposes: a person
             # pointing at the right element does not make its text clean up into
             # the type the field wants.
             resolving, reason = await verify_locators(
                 resolution.locators,
                 verify=reader.read,
-                spec=leaves.get(resolution.field),
+                spec=spec,
                 ctx=ctx,
             )
             if not resolving:

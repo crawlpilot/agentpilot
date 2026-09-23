@@ -7,7 +7,11 @@ into Firecrawl's friendly-4xx/5xx shape.
 
 from __future__ import annotations
 
+import contextlib
+import functools
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request
@@ -15,6 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.websockets import WebSocket
 
 from agentpilot.observability.metrics import error_responses_total
 from crawlpilot.spi import errors as spi_errors
@@ -87,8 +92,66 @@ def _error_response(
     )
 
 
+_HttpHandler = Callable[[Any, Any], Awaitable[JSONResponse]]
+
+# A websocket close reason is capped at 123 bytes on the wire; a longer one is
+# a protocol error, not a truncated message.
+_WS_REASON_MAX_BYTES = 123
+
+
+def _ws_reason(exc: Exception) -> str:
+    return str(exc).encode()[:_WS_REASON_MAX_BYTES].decode(errors="ignore")
+
+
+def _ws_safe(handler: _HttpHandler) -> Callable[[Any, Any], Awaitable[JSONResponse | None]]:
+    """Adapt an HTTP-shaped handler so it is also correct on a websocket.
+
+    Starlette dispatches these app-level handlers for websocket connections
+    too, passing the `WebSocket` in the `Request` slot -- and a handler that
+    returns a `Response` there makes Starlette send `http.response.start`
+    into an already-accepted socket. uvicorn refuses that (`RuntimeError:
+    Expected ASGI message 'websocket.send' or 'websocket.close', but got
+    'websocket.http.response.start'`), the connection dies with a bare 1006,
+    and a client that distinguishes deliberate close codes can only read 1006
+    as "try again" -- which is how one `TabNotFound` out of
+    `routes/live_view.py`'s `start_screencast` became an endless reconnect
+    loop and a traceback per attempt in the worker's log.
+
+    So for a websocket we build the response (which still counts the error
+    metric) but send it as a close code instead: `4000 + http_status`, the
+    same 4000-range vocabulary `routes/live_view.py` and
+    `routes/live_view_proxy.py` already close with (4404, 4401, 4502, ...).
+    """
+
+    @functools.wraps(handler)
+    async def _dispatch(conn: Any, exc: Exception) -> JSONResponse | None:
+        response = await handler(conn, exc)
+        if not isinstance(conn, WebSocket):
+            return response
+        log.info(
+            "gateway.websocket_error_close",
+            path=conn.url.path,
+            exc_type=type(exc).__name__,
+            status=response.status_code,
+        )
+        with contextlib.suppress(RuntimeError):  # peer may already be gone
+            await conn.close(code=4000 + response.status_code, reason=_ws_reason(exc))
+        return None
+
+    return _dispatch
+
+
 def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(spi_errors.DriverError)
+    def handles(exc_class: type[Exception]) -> Callable[[_HttpHandler], _HttpHandler]:
+        """`app.exception_handler`, but registering through `_ws_safe`."""
+
+        def _register(fn: _HttpHandler) -> _HttpHandler:
+            app.add_exception_handler(exc_class, _ws_safe(fn))
+            return fn
+
+        return _register
+
+    @handles(spi_errors.DriverError)
     async def _driver_error_handler(request: Request, exc: spi_errors.DriverError) -> JSONResponse:
         """Every field read off the exception's own class -- see the note above
         the `ErrorCode` enum."""
@@ -100,11 +163,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             retry_after=exc.retry_after_seconds,
         )
 
-    @app.exception_handler(NotImplementedError)
+    @handles(NotImplementedError)
     async def _not_implemented_handler(request: Request, exc: NotImplementedError) -> JSONResponse:
         return _error_response(400, ErrorCode.BAD_REQUEST, str(exc))
 
-    @app.exception_handler(UnknownToolError)
+    @handles(UnknownToolError)
     async def _unknown_tool_handler(request: Request, exc: UnknownToolError) -> JSONResponse:
         """A verb this deployment does not offer.
 
@@ -116,13 +179,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
         return _error_response(400, ErrorCode.BAD_REQUEST, str(exc))
 
-    @app.exception_handler(RequestValidationError)
+    @handles(RequestValidationError)
     async def _validation_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         return _error_response(400, ErrorCode.BAD_REQUEST, "invalid request", details=exc.errors())
 
-    @app.exception_handler(ValidationError)
+    @handles(ValidationError)
     async def _model_validation_handler(request: Request, exc: ValidationError) -> JSONResponse:
         """A Pydantic error raised *inside* a handler, not by FastAPI's own body
         parsing -- so `RequestValidationError` above never sees it.
@@ -137,14 +200,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
         return _error_response(400, ErrorCode.BAD_REQUEST, "invalid request", details=exc.errors())
 
-    @app.exception_handler(StarletteHTTPException)
+    @handles(StarletteHTTPException)
     async def _http_exception_handler(
         request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
         code = ErrorCode.NOT_FOUND if exc.status_code == 404 else ErrorCode.BAD_REQUEST
         return _error_response(exc.status_code, code, str(exc.detail))
 
-    @app.exception_handler(Exception)
+    @handles(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         """Catch-all so a raw Chromium/CDP error (e.g. "Cannot navigate to
         invalid URL") surfaces as a diagnosable typed response instead of an

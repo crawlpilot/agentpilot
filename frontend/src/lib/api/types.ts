@@ -797,11 +797,25 @@ export interface PendingAsk {
    * this". Comes straight from the verifier, which writes it to be read.
    */
   tried?: string
+  /**
+   * What the run actually collected, on a `rejected` ask.
+   *
+   * The panel is asking somebody to overrule the judge, which is unanswerable
+   * without showing them the value the judgement is about — a description
+   * rejected for carrying "Imported from China" is the page's own description,
+   * and the only way to see that is to read it.
+   */
+  value?: string
 }
 
 export interface RecipeResolution {
   field: string
-  action: 'pick' | 'scope' | 'steps' | 'describe' | 'skip'
+  /**
+   * `accept` overrules the judge: keep the value the run collected and the
+   * binding that produced it. Without it the only answers to a bad rejection
+   * were to re-pick the element that was already right, or drop the field.
+   */
+  action: 'pick' | 'scope' | 'steps' | 'describe' | 'accept' | 'skip'
   /**
    * `pick`: the element clicked. `scope`: the REGION pointed at, which becomes
    * a `within` for whatever the model finds inside it.

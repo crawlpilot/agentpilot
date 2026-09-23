@@ -21,7 +21,7 @@ import structlog
 import websockets
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from websockets.asyncio.client import ClientConnection
-from websockets.exceptions import InvalidHandshake
+from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 from agentpilot.gateway.auth_deps import resolve_query_api_key
 from agentpilot.gateway.routing import resolve_route
@@ -124,6 +124,21 @@ async def live_view_proxy(
                 sender.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await sender
+    except ConnectionClosed as exc:
+        # The worker closed mid-stream. `websockets` ends `async for` cleanly
+        # only for 1000/1001 -- every deliberate close the worker makes
+        # (4404 "no such page", 4401, ...) arrives here as an exception
+        # instead, and uncaught it left this route raising per connection
+        # while the browser saw nothing but a 1006 it retries on. Relay the
+        # worker's verdict so `liveView.ts` can treat it as terminal.
+        received = exc.rcvd
+        code = received.code if received is not None else 1011
+        if code in (1005, 1006):  # not sendable: "no status" / "abnormal"
+            code = 1011
+        reason = received.reason if received is not None else "upstream closed"
+        log.info("live_view_proxy.upstream_closed", url=ws_url, code=code, reason=reason)
+        with contextlib.suppress(RuntimeError):  # browser may already be gone
+            await websocket.close(code=code, reason=reason)
     except OSError as exc:
         log.error("live_view_proxy.worker_unreachable", url=ws_url, error=str(exc))
         await websocket.close(code=_BAD_UPSTREAM, reason="worker unreachable")

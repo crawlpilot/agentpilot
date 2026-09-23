@@ -23,6 +23,7 @@ import { CleanupEditor } from './CleanupEditor'
 import { PickerControls } from './PickerControls'
 import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
+import { READ_ATTRIBUTES } from '@/lib/recipe/attributes'
 import {
   availableShapes,
   planGroups,
@@ -83,19 +84,6 @@ const ACTIONS: {
 
 const VALUE_TYPES: ValueType[] = [
   'string', 'text', 'number', 'integer', 'float', 'price', 'boolean', 'url', 'date', 'datetime', 'json',
-]
-
-const READ_ATTRIBUTES: { value: string; label: string; hint: string }[] = [
-  { value: 'text', label: 'Text', hint: 'The element’s text, excluding script/style. Includes text present but not painted.' },
-  { value: 'visible_text', label: 'Visible text', hint: 'Only what is rendered — excludes collapsed content.' },
-  { value: 'href', label: 'Link (href)', hint: 'The link target.' },
-  { value: 'src', label: 'Image (src)', hint: 'The image source URL.' },
-  { value: 'value', label: 'Form value', hint: 'The current value of an input, select or textarea.' },
-  { value: 'html', label: 'HTML', hint: 'Outer HTML — only when the markup itself is the data.' },
-  { value: 'title', label: 'title', hint: 'Often the full text when the visible label is truncated.' },
-  { value: 'alt', label: 'alt', hint: 'An image’s alt text.' },
-  { value: 'content', label: 'content', hint: 'As used by meta tags.' },
-  { value: 'datetime', label: 'datetime', hint: 'A <time> element’s machine-readable timestamp.' },
 ]
 
 /**

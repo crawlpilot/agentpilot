@@ -505,13 +505,27 @@ class RecipeResolutionIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     field: str
-    action: Literal["pick", "scope", "steps", "describe", "skip"]
+    action: Literal["pick", "scope", "steps", "describe", "accept", "skip"]
+    """`accept` overrules the judge: keep the value the run already collected
+    and the binding that produced it. It exists because the judge's rejections
+    are not all correct -- a description carrying "Imported from China" is the
+    page's own description -- and without it the only answers to a bad
+    rejection were to re-pick the element that was already right, or to drop
+    the field."""
     locators: list[dict[str, Any]] = []
     """`pick`: the element they clicked. `scope`: the REGION they pointed at,
     which becomes a `within` for whatever the model finds inside it.
 
     Both come from the studio's existing picker -- the run is parked on a live
     session, so they are looking at the same page the agent gave up on."""
+    spec: dict[str, Any] = {}
+    """`pick`: the type and cleanup the picker derived for what was clicked.
+
+    A `FieldSpec` fragment -- `{"type": ..., "transform": [...]}`. The browser
+    knows things the locator alone cannot carry: that a link pick needs
+    `url_resolve` or its URLs stay relative, that an array pick needs
+    `filter_empty`. Dropping it meant a manually corrected URL field was bound
+    correctly and still emitted relative hrefs for ever."""
     hint: str = ""
     """`describe`: e.g. "it's inside the Details accordion, open that first".
     Fed to the selector agent as feedback rather than used as a selector."""

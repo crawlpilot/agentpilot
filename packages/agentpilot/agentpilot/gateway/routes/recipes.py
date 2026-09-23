@@ -592,6 +592,7 @@ async def submit_assist(
                 "field": r.field,
                 "action": r.action,
                 "locators": [loc.to_dict() for loc in r.locators],
+                "spec": r.spec,
                 "hint": r.hint,
                 "shape": r.shape,
                 "html": r.html,

@@ -14,9 +14,18 @@ closed the connection. Clicking in the live view simply stopped working.
 
 from __future__ import annotations
 
-import pytest
+import asyncio
+from types import SimpleNamespace
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+
+from agentpilot.gateway.errors import register_exception_handlers
+from agentpilot.gateway.routes import live_view as live_view_module
 from agentpilot.gateway.routes.live_view import _parse_input_event
+from crawlpilot.spi.errors import TabNotFound
 from crawlpilot.spi.streaming import (
     KeyEvent,
     MouseButtonEvent,
@@ -86,3 +95,85 @@ def test_keys_still_parse_and_an_empty_one_does_not() -> None:
 def test_an_unknown_kind_is_ignored() -> None:
     assert _parse_input_event({"kind": "teleport", "x": 1, "y": 2}) is None
     assert _parse_input_event({}) is None
+
+
+# --- the route's own post-`accept()` failure paths (see
+# `tests/test_websocket_error_handling.py` for the ASGI-level regression) ---
+
+
+class _FakeDriver:
+    """Satisfies `LiveViewCapable` (a runtime-checkable Protocol) with
+    whatever failure the test under it needs."""
+
+    def __init__(self, *, start_error: Exception | None = None,
+                 stop_error: Exception | None = None) -> None:
+        self._start_error = start_error
+        self._stop_error = stop_error
+        self.stopped = False
+
+    async def start_screencast(self, ctx: object, page_id: str | None = None) -> asyncio.Queue:
+        if self._start_error is not None:
+            raise self._start_error
+        return asyncio.Queue()
+
+    async def stop_screencast(self, ctx: object, page_id: str | None = None) -> None:
+        self.stopped = True
+        if self._stop_error is not None:
+            raise self._stop_error
+
+    async def dispatch_input(self, ctx: object, event: object, page_id: str | None = None) -> None:
+        return None
+
+
+def _route_app(driver: _FakeDriver) -> tuple[FastAPI, SimpleNamespace]:
+    session = SimpleNamespace(ctx=object(), identity=None)
+    wiring = SimpleNamespace(sessions={"s1": session}, driver=driver)
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(live_view_module.router, prefix="/internal/sessions")
+    return app, wiring
+
+
+def test_a_tab_that_vanished_closes_4404_instead_of_crashing_the_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE regression. `useLiveView` reconnects as soon as it resolves a
+    `page_id`, so a tab closed in between is a routine race -- and the error
+    lands *after* `accept()`, where an app-level handler's `JSONResponse` is
+    an ASGI protocol violation rather than an answer."""
+
+    driver = _FakeDriver(start_error=TabNotFound("no such tab 'abc'"))
+    app, wiring = _route_app(driver)
+
+    async def _fake_wiring() -> object:
+        return wiring
+
+    monkeypatch.setattr(live_view_module, "get_wiring", _fake_wiring)
+
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as excinfo:  # noqa: PT012
+        with client.websocket_connect("/internal/sessions/s1/live-view?page_id=abc") as ws:
+            ws.receive_bytes()
+    assert excinfo.value.code == 4404
+    assert not driver.stopped  # nothing was started, so nothing to tear down
+
+
+def test_a_tab_that_vanishes_mid_stream_does_not_fail_the_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`stop_screencast` re-resolves the page too, so the same race hits the
+    `finally` -- where a raise would replace the connection's real ending."""
+
+    driver = _FakeDriver(stop_error=TabNotFound("no such tab 'abc'"))
+    app, wiring = _route_app(driver)
+
+    async def _fake_wiring() -> object:
+        return wiring
+
+    monkeypatch.setattr(live_view_module, "get_wiring", _fake_wiring)
+
+    client = TestClient(app)
+    with client.websocket_connect("/internal/sessions/s1/live-view?page_id=abc"):
+        pass
+    assert driver.stopped

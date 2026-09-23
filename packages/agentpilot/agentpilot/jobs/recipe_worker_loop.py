@@ -126,6 +126,9 @@ class RecipeWorkerLoop:
         # proxy through to here.
         self._sessions = sessions if sessions is not None else {}
         self._placer = placer
+        # run_id -> (live_session_id, session, tier), so `_heartbeat` can keep
+        # the redis route alive for runs that outlive its TTL. See `_heartbeat`.
+        self._live_routes: dict[str, tuple[str, Any, str]] = {}
         # How often a parked run checks whether a person has answered. The
         # answer is written by the gateway, not passed in memory, so this is a
         # database poll -- cheap, and a few seconds of latency is nothing next
@@ -224,6 +227,26 @@ class RecipeWorkerLoop:
                 await heartbeat
 
     async def _heartbeat(self, run: ClaimedRecipeRun) -> None:
+        """Keep this run's claim lock *and* its live-view route fresh.
+
+        The two used to be one line, and the missing half broke the assist
+        panel outright. `commit_route` stamps `session:{id}` with
+        `lease_ttl_seconds` -- 300s by default -- and the only other thing that
+        refreshes it is a *successful* execute through the gateway proxy. A
+        build runs for minutes and then parks for up to `assist_timeout_s`
+        (1800s), so the route lapsed long before anybody opened the panel;
+        `resolve_route` then 404s every picker injection, and because the TTL is
+        only extended after a successful execute, nothing can revive it. The
+        session still appears in `/v1/sessions` -- that listing fans out to the
+        workers' in-process dicts and never consults the route -- so it looked
+        healthy and silently refused to pick.
+
+        `AgentWorkerLoop` re-publishes on every agent step for exactly this
+        reason; a recipe run has no comparable step boundary during a park, so
+        the heartbeat is the cadence. `stale_after/3` (40s by default) is
+        comfortably inside any sane TTL.
+        """
+
         interval = max(self._stale_after_seconds / 3.0, 1.0)
         while True:
             await asyncio.sleep(interval)
@@ -231,6 +254,11 @@ class RecipeWorkerLoop:
                 await self._store.renew_lock(run.run_id, run.lock)
             except Exception:
                 log.warning("recipe_worker_loop.renew_failed", run_id=run.run_id)
+            route = self._live_routes.get(run.run_id)
+            if route is not None:
+                # Already best-effort and idempotent; a redis hiccup costs the
+                # live view, never the run.
+                await self._publish_live_route(*route)
 
     async def _process_run(self, run: ClaimedRecipeRun) -> None:
         if run.kind == "codegen":
@@ -288,6 +316,10 @@ class RecipeWorkerLoop:
         # run is stuck on.
         live_session_id = f"recipe-run-{run.run_id}"
         await self._publish_live_route(live_session_id, session, "auto")
+        # Hand the route to `_heartbeat`, which re-commits it for as long as the
+        # run lives. Publishing once is not enough: the route's TTL is shorter
+        # than a build, let alone a park. See `_heartbeat`.
+        self._live_routes[run.run_id] = (live_session_id, session, "auto")
         try:
             # `build` and `heal` are both "work out where these fields live on
             # this page", which is what onboarding does -- so they are the same
@@ -302,6 +334,7 @@ class RecipeWorkerLoop:
             else:
                 raise AssertionError(f"unhandled recipe run kind: {run.kind!r}")
         finally:
+            self._live_routes.pop(run.run_id, None)
             await self._forget_live_route(live_session_id, session)
             try:
                 await release_interactive_session(
@@ -552,6 +585,11 @@ class RecipeWorkerLoop:
         # that repair could not fix, now goes to a person -- on the page the run
         # is still sitting on. See `assist.py` for why the session staying open
         # is the whole point.
+        # What the draft actually read, hoisted above the asks so a `rejected`
+        # ask can show the value it is asking about. `review.runs` is not
+        # re-run by the assist loop, so this is the same thing the assertion
+        # proposal below used to recompute for itself.
+        collected = merge_field_values(review.runs)
         asks = build_asks(
             outcome.unresolved,
             review.unrepaired,
@@ -559,6 +597,9 @@ class RecipeWorkerLoop:
             # not contain needs a decision, not another search.
             absent=review.absent,
             step_trace=review.step_trace,
+            # The rejected values themselves. A person cannot sensibly overrule
+            # "this looked wrong" without being shown what it read.
+            collected=collected,
             # What was tried for each field, so the panel can show it. An ask
             # that says "here is what I tried and why each attempt failed" is a
             # different question to be handed than "find this".
@@ -592,6 +633,7 @@ class RecipeWorkerLoop:
                     for name in group.bindings
                 },
                 step_trace=review.step_trace,
+                collected=collected,
                 tried={
                     name: outcome.trace.explain(name)
                     for group in recipe.field_groups
@@ -616,7 +658,6 @@ class RecipeWorkerLoop:
         # The model-proposed assertions, now that real values exist to justify a
         # bound. The mechanical ones were attached during the build; these are
         # the ones that need to know what the value means.
-        collected = merge_field_values(review.runs)
         if collected:
             recipe.fields = with_assertions(
                 recipe.fields,
@@ -763,13 +804,29 @@ class RecipeWorkerLoop:
                 # 1800s and no queued build was picked up by anyone.
                 log.info("recipe_worker_loop.park_vanished", run_id=run.run_id)
                 return recipe, {a.field: a.reason for a in asks}
+            # Poll BEFORE testing the deadline. `submit_assist` sets
+            # `parked_until = NULL` and `status = 'running'` in the same
+            # statement, so a row that has just been answered reports no
+            # deadline at all -- and `or deadline` then falls back to the
+            # *original* park deadline. Answering in the last poll interval
+            # therefore broke straight out of this loop with `raw is None`,
+            # called `resume_run`, and dropped answers the API had already
+            # accepted with a 200.
+            raw = await self._store.poll_assist(run.run_id, run.lock)
+            if raw is not None:
+                break
+            if current.status != "needs_input":
+                # The row left `needs_input` and yet `poll_assist` -- which
+                # reads by `lock`, not by tenant -- cannot see it. This worker
+                # no longer owns the run: reclaimed, or resumed under a newer
+                # lock. Waiting out the remaining park would hold a browser and
+                # a warm identity for somebody else's run.
+                log.info("recipe_worker_loop.park_lock_lost", run_id=run.run_id)
+                return recipe, {a.field: a.reason for a in asks}
             until = current.parked_until or deadline
             if datetime.now(UTC) >= until:
                 break
             await asyncio.sleep(self._assist_poll_seconds)
-            raw = await self._store.poll_assist(run.run_id, run.lock)
-            if raw is not None:
-                break
 
         if raw is None:
             # Nobody answered. Resuming beats holding the slot indefinitely, and

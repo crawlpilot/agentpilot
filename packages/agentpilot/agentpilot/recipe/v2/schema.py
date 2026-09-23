@@ -133,6 +133,26 @@ class FieldSpec:
         )
 
 
+def is_free_text(spec: FieldSpec | None) -> bool:
+    """A field declared as an unconstrained string: prose, not a datum.
+
+    The distinction matters wherever a value is being second-guessed. A `price`
+    or a `date` has a shape to check against and assertions that say what is
+    out of range; a description has neither, and the only thing it can be
+    measured against is whether it reads as the right subject. Judging one by
+    the standards of the other is how a correct description carrying a shipping
+    note gets treated as a wrong value.
+    """
+
+    if spec is None:
+        return False
+    return (
+        spec.type.kind == "scalar"
+        and spec.type.value_type == "string"
+        and not spec.assertions
+    )
+
+
 def parse_fields(raw: dict[str, Any]) -> dict[str, FieldSpec]:
     return {name: FieldSpec.from_dict(name, spec) for name, spec in raw.items()}
 
