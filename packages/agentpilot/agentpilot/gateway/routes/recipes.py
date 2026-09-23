@@ -36,6 +36,8 @@ from agentpilot.gateway.schemas import (
     RecipeOnboardRequest,
     RecipeOnboardResponse,
     RecipeOut,
+    RecipeRunArtifactOut,
+    RecipeRunArtifactsResponse,
     RecipeRunOut,
     RecipeRunQueuedResponse,
     RecipeRunResponse,
@@ -279,6 +281,7 @@ async def onboard_recipe_route(
             "description": req.description or "",
             "output_schema": req.output_schema or None,
             "sample_urls": [req.url, *req.sample_urls],
+            "mode": req.mode,
         },
     )
     return RecipeOnboardResponse(success=True, recipe_id=recipe.recipe_id, run_id=run_id)
@@ -430,6 +433,115 @@ async def get_recipe_run(
     if run is None or run.recipe_id != recipe_id:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
     return RecipeRunResponse(success=True, data=_run_out(run))
+
+
+@router.post("/{recipe_id}/runs/{run_id}/assist/request", response_model=RecipeAssistResponse)
+async def request_assist(
+    recipe_id: str,
+    run_id: str,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeAssistResponse:
+    """Ask a running build to stop for a person before it finishes.
+
+    Until this existed, taking over meant waiting for the build to give up: a
+    run that bound every field -- correctly or not -- finished and saved without
+    ever offering. That is the wrong way round for the failure that actually
+    matters on a page carrying a sponsored competitor in its own JSON, where
+    every field resolves and one of them is the wrong product.
+
+    Takes effect at the build's next park point, before the document is
+    validated and saved, with the browser session still open on the page. The
+    caller then polls the run for `needs_input` as usual and answers through
+    `POST .../assist`.
+    """
+
+    requests_total.labels(tenant=authed.tenant, route="request_assist").inc()
+    store = _require_recipe_store(wiring)
+
+    run = await store.get_run(run_id, authed.tenant)
+    if run is None or run.recipe_id != recipe_id:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
+    if not await store.request_assist(run_id, authed.tenant):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"run {run_id!r} is {run.status!r} -- only a queued or running build "
+                "can be asked to stop. A parked run is already waiting for you; a "
+                "finished one has to be rebuilt or edited in the studio."
+            ),
+        )
+    return RecipeAssistResponse(success=True, accepted=[])
+
+
+@router.post(
+    "/{recipe_id}/runs/{run_id}/assist/heartbeat", response_model=RecipeAssistResponse
+)
+async def heartbeat_assist(
+    recipe_id: str,
+    run_id: str,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeAssistResponse:
+    """Say that somebody is still working on a parked run.
+
+    The park is bounded because it holds a worker slot, a warm identity, a
+    browser and a proxy pin -- but a fixed bound drops the person doing the
+    careful thing, which is the reload, the recording, the pick and the look at
+    what it read. The studio calls this while the assist panel is open, and that
+    is what makes a longer ceiling safe rather than merely longer.
+
+    Idempotent, and cheap enough to call on a timer.
+    """
+
+    store = _require_recipe_store(wiring)
+    run = await store.get_run(run_id, authed.tenant)
+    if run is None or run.recipe_id != recipe_id:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
+    extended = await store.touch_park(
+        run_id, authed.tenant, extend_by_s=RecipeConfig.from_env().assist_timeout_s
+    )
+    if extended is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"run {run_id!r} is {run.status!r} -- only a run parked for input has "
+                "a deadline to extend."
+            ),
+        )
+    return RecipeAssistResponse(success=True, accepted=[])
+
+
+@router.get(
+    "/{recipe_id}/runs/{run_id}/artifacts", response_model=RecipeRunArtifactsResponse
+)
+async def get_recipe_run_artifacts(
+    recipe_id: str,
+    run_id: str,
+    kind: str | None = None,
+    wiring: Wiring = Depends(get_wiring),
+    authed: AuthedTenant = Depends(require_tenant_auth),
+) -> RecipeRunArtifactsResponse:
+    """What the build proposed for each field, and why each attempt was rejected.
+
+    The reasons here are the ones `verify_locators` and `rows._problems_with`
+    already produce -- "column 'value' is empty in 9 of 10 rows, so it is not
+    being resolved inside each row" -- written to be read by a person and, until
+    this existed, logged to a worker's stdout and discarded. A build that came
+    back with a wrong selector could only be investigated by running it again.
+    """
+
+    store = _require_recipe_store(wiring)
+    run = await store.get_run(run_id, authed.tenant)
+    if run is None or run.recipe_id != recipe_id:
+        raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
+    rows = await store.run_artifacts(
+        run_id, authed.tenant, kinds=(kind,) if kind else None
+    )
+    return RecipeRunArtifactsResponse(
+        success=True,
+        artifacts=[RecipeRunArtifactOut(**row) for row in rows],
+    )
 
 
 @router.post("/{recipe_id}/runs/{run_id}/assist", response_model=RecipeAssistResponse)

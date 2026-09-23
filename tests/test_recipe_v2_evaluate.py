@@ -194,7 +194,37 @@ async def test_options_carry_index_all_attribute_and_within(reader) -> None:
     assert payload == {
         "kind": "css", "selector": "li", "attribute": "href", "all": True, "index": 2,
         "within": {"kind": "css", "selector": ".drawer"},
+        # An ordinary read does not pay for the common-ancestor walk. Replay
+        # reads every field of every row this way, and it wants the value, not a
+        # description of where the value lives.
+        "want_scope": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_reading_with_scope_asks_for_it_and_hands_it_back(reader) -> None:
+    """The build asks where a locator's matches live; replay does not. One round
+    trip, so the scope always describes the value that came back with it."""
+
+    scope = {"spans_document": False, "tag": "section", "selector": "#specs", "matched": 5}
+    r, fake = reader(js={"querySelectorAll": {"value": ["a", "b"], "scope": scope}})
+    value, got = await r.read_with_scope(Locator(kind="css", selector="li", all=True))
+
+    assert value == ["a", "b"]
+    assert got == scope
+    payload = json.loads(fake.scripts[0].split("const opts = ", 1)[1].split(";\n", 1)[0])
+    assert payload["want_scope"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_structured_locator_has_no_scope_to_report(reader) -> None:
+    """A JSON path has no DOM container, so the question does not apply -- and
+    answering it with something would invite a `within` that cannot resolve."""
+
+    r, _fake = reader(structured={"json_ld": [{"name": "Dove"}]})
+    value, scope = await r.read_with_scope(Locator(kind="json_ld", path="[0].name"))
+    assert value == "Dove"
+    assert scope is None
 
 
 @pytest.mark.asyncio

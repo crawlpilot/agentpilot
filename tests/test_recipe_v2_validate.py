@@ -157,3 +157,58 @@ def test_a_group_collecting_an_undeclared_field_is_refused() -> None:
         }],
     ))
     assert any("does not declare" in e for e in errors)
+
+
+def _care(selector: str, **extra):
+    """A document whose one field is bound to `selector`."""
+
+    locator = {"kind": "xpath", "selector": selector, "all": True, **extra}
+    return doc(
+        fields={"care": {"type": {"kind": "list", "items": {"kind": "scalar"}}}},
+        field_groups=[{
+            "group_id": "care",
+            "field_names": ["care"],
+            "bindings": {"care": [{"locator": locator}]},
+        }],
+    )
+
+
+def test_an_xpath_that_cannot_be_contained_is_an_error() -> None:
+    """The agent is held to this at proposal time. A hand-authored or
+    hand-edited recipe reaches replay without passing through any of that, so
+    the rule is stated once more here -- an expression on a document-order axis
+    makes the `within` beside it a comment rather than a constraint.
+
+    The selector is the one a real Zara build froze.
+    """
+
+    errors, _warnings = validate_document(
+        _care("//*[contains(translate(text(),'CARE','care'),'care')]/following::ul[1]/li")
+    )
+    assert any("following::" in e for e in errors)
+
+
+def test_a_relative_xpath_passes() -> None:
+    errors, _warnings = validate_document(_care(".//ul[@class='care-list']/li"))
+    assert errors == []
+
+
+def test_an_absolute_xpath_beside_a_within_is_an_error() -> None:
+    """The scope would be recorded and then ignored: `document.evaluate` honours
+    a context node only for a relative expression."""
+
+    errors, _warnings = validate_document(
+        _care("//li", within={"kind": "css", "selector": "#specs"})
+    )
+    assert any("absolute expression" in e for e in errors)
+
+
+def test_a_partial_case_fold_is_a_warning_not_an_error() -> None:
+    """A short `translate()` can be deliberate, so it does not block a save --
+    unlike an escaping axis, which is never salvageable."""
+
+    errors, warnings = validate_document(
+        _care(".//*[contains(translate(.,'CARE','care'),'care')]")
+    )
+    assert errors == []
+    assert any("only those 4 letters" in w for w in warnings)

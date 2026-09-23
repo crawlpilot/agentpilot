@@ -36,11 +36,86 @@ from crawlpilot.spi.driver import BrowserDriver
 
 _SOURCE_TO_CONTAINER = {"json_ld": "json_ld", "hydration": "hydration", "meta": "metadata"}
 
+# Where a locator's matches actually live: the smallest element containing all
+# of them.
+#
+# One measurement, two answers, and that is the point of computing it here
+# rather than asking a second question afterwards.
+#
+# - As a GATE: if the common ancestor is `<body>`, the matches do not belong to
+#   one thing. A Zara build bound `care` to an xpath using the `following::`
+#   axis and collected "Bag0", "LOG IN", "Help" and the nav menu alongside the
+#   five real washing instructions -- every one of those is a legitimate match
+#   for the expression, and the only thing separating them from the answer is
+#   that they are scattered across the page. `rows._problems_with` catches the
+#   equivalent for tables by asking whether the rows vary; this is the question
+#   a list can be asked.
+# - As a FIX: when the ancestor *is* a real container it is exactly the `within`
+#   the binding should carry, so the selector stops being able to wander out of
+#   it on some later page where the page chrome says something different.
+#
+# Computed in the same round trip as the read, off the same `nodes`. A separate
+# `execute_js` would re-resolve the selector and could describe a different set
+# of nodes than the one whose value was just returned.
+_SCOPE_JS = """
+  const STABLE_SEL = (el) => {
+    if (!el || !el.tagName) return null;
+    if (el.id && !/^_?[0-9a-f]{6,12}$/.test(el.id)) return '#' + CSS.escape(el.id);
+    for (const a of ['data-testid', 'data-test-id', 'data-automation-id',
+                     'data-qa', 'itemprop', 'aria-label', 'role']) {
+      const v = el.getAttribute && el.getAttribute(a);
+      if (v && !/["\\\\]/.test(v)) return el.tagName.toLowerCase() + '[' + a + '="' + v + '"]';
+    }
+    return null;
+  };
+  // A class is usable as a scope only if it names what the element IS. The
+  // rules mirror `selector_quality.is_unstable_class`, kept deliberately
+  // narrow here: a wrong scope is worse than none, because it silently
+  // resolves to `containers[0]` somewhere else on the page.
+  const STABLE_CLASS = (el) => {
+    const raw = (el.getAttribute && el.getAttribute('class')) || '';
+    for (const c of raw.split(/\\s+/)) {
+      if (!c || c.length < 4) continue;
+      if (/[:\\[\\]()]/.test(c)) continue;
+      if (/^(sc-|css-|_[A-Z])/.test(c)) continue;
+      if (/^_?[0-9a-f]{6,12}$/.test(c) && /\\d/.test(c)) continue;
+      if (/^\\d/.test(c)) continue;
+      if (document.querySelectorAll('.' + CSS.escape(c)).length === 1) {
+        return el.tagName.toLowerCase() + '.' + CSS.escape(c);
+      }
+    }
+    return null;
+  };
+  const DEPTH = (el) => { let d = 0; for (let n = el; n; n = n.parentElement) d++; return d; };
+  const SCOPE_OF = (nodes) => {
+    const els = nodes.filter(n => n && n.nodeType === 1);
+    if (!els.length) return null;
+    let common = els[0];
+    for (let i = 1; i < els.length; i++) {
+      // `contains` reports an element as containing itself, which is what makes
+      // the single-match case fall straight through to the element itself.
+      while (common && !common.contains(els[i])) common = common.parentElement;
+      if (!common) break;
+    }
+    if (!common) return {spans_document: true, selector: null, tag: null, depth: 0};
+    const tag = common.tagName ? common.tagName.toLowerCase() : null;
+    const spans = tag === 'body' || tag === 'html' || common === document.documentElement;
+    return {
+      spans_document: spans,
+      tag: tag,
+      depth: DEPTH(common),
+      matched: els.length,
+      selector: spans ? null : (STABLE_SEL(common) || STABLE_CLASS(common)),
+    };
+  };
+"""
+
 # One reader for css and xpath. Options are passed as a single JSON object
 # rather than interpolated into the source, so a selector containing a quote is
 # data rather than syntax -- the same discipline `driver/queries.py` uses.
-_READ_JS = """() => {
+_READ_JS = ("""() => {
   const opts = %s;
+""" + _SCOPE_JS + """
   const pick = (root, sel, isXpath) => {
     try {
       if (isXpath) {
@@ -92,11 +167,17 @@ _READ_JS = """() => {
   }
   const nodes = pick(root, opts.selector, opts.kind === 'xpath');
   if (nodes === null) return {error: 'invalid selector'};
-  if (opts.all) return {value: nodes.map(read).filter(v => v !== null)};
-  const i = (opts.index === null || opts.index === undefined) ? 0 : opts.index;
-  const el = i < 0 ? nodes[nodes.length + i] : nodes[i];
-  return {value: read(el)};
-}"""
+  const out = {};
+  if (opts.all) out.value = nodes.map(read).filter(v => v !== null);
+  else {
+    const i = (opts.index === null || opts.index === undefined) ? 0 : opts.index;
+    const el = i < 0 ? nodes[nodes.length + i] : nodes[i];
+    out.value = read(el);
+  }
+  if (opts.want_scope) out.scope = SCOPE_OF(nodes);
+  return out;
+}""")
+
 
 # Rows of a `dom_rows` repeat, read in one pass.
 #
@@ -416,6 +497,22 @@ class PageReader:
         rows = out.get("rows") if isinstance(out, dict) else None
         return rows if isinstance(rows, list) else []
 
+    async def read_with_scope(self, locator: Locator) -> tuple[Any, dict[str, Any] | None]:
+        """The locator's raw value, plus where its matches actually live.
+
+        `(value, scope)`, where `scope` is None for anything that is not a DOM
+        locator -- a JSON path has no container and the question does not apply.
+
+        Read and scope come from one round trip on one set of nodes, so the
+        scope always describes the value that was just returned. See `_SCOPE_JS`
+        for what the measurement is and why both the gate and the fix fall out
+        of it.
+        """
+
+        if locator.kind not in ("css", "xpath"):
+            return await self.read(locator), None
+        return await self._read_dom(locator, want_scope=True)
+
     async def read(self, locator: Locator) -> Any:
         """Resolve one locator, returning its raw value (pre-transform)."""
 
@@ -428,27 +525,39 @@ class PageReader:
                 raise LocatorError(str(exc)) from exc
 
         if locator.kind in ("css", "xpath"):
-            opts = {
-                "kind": locator.kind,
-                "selector": locator.selector or "",
-                "attribute": locator.attribute,
-                "all": locator.all,
-                "index": locator.index,
-                "within": (
-                    {"kind": locator.within.kind, "selector": locator.within.selector}
-                    if locator.within is not None
-                    else None
-                ),
-            }
-            out = await self._eval_js(_READ_JS % json.dumps(opts))
-            if isinstance(out, dict) and out.get("error"):
-                raise LocatorError(f"{out['error']}: {locator.selector!r}")
-            return out.get("value") if isinstance(out, dict) else None
+            value, _scope = await self._read_dom(locator, want_scope=False)
+            return value
 
         if locator.kind in ("ax_role", "text"):
             return await self._read_tree(locator)
 
         raise LocatorError(f"unknown locator kind {locator.kind!r}")
+
+    async def _read_dom(
+        self, locator: Locator, *, want_scope: bool
+    ) -> tuple[Any, dict[str, Any] | None]:
+        """One css/xpath read, optionally describing where its matches live."""
+
+        opts = {
+            "kind": locator.kind,
+            "selector": locator.selector or "",
+            "attribute": locator.attribute,
+            "all": locator.all,
+            "index": locator.index,
+            "within": (
+                {"kind": locator.within.kind, "selector": locator.within.selector}
+                if locator.within is not None
+                else None
+            ),
+            "want_scope": want_scope,
+        }
+        out = await self._eval_js(_READ_JS % json.dumps(opts))
+        if isinstance(out, dict) and out.get("error"):
+            raise LocatorError(f"{out['error']}: {locator.selector!r}")
+        if not isinstance(out, dict):
+            return None, None
+        scope = out.get("scope")
+        return out.get("value"), scope if isinstance(scope, dict) else None
 
     async def _read_tree(self, locator: Locator) -> Any:
         """Read from the fused accessibility+DOM tree.

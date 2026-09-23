@@ -132,6 +132,10 @@ class RecipeWorkerLoop:
         # to how long a person takes to look at a page.
         self._assist_poll_seconds = assist_poll_seconds
         self._task: asyncio.Task[None] | None = None
+        # Runs this worker is currently processing. Capacity is counted from here
+        # rather than from a per-tick semaphore, because the tick no longer waits
+        # for the work it started -- see `tick`.
+        self._inflight: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
         if self._task is None:
@@ -143,6 +147,13 @@ class RecipeWorkerLoop:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        # The tick no longer awaits what it claimed, so shutting down the loop
+        # alone would leave runs executing against a closing process.
+        for task in tuple(self._inflight):
+            task.cancel()
+        if self._inflight:
+            await asyncio.gather(*tuple(self._inflight), return_exceptions=True)
+        self._inflight.clear()
 
     async def _run(self) -> None:
         while True:
@@ -153,33 +164,64 @@ class RecipeWorkerLoop:
             await asyncio.sleep(self._poll_interval_seconds)
 
     async def tick(self) -> None:
+        """Reclaim, then claim up to remaining capacity. Does not wait for work.
+
+        **The claim loop must not be blocked by the work it claimed.** It used to
+        `await asyncio.gather(...)` over the whole batch, which made every tick a
+        barrier: `_run` could not come round again until the slowest run in the
+        batch finished. `max_concurrent` limited parallelism *inside* a tick and
+        did nothing across them, so a worker that claimed one long run claimed
+        nothing else for that run's entire duration.
+
+        A build is up to 15 agent steps, and a run parked for a person waits up
+        to `assist_timeout_s` -- 1800s by default. One of those is enough to stop
+        a worker picking up anything at all, which is how a queued build sat
+        untouched while two workers idled inside a park.
+
+        Capacity is now enforced where the work is taken on rather than after:
+        only as many runs are claimed as there are free slots, so a row is left
+        `queued` for another worker instead of being locked by one that has no
+        room for it.
+        """
+
         await self._store.reclaim_stale_runs(self._stale_after_seconds)
         # A live worker resumes its own park on time. A row still parked well
         # past its deadline means the process holding it died -- and with it the
         # browser session the park existed to keep open, so there is nothing to
         # resume into.
         await self._store.reclaim_expired_parks()
-        claimed = await self._store.claim_runs_batch(self._batch_size)
-        if not claimed:
-            return
-        semaphore = asyncio.Semaphore(self._max_concurrent)
-        await asyncio.gather(*(self._process(run, semaphore) for run in claimed))
 
-    async def _process(self, run: ClaimedRecipeRun, semaphore: asyncio.Semaphore) -> None:
-        async with semaphore:
-            # Keep this run's lease fresh for its whole (potentially long)
-            # duration so `reclaim_stale_runs` can't hand it to a second worker
-            # -- a build is up to 15 agent steps, well past `stale_after`.
-            heartbeat = asyncio.create_task(self._heartbeat(run))
-            try:
-                await self._process_run(run)
-            except Exception as exc:
-                log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
-                await self._store.fail_run(run.run_id, run.lock, str(exc))
-            finally:
-                heartbeat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat
+        free = self._max_concurrent - len(self._inflight)
+        if free <= 0:
+            return
+        claimed = await self._store.claim_runs_batch(min(self._batch_size, free))
+        for run in claimed:
+            task = asyncio.create_task(self._process(run))
+            self._inflight.add(task)
+            # Discard on completion, so capacity is released the moment a run
+            # ends rather than at the next tick.
+            task.add_done_callback(self._inflight.discard)
+
+    async def drain(self) -> None:
+        """Wait for everything in flight. For tests and shutdown, not the loop."""
+
+        while self._inflight:
+            await asyncio.gather(*tuple(self._inflight), return_exceptions=True)
+
+    async def _process(self, run: ClaimedRecipeRun) -> None:
+        # Keep this run's lease fresh for its whole (potentially long) duration
+        # so `reclaim_stale_runs` can't hand it to a second worker -- a build is
+        # up to 15 agent steps, well past `stale_after`.
+        heartbeat = asyncio.create_task(self._heartbeat(run))
+        try:
+            await self._process_run(run)
+        except Exception as exc:
+            log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
+            await self._store.fail_run(run.run_id, run.lock, str(exc))
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
 
     async def _heartbeat(self, run: ClaimedRecipeRun) -> None:
         interval = max(self._stale_after_seconds / 3.0, 1.0)
@@ -482,6 +524,34 @@ class RecipeWorkerLoop:
         # that repair could not fix, now goes to a person -- on the page the run
         # is still sitting on. See `assist.py` for why the session staying open
         # is the whole point.
+        # Everything the build proposed and every reason one was turned down,
+        # saved before the assist park rather than after: a run that nobody
+        # answers, or that dies in the park, is exactly the one whose reasoning
+        # somebody will want to read.
+        await self._store.save_artifact(
+            run.run_id, run.tenant, "trace", outcome.trace.to_dict()
+        )
+        if cfg.trace_prompts:
+            # Large, and they carry page content, so they are opt-in. Between
+            # them they answer the thing the attempts cannot: whether the model
+            # was asked the right question at all. A build whose accordion never
+            # yielded a table looks identical either way until you can see
+            # whether the section was in what the model was shown.
+            if outcome.page_json_outline:
+                await self._store.save_artifact(
+                    run.run_id, run.tenant, "outline",
+                    {"page_json": outcome.page_json_outline},
+                )
+            for exchange in outcome.trace.exchanges:
+                await self._store.save_artifact(
+                    run.run_id, run.tenant, "prompt", exchange.to_dict(),
+                    field=", ".join(exchange.fields) or None,
+                )
+
+        # Anything the agent could not find, and anything the judge rejected
+        # that repair could not fix, now goes to a person -- on the page the run
+        # is still sitting on. See `assist.py` for why the session staying open
+        # is the whole point.
         asks = build_asks(
             outcome.unresolved,
             review.unrepaired,
@@ -489,7 +559,50 @@ class RecipeWorkerLoop:
             # not contain needs a decision, not another search.
             absent=review.absent,
             step_trace=review.step_trace,
+            # What was tried for each field, so the panel can show it. An ask
+            # that says "here is what I tried and why each attempt failed" is a
+            # different question to be handed than "find this".
+            tried={
+                name: outcome.trace.explain(name)
+                for name in {
+                    *outcome.unresolved, *review.unrepaired, *review.absent,
+                }
+                if outcome.trace.explain(name)
+            },
         )
+
+        # A person may want to look even when nothing is unresolved, and that is
+        # the case that used to be impossible: a build that bound every field
+        # -- correctly or not -- finished and saved without ever offering. On a
+        # page whose own JSON carries a sponsored competitor under the same key
+        # names, every field resolves and one of them is the wrong product;
+        # nothing mechanical catches it.
+        #
+        # `params` is re-read rather than using the copy taken at the top,
+        # because `request_assist` writes it *while this build is running*.
+        if await self._assist_wanted(run) and not asks:
+            asks = build_asks(
+                {},
+                # `rejected` rather than `unresolved`: these bound to something,
+                # and the question is whether it is the right something -- which
+                # is what a `rejected` ask puts to a person.
+                {
+                    name: "bound -- check it is the right value before this is saved"
+                    for group in recipe.field_groups
+                    for name in group.bindings
+                },
+                step_trace=review.step_trace,
+                tried={
+                    name: outcome.trace.explain(name)
+                    for group in recipe.field_groups
+                    for name in group.bindings
+                    if outcome.trace.explain(name)
+                },
+            )
+            log.info(
+                "recipe_worker_loop.assist_on_request",
+                run_id=run.run_id, fields=[a.field for a in asks],
+            )
         if asks and cfg.assist_timeout_s > 0:
             recipe, unsettled = await self._await_assist(
                 run, recipe, asks, session=session, url=url,
@@ -567,6 +680,24 @@ class RecipeWorkerLoop:
             },
         )
 
+    async def _assist_wanted(self, run: ClaimedRecipeRun) -> bool:
+        """Whether this build should stop for a person even with nothing to ask.
+
+        Two ways to say so, and they are the same intent at different times:
+        `mode: "assisted"` decided before the build started, and
+        `POST .../assist/request` decided while it was running. The run row is
+        re-read for the second -- the `params` captured when the run was claimed
+        predate the request by minutes.
+        """
+
+        if (run.params or {}).get("mode") == "assisted":
+            return True
+        try:
+            current = await self._store.get_run(run.run_id, run.tenant)
+        except Exception:  # noqa: BLE001 - a failed read is not a reason to park
+            return False
+        return bool((current.params or {}).get("assist_requested")) if current else False
+
     async def _await_assist(
         self,
         run: ClaimedRecipeRun,
@@ -614,7 +745,27 @@ class RecipeWorkerLoop:
         )
 
         raw: list[dict[str, Any]] | None = None
-        while datetime.now(UTC) < deadline:
+        while True:
+            # The deadline is re-read rather than held, because the studio pushes
+            # it out through `touch_park` while somebody has the panel open.
+            # Holding the value computed at park time is what dropped a person
+            # halfway through recording a route: answering an ask properly takes
+            # a reload, a recording, a pick and a look at what it read.
+            current = await self._store.get_run(run.run_id, run.tenant)
+            if current is None:
+                # The row is gone -- cancelled, or the history was cleared out
+                # from under this worker. Nobody can answer a run that does not
+                # exist, so waiting out the remaining park is pure cost: it
+                # holds a warm identity, a browser, a proxy pin and -- because
+                # `tick` does not return until everything it claimed finishes --
+                # this worker's entire claiming loop. Measured after a `TRUNCATE`
+                # of the run tables: two workers sat on deleted rows for the full
+                # 1800s and no queued build was picked up by anyone.
+                log.info("recipe_worker_loop.park_vanished", run_id=run.run_id)
+                return recipe, {a.field: a.reason for a in asks}
+            until = current.parked_until or deadline
+            if datetime.now(UTC) >= until:
+                break
             await asyncio.sleep(self._assist_poll_seconds)
             raw = await self._store.poll_assist(run.run_id, run.lock)
             if raw is not None:
@@ -726,6 +877,17 @@ class RecipeWorkerLoop:
                 "truncated": result.truncated,
                 "outcome": result.outcome,
                 "step_trace": [s.to_dict() for s in result.step_trace],
+                # Which selector actually produced each value, and what the
+                # candidates ahead of it did. `replay` has always computed this
+                # -- it is the drift signal the operational model turns on --
+                # and it was dropped on the floor here, so a run that collected
+                # the wrong value could not be asked which selector collected
+                # it.
+                "provenance": result.provenance,
+                "assertions": {
+                    name: [c.to_dict() for c in checks]
+                    for name, checks in result.assertions.items()
+                },
             },
             error=result.error,
         )
@@ -797,6 +959,16 @@ class RecipeWorkerLoop:
                 "truncated": result.truncated,
                 "outcome": result.outcome,
                 "step_trace": [s.to_dict() for s in result.step_trace],
+                # Same reason as `_process_replay`: a job run is the one most
+                # likely to be looked at when a value comes back wrong, because
+                # it ran against a URL the caller chose rather than the one the
+                # recipe was built on. Which selector won, out of how many, is
+                # the first question.
+                "provenance": result.provenance,
+                "assertions": {
+                    name: [c.to_dict() for c in checks]
+                    for name, checks in result.assertions.items()
+                },
             },
             error=result.error,
         )

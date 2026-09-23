@@ -8,7 +8,7 @@ import { LiveViewPanel } from '@/components/app/LiveViewPanel'
 import { PickerControls } from '@/components/app/wizard/PickerControls'
 import { usePagePicker } from '@/hooks/usePagePicker'
 import { useSessionsList } from '@/hooks/useSessionsList'
-import { useSubmitAssist } from '@/hooks/useRecipes'
+import { useAssistHeartbeat, useSubmitAssist } from '@/hooks/useRecipes'
 import { useToast } from '@/components/ui/toast'
 import { StepRecorder } from './StepRecorder'
 import { detailPickToDraft, scopeFromPick } from '@/lib/recipe/fromPick'
@@ -38,6 +38,11 @@ export function AssistPanel({
 }) {
   const { toast } = useToast()
   const submit = useSubmitAssist(recipeId, runId)
+  // Answering an ask properly is a reload, a recording, a pick and a look at
+  // what it read. The park has to be bounded -- it holds a worker slot, a warm
+  // identity, a browser and a proxy pin -- so this says somebody is still here,
+  // rather than the ceiling being the budget for doing the work.
+  useAssistHeartbeat(recipeId, runId, asks.length > 0)
   const [answers, setAnswers] = useState<Record<string, RecipeResolution>>({})
   // What a scope pick actually selected, so the person can see they hit the
   // heading before they submit rather than after the run comes back with it.
@@ -60,23 +65,34 @@ export function AssistPanel({
   const picker = usePagePicker(active)
 
   /**
-   * Everything to send: what was picked/described/skipped, plus a `steps`
-   * answer for each field with a recording that nothing else has answered.
+   * Everything to send: what was picked/described/skipped, with each field's
+   * recording folded into it.
    *
    * Assembled here rather than as the recording happens, so a recording in
    * progress does not count as a finished answer and collapse the row it is
-   * being made in. An explicit pick wins: choosing one after recording is a
-   * correction, not an addition.
+   * being made in.
+   *
+   * **A recording and a pick are one answer, not two.** They used to compete --
+   * an explicit pick discarded the route recorded beside it -- and that made
+   * the case they are both for unanswerable. A specifications accordion needs
+   * "open this, then read that": the pick alone binds against a section replay
+   * loads shut, and the route alone throws away the region the person went to
+   * the trouble of pointing at. `apply_resolutions` runs the steps first and
+   * then binds, so both halves travel together.
+   *
+   * `describe` and `skip` take no route: one is handed to the model as words,
+   * the other removes the field.
    */
   const resolutions = useMemo(() => {
     const out = { ...answers }
     for (const [field, steps] of Object.entries(recorded)) {
-      if (steps.length && !out[field]) {
-        out[field] = {
-          field,
-          action: 'steps',
-          steps: steps as unknown as Array<Record<string, unknown>>,
-        }
+      if (!steps.length) continue
+      const recording = steps as unknown as Array<Record<string, unknown>>
+      const answer = out[field]
+      if (!answer) {
+        out[field] = { field, action: 'steps', steps: recording }
+      } else if (answer.action === 'pick' || answer.action === 'scope') {
+        out[field] = { ...answer, steps: recording }
       }
     }
     return out
@@ -338,6 +354,19 @@ function AskRow({
           {failedSteps.length === 1 ? 'A step' : `${failedSteps.length} steps`} before this field
           did not run &mdash; it may be hidden rather than missing.
         </p>
+      )}
+
+      {ask.tried && (
+        // What has already been ruled out, straight from the verifier. `reason`
+        // says what is wrong now; this says what was tried, which is the
+        // difference between being asked "find this" and being shown that the
+        // last attempt read the section heading.
+        <details className="rounded bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer select-none">What was already tried</summary>
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10px]">
+            {ask.tried}
+          </pre>
+        </details>
       )}
 
       {answer ? (

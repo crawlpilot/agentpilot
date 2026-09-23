@@ -29,6 +29,7 @@ ranking and retry logic can be tested exhaustively without a browser.
 from __future__ import annotations
 
 import json as _json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
@@ -37,8 +38,20 @@ from typing import Any
 import structlog
 
 from agentpilot.llm.client import LLMConfig, chat_json_conversation
+from agentpilot.recipe.v2.build_trace import BuildTrace, record
+from agentpilot.recipe.v2.json_index import (
+    confident_value_arrays,
+    find_value_arrays,
+    outline,
+)
+from agentpilot.recipe.v2.locator_lint import (
+    partial_case_fold_reason,
+    relativize_xpath,
+    xpath_escape_reason,
+)
 from agentpilot.recipe.v2.models import Candidate, Locator
 from agentpilot.recipe.v2.schema import FieldSpec, render_fields_for_prompt
+from agentpilot.recipe.v2.selector_quality import filter_by_grade, selector_grade
 from agentpilot.recipe.v2.transform import Transform, TransformContext, parse_transforms
 
 log = structlog.get_logger(__name__)
@@ -60,7 +73,14 @@ _FALLBACK_PRIORITY = 90
 # How much of the structured-data blob to show the model. Walmart's
 # __NEXT_DATA__ is 352 KB; the whole thing would crowd out the snapshot and
 # most of it is ad and telemetry payload.
-_MAX_STRUCTURED_CHARS = 12_000
+#
+# This budget buys an OUTLINE (`json_index.outline`), not a prefix of the raw
+# dump. A prefix of 12 000 chars was 3.4% of that blob, cut mid-structure, and
+# on the page this was measured against it did not reach `idml` at all -- so the
+# model was asked to write an anchored path into data it had never seen. An
+# outline of the same page fits every path that matters, which is why the budget
+# is worth raising rather than the cap being the problem.
+_MAX_STRUCTURED_CHARS = 16_000
 _MAX_SNAPSHOT_CHARS = 24_000
 
 MAX_CANDIDATES_PER_FIELD = 4
@@ -95,6 +115,18 @@ selecting a cell by its sibling's text, e.g. \
 `//tr[th[normalize-space()='Item Weight']]/td`. Specification tables are \
 usually shaped this way.
 
+XPATH MUST STAY INSIDE THE THING IT NAMES, for the same reason paths must be \
+anchored. NEVER use `following::`, `preceding::`, `ancestor::` or \
+`ancestor-or-self::`: those walk the whole document in order, so an expression \
+aimed at one section collects the site header and the navigation menu along \
+with it. `following-sibling::` and `preceding-sibling::` are fine -- they are \
+bounded by the parent element.
+When you match on text, fold the WHOLE alphabet: \
+`translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')`. A \
+short form like `translate(text(),'CARE','care')` lower-cases only those \
+letters and then matches any word containing them. Prefer \
+`normalize-space()` against the exact label when you know it.
+
 Many pages have NO structured data at all. When the JSON blob below is empty or \
 does not contain a field's value, go straight to css/xpath -- do not invent a \
 path that is not there.
@@ -106,12 +138,25 @@ unanchored path can silently return a competitor's data.
 Set `path_lang` to "jmespath" only when you need a filter or projection that \
 plain dotted traversal cannot express, e.g. \
 `specifications[?name=='Scent'].value | [0]`; otherwise leave it "simple".
+A LIST field whose values are one key of an array of objects is a projection: \
+`productHighlights[*].value` with `path_lang` "jmespath". Dotted traversal \
+cannot say that, and reading the array itself would hand back the objects \
+rather than the strings that were asked for.
 
 For a css/xpath locator set `attribute` to what you want to read: "text" \
 (default) reads textContent and DOES see collapsed/hidden content, so prefer it \
 for accordion bodies that are present but not expanded; or name a real DOM \
 attribute such as "href", "src", "content", "value".
-Set `all` to true when the field is a list and the selector matches every item.
+Set `all` to true when the field is a list and the selector matches every item. \
+A list field bound to a selector without `all` returns ONE value where an array \
+was asked for, so point the selector at the items themselves rather than at the \
+container that holds them.
+
+Prefer a selector that names what the element IS over one that describes where \
+it sits. A long chain of class names, or a positional path like \
+`//*[@id="main"]/div[1]/div[1]/div[2]`, reads the right value today and then \
+silently reads a different element the moment anything is inserted above it -- \
+it does not fail, it returns the wrong thing.
 
 If a field's value is genuinely not on this page, OMIT it entirely. Do not \
 guess: a candidate that never resolves costs a page interaction on every run \
@@ -158,6 +203,36 @@ _JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+def _value_array_hints(
+    fields: dict[str, FieldSpec], structured_data: dict[str, Any]
+) -> str:
+    """Arrays in the page's JSON that may be a `list` field's values.
+
+    The counterpart of the `find_row_arrays` block in `rows.build_user_message`,
+    and it exists for the same reason: the projection a list field needs --
+    `productHighlights[*].value` -- is not something a model writes for an array
+    it is not certain is there. The outline above shows the array; this says
+    which field it might answer, and in the exact form a locator takes.
+
+    Everything is shown, including the low-affinity guesses that
+    `confident_value_arrays` refuses to bind on its own. Here the model has the
+    page snapshot beside it and can tell whether the site's word for the array
+    means what the caller's word means.
+    """
+
+    lines: list[str] = []
+    for name, spec in fields.items():
+        if spec.type.kind != "list":
+            continue
+        for candidate in find_value_arrays(structured_data, spec, name)[:3]:
+            lines.append(
+                f"- {name}: kind={candidate.kind} path={candidate.path!r} "
+                f"path_lang={candidate.path_lang!r} "
+                f"first values: {_json.dumps(candidate.sample, ensure_ascii=False)[:200]}"
+            )
+    return "\n".join(lines)
+
+
 def build_user_message(
     fields: dict[str, FieldSpec],
     *,
@@ -165,15 +240,24 @@ def build_user_message(
     structured_data: dict[str, Any],
     failures: dict[str, str] | None = None,
 ) -> str:
-    blob = _json.dumps(structured_data, ensure_ascii=False)
-    truncated = len(blob) > _MAX_STRUCTURED_CHARS
     parts = [
         f"Fields to locate:\n{render_fields_for_prompt(fields)}",
         f"\nPage snapshot:\n{snapshot_text[:_MAX_SNAPSHOT_CHARS]}",
-        "\nParsed structured data (json_ld / hydration / metadata)"
-        + (" -- TRUNCATED, deeper keys may exist" if truncated else "")
-        + f":\n{blob[:_MAX_STRUCTURED_CHARS]}",
+        "\nPaths available in this page's structured data (json_ld / hydration / "
+        "metadata). Each path is written the way a locator takes it, and is "
+        "anchored -- use one of these rather than composing your own:\n"
+        + outline(structured_data, wanted=fields, max_chars=_MAX_STRUCTURED_CHARS),
     ]
+    hints = _value_array_hints(fields, structured_data)
+    if hints:
+        parts.append(
+            "\nArrays already in this page's JSON that may be these list fields. "
+            "If one is right, use its path and path_lang verbatim -- it costs no "
+            "clicks and survives a redesign. Where two readings of the SAME array "
+            "are offered, they are the two halves of one record: pick whichever "
+            "the field's description actually asks for, judging by the sample "
+            f"values:\n{hints}"
+        )
     if not structured_data or not any(structured_data.values()):
         parts.append(
             "\nNOTE: this page publishes no usable structured data. Use css/xpath."
@@ -197,6 +281,19 @@ def _parse_locator(item: dict[str, Any]) -> Locator | None:
         return None
     if kind == "ax_role" and not item.get("role"):
         return None
+    if kind == "xpath":
+        # Dropped here as well as at verification, so a candidate that cannot be
+        # contained never reaches the page at all. `paths.py` refuses recursive
+        # descent for the JSON dialects for the same reason and with the same
+        # measured consequence -- an expression that wanders picks up a
+        # competitor's data, or a site header, and reports it as the answer.
+        selector = str(item.get("selector") or "")
+        if xpath_escape_reason(selector, scoped=bool(item.get("within"))) is not None:
+            log.info("selector_agent.xpath_escapes_scope", selector=selector)
+            return None
+        fold = partial_case_fold_reason(selector)
+        if fold is not None:
+            log.info("selector_agent.partial_case_fold", selector=selector, note=fold)
     return Locator(
         kind=kind,
         selector=item.get("selector"),
@@ -240,6 +337,7 @@ async def propose_locators(
     structured_data: dict[str, Any],
     llm_config: LLMConfig,
     failures: dict[str, str] | None = None,
+    trace: BuildTrace | None = None,
 ) -> dict[str, list[Locator]]:
     from agentpilot.agent.reliability import RetryStrategy
 
@@ -259,6 +357,8 @@ async def propose_locators(
             json_schema=_JSON_SCHEMA,
         )
     )
+    if trace is not None:
+        trace.exchanged("propose", sorted(fields), user, raw)
     return parse_proposals(raw, fields)
 
 
@@ -298,6 +398,52 @@ answer says so.\
 """
 
 
+# Markup that is never the value and is routinely most of the bytes.
+_DEAD_MARKUP = re.compile(
+    r"<!--.*?-->|<(script|style|svg|noscript|template|iframe|canvas)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+# Attributes worth keeping: the ones a selector can be built out of, plus the
+# few that carry a value. Everything else on a React page is generated.
+_KEEP_ATTR = re.compile(
+    r"\s(?:id|class|role|itemprop|itemtype|href|src|alt|title|value|content|type|name"
+    r"|colspan|rowspan|(?:data|aria)-[\w:.-]+)\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+)",
+    re.IGNORECASE,
+)
+_OPEN_TAG = re.compile(r"<([a-zA-Z][\w:-]*)((?:\s[^<>]*)?)/?>")
+_WHITESPACE = re.compile(r"[ \t\r\n]+")
+
+
+def prune_fragment(html: str, *, limit: int = _MAX_FRAGMENT_CHARS) -> str:
+    """A picked region's markup with the parts that are never the answer removed.
+
+    A real specifications section on a React page is mostly inline styles and
+    generated class names, so a raw 20 000-character slice of `outerHTML`
+    routinely cuts off mid-table -- the person pointed at the right region and
+    the model was shown the first third of it.
+
+    Best-effort and regex-based on purpose. This shapes a prompt; it is not a
+    correctness gate, and every proposal made from it is still verified against
+    the live page by `verify_locators`. The picker prunes in the page before
+    sending, where a real DOM is available -- this is the guard for markup that
+    arrives from anywhere else, and for a client that has not been updated.
+    """
+
+    if not html:
+        return ""
+    text = _DEAD_MARKUP.sub("", html)
+
+    def strip_attrs(match: re.Match[str]) -> str:
+        tag, attrs = match.group(1), match.group(2)
+        if not attrs.strip():
+            return match.group(0)
+        kept = "".join(m.group(0) for m in _KEEP_ATTR.finditer(attrs))
+        return f"<{tag}{kept}>"
+
+    text = _OPEN_TAG.sub(strip_attrs, text)
+    return _WHITESPACE.sub(" ", text).strip()[:limit]
+
+
 async def propose_within(
     fields: dict[str, FieldSpec],
     *,
@@ -307,6 +453,8 @@ async def propose_within(
     verify: Verifier,
     verified_on: int = 1,
     page_url: str = "",
+    trace: BuildTrace | None = None,
+    probe: ScopeProbe | None = None,
 ) -> dict[str, list[Candidate]]:
     """Locate fields inside a region a person pointed at.
 
@@ -333,7 +481,7 @@ async def propose_within(
     ctx = TransformContext(url=page_url)
     user = (
         f"Fields to find in this region:\n{render_fields_for_prompt(fields)}\n\n"
-        f"Region HTML:\n{fragment_html[:_MAX_FRAGMENT_CHARS]}"
+        f"Region HTML:\n{prune_fragment(fragment_html)}"
     )
     raw = await RetryStrategy().execute(
         lambda: chat_json_conversation(
@@ -345,6 +493,8 @@ async def propose_within(
             json_schema=_JSON_SCHEMA,
         )
     )
+    if trace is not None:
+        trace.exchanged("within", sorted(fields), user, raw)
 
     verified: dict[str, list[Candidate]] = {}
     for name, locators in parse_proposals(raw, fields).items():
@@ -357,7 +507,8 @@ async def propose_within(
         # unchecked would swap a known gap for a silent one.
         spec = fields[name]
         resolving, _reason = await verify_locators(
-            scoped, verify=verify, spec=spec, ctx=ctx
+            scoped, verify=verify, spec=spec, ctx=ctx, trace=trace,
+            stage="within", probe=probe,
         )
         if not resolving:
             continue
@@ -374,6 +525,40 @@ def _to_candidates(
     verification, not one inferred again afterwards -- otherwise the recipe
     could ship a pipeline nothing ever tested.
     """
+
+    # Brittle candidates lose to good ones and beat nothing at all.
+    #
+    # A Zara build verified four selectors for one field, two of which were a
+    # six-level class chain and `//*[@id="main"]/div[1]/div[1]/...`. Both read
+    # the right paragraph; neither survives an element being inserted above it,
+    # and the positional one does not even fail when that happens -- it resolves
+    # to whatever now sits at that position and reports it as data. They were
+    # frozen anyway, because verification only ever asked whether a selector
+    # works *now*.
+    #
+    # Comparative, not absolute: a field whose only working selector is brittle
+    # keeps it, since a field with no binding collects nothing on every run.
+    # `filter_by_grade` holds that rule, matching `filterPersistableChain` on
+    # the picker side.
+    # Graded among the DOM candidates only. A `json_ld` path and a css selector
+    # are not competing on brittleness -- they are each other's insurance, and
+    # `needs_dom_fallback` spends a whole extra model call to make sure a
+    # JSON-only field gets a DOM candidate precisely because a renamed hydration
+    # key fails silently and totally. Dropping that candidate for being
+    # inelegant would undo the thing the call was made for.
+    dom = [v for v in verified if v.locator.kind in _DOM_KINDS]
+    kept = set(
+        map(
+            id,
+            filter_by_grade([
+                (selector_grade(v.locator.kind, v.locator.selector), v.locator)
+                for v in dom
+            ]),
+        )
+    )
+    verified = [
+        v for v in verified if v.locator.kind not in _DOM_KINDS or id(v.locator) in kept
+    ]
 
     by_locator = {id(v.locator): v for v in verified}
     out: list[Candidate] = []
@@ -543,12 +728,89 @@ def pipeline_for(spec: FieldSpec, locator: Locator) -> list[Transform]:
     return infer_transform(spec, locator) or []
 
 
+# A read that also says where the matches live. Injected like `Verifier`, and
+# for the same reason: the scoping rules below decide what a build accepts, and
+# deciding that should be testable without a browser.
+ScopeProbe = Callable[[Locator], Awaitable[tuple[Any, dict[str, Any] | None]]]
+
+
+def scope_problem(scope: dict[str, Any] | None, *, expects_many: bool) -> str | None:
+    """Why a locator's matches are not all one thing, or None.
+
+    The list-shaped counterpart of `rows._problems_with`, and the same kind of
+    check: a question about *shape*, which a plausible-but-wrong answer cannot
+    fake. A table is caught by rows that do not vary; a list is caught by
+    matches that do not share a container.
+
+    Measured on the build this exists for -- Zara's `care` bound to an xpath
+    using the `following::` axis. Its ten matches were "Bag0", "LOG IN", "Help",
+    two nav blocks and the five real washing instructions. Every one of them is
+    a legitimate match for the expression. The only thing separating the answer
+    from the noise is that the noise lives in the page header, so the nearest
+    ancestor of the whole set is `<body>`.
+
+    Only for a field that expects many values. A scalar matching one element has
+    a common ancestor of *itself*, which says nothing at all.
+    """
+
+    if scope is None or not expects_many:
+        return None
+    if not scope.get("spans_document"):
+        return None
+    matched = scope.get("matched") or 0
+    return (
+        f"the {matched} matches are spread across the whole page -- their nearest "
+        f"common ancestor is <{scope.get('tag') or 'body'}>, so this is picking up "
+        "site chrome and navigation alongside the values. Scope it to the section "
+        "the values actually live in"
+    )
+
+
+def scoped_variant(locator: Locator, scope: dict[str, Any] | None) -> Locator | None:
+    """The same locator confined to where its matches live, or None.
+
+    None when there is nothing to gain or the move would be unsafe:
+
+    - the locator is already scoped -- the author said where to look;
+    - the scope spans the document -- `scope_problem` has already refused it;
+    - the page offered no stable selector for the container;
+    - **a single match**, where the "common ancestor" is the element itself.
+      Scoping an element to itself makes the read resolve `containers[0]` and
+      then look for the element *inside* it, which finds nothing. The guard is
+      not theoretical: every scalar field takes this path.
+    """
+
+    if locator.within is not None or scope is None:
+        return None
+    if scope.get("spans_document") or (scope.get("matched") or 0) < 2:
+        return None
+    selector = scope.get("selector")
+    if not selector:
+        return None
+
+    inner = locator.selector or ""
+    if locator.kind == "xpath":
+        # An absolute expression ignores the context node, so scoping it would
+        # record a `within` that changes nothing -- the sharp edge the module
+        # docstring of `evaluate.py` warns about.
+        relative = relativize_xpath(inner)
+        if relative is None and inner.startswith("/"):
+            return None
+        inner = relative or inner
+    return replace(
+        locator, selector=inner, within=Locator(kind="css", selector=str(selector))
+    )
+
+
 async def verify_locators(
     locators: list[Locator],
     *,
     verify: Verifier,
     spec: FieldSpec | None = None,
     ctx: TransformContext | None = None,
+    trace: BuildTrace | None = None,
+    stage: str = "propose",
+    probe: ScopeProbe | None = None,
 ) -> tuple[list[VerifiedLocator], str | None]:
     """Keep the locators that produce a usable value right now.
 
@@ -567,6 +829,17 @@ async def verify_locators(
 
     Without `spec` the old raw-only behaviour is kept, for callers that have no
     field to transform against.
+
+    `trace`, when given, records every attempt and the reason it was turned
+    down. The reasons below are written to be read by a person and were going to
+    a worker's stdout; this is where they become part of the run's record. See
+    `build_trace`.
+
+    `probe`, when given, also asks the page where each DOM locator's matches
+    live. That answers two questions at once -- whether they belong to one thing
+    at all (`scope_problem`) and, if so, which container to confine the locator
+    to (`scoped_variant`). Without it the old behaviour is kept exactly, which
+    is what lets every browser-free test here stay as it was.
     """
 
     from agentpilot.recipe.v2.resolve import evaluate_assertions, is_empty
@@ -575,14 +848,74 @@ async def verify_locators(
     context = ctx or TransformContext()
     resolving: list[VerifiedLocator] = []
     last_error: str | None = None
+    name = spec.name if spec is not None else ""
+    # A field that expects many values is the one a document-wide match can
+    # masquerade as. A scalar reading one element says nothing about scope, and
+    # the arity guard below is what catches a scalar matching a whole set.
+    expects_many = bool(
+        spec is not None and (spec.type.kind == "list" or spec.type.is_rows)
+    )
+
+    def rejected(loc: Locator, reason: str, raw: Any = None, pipeline: Any = None) -> str:
+        record(
+            trace, name, stage, "rejected",
+            locator=loc, read=raw, transform=pipeline, reason=reason,
+        )
+        return reason
+
+    async def read(loc: Locator) -> tuple[Any, dict[str, Any] | None]:
+        if probe is not None and loc.kind in ("css", "xpath"):
+            return await probe(loc)
+        return await verify(loc), None
 
     for loc in locators:
+        # Refused before it is even run. An expression on one of these axes
+        # cannot be contained by any scope, so there is no version of it worth
+        # verifying -- see `locator_lint`.
+        if loc.kind == "xpath":
+            escape = xpath_escape_reason(
+                loc.selector or "", scoped=loc.within is not None
+            )
+            if escape is not None:
+                last_error = rejected(loc, escape)
+                continue
+
         try:
-            raw = await verify(loc)
+            raw, scope = await read(loc)
         except Exception as exc:  # noqa: BLE001 - a bad selector is data, not a crash
-            last_error = f"{loc.kind} locator raised: {exc}"
+            last_error = rejected(loc, f"{loc.kind} locator raised: {exc}")
             continue
+
+        problem = scope_problem(scope, expects_many=expects_many)
+        if problem is not None:
+            last_error = rejected(loc, problem, raw=raw)
+            continue
+
+        # Confine it to the container its own matches share. Re-read through the
+        # scoped form and keep it only if it still produces the same value: the
+        # scope selector resolves to `containers[0]`, and on a page carrying two
+        # same-shaped sections that need not be the one measured.
+        narrowed = scoped_variant(loc, scope)
+        if narrowed is not None:
+            try:
+                rescoped, _ = await read(narrowed)
+            except Exception:  # noqa: BLE001 - fall back to the unscoped locator
+                rescoped = None
+            if rescoped == raw:
+                loc = narrowed
+            else:
+                log.info(
+                    "selector_agent.scope_rejected",
+                    field=name, selector=loc.selector,
+                    within=narrowed.within.selector if narrowed.within else None,
+                )
+
         if is_empty(raw):
+            # Not `last_error`: an empty read is the ordinary "not on this page"
+            # and says nothing a model could act on. It is still traced, because
+            # "every candidate read nothing" and "one read the wrong thing" are
+            # different diagnoses and only the trace can tell them apart.
+            record(trace, name, stage, "rejected", locator=loc, reason="read nothing")
             continue
 
         if spec is None:
@@ -599,9 +932,27 @@ async def verify_locators(
             # `rows.py`. The guard is here rather than only there because the
             # same function verifies what a *person* picks in the assist panel,
             # where pointing at a container is just as easy to do by accident.
-            last_error = (
+            last_error = rejected(
+                loc,
                 f"reads {len(raw)} values but this field is one value -- the "
-                "selector is matching a whole set rather than a single element"
+                "selector is matching a whole set rather than a single element",
+                raw=raw,
+            )
+            continue
+
+        if spec.type.kind == "list" and not isinstance(raw, list):
+            # The mirror of the guard above, and it was missing. A Zara build
+            # bound `highlights` -- declared a list -- to a selector with no
+            # `all`, so the field came back as one string and the recipe
+            # promised an array it never produced. The guard is worth as much in
+            # this direction: both are the model answering a different question
+            # from the one the schema asked.
+            last_error = rejected(
+                loc,
+                f"reads one value ({_show(raw)}) but this field is a list -- set "
+                '`all` to true so the selector returns every match, or point it '
+                "at the elements rather than their container",
+                raw=raw,
             )
             continue
 
@@ -609,10 +960,16 @@ async def verify_locators(
         try:
             value = apply_transforms(raw, pipeline, context) if pipeline else raw
         except TransformError as exc:
-            last_error = f"read {_show(raw)} but the cleanup failed: {exc}"
+            last_error = rejected(
+                loc, f"read {_show(raw)} but the cleanup failed: {exc}",
+                raw=raw, pipeline=pipeline,
+            )
             continue
         if is_empty(value):
-            last_error = f"read {_show(raw)} but cleaning it up left nothing"
+            last_error = rejected(
+                loc, f"read {_show(raw)} but cleaning it up left nothing",
+                raw=raw, pipeline=pipeline,
+            )
             continue
 
         # Checked, not enforced. See `VerifiedLocator.notes`.
@@ -621,6 +978,11 @@ async def verify_locators(
             for r in evaluate_assertions(value, spec.assertions)
             if not r.passed
         ]
+        record(
+            trace, name, stage, "bound",
+            locator=loc, read=value, transform=pipeline,
+            reason="; ".join(notes) or None,
+        )
         resolving.append(VerifiedLocator(locator=loc, raw=raw, value=value, notes=notes))
 
     if resolving:
@@ -679,6 +1041,8 @@ async def _add_dom_fallbacks(
     verify: Verifier,
     verified_on: int,
     ctx: TransformContext,
+    trace: BuildTrace | None = None,
+    probe: ScopeProbe | None = None,
 ) -> None:
     """One extra call for the fields that resolved only out of JSON.
 
@@ -701,6 +1065,7 @@ async def _add_dom_fallbacks(
         structured_data=structured_data,
         llm_config=llm_config,
         failures={name: _DOM_FALLBACK_INSTRUCTION for name in wanted},
+        trace=trace,
     )
     for name, locators in proposals.items():
         dom_only = [loc for loc in locators if loc.kind in _DOM_KINDS]
@@ -708,7 +1073,8 @@ async def _add_dom_fallbacks(
             continue
         spec = wanted[name]
         resolving, _reason = await verify_locators(
-            dedupe_locators(dom_only), verify=verify, spec=spec, ctx=ctx
+            dedupe_locators(dom_only), verify=verify, spec=spec, ctx=ctx,
+            trace=trace, stage="dom_fallback", probe=probe,
         )
         if not resolving:
             continue
@@ -867,6 +1233,57 @@ async def _repair_transform(
     return replace(spec, transform=pipeline)
 
 
+async def bind_value_arrays(
+    fields: dict[str, FieldSpec],
+    *,
+    structured_data: dict[str, Any],
+    verify: Verifier,
+    ctx: TransformContext,
+    verified_on: int = 1,
+    trace: BuildTrace | None = None,
+) -> dict[str, list[Candidate]]:
+    """Bind `list` fields straight from the page's own JSON, with no model call.
+
+    The same move `propose_rows` already makes for tables: an array the site
+    itself names the way the caller named the field is not a guess, and it is
+    put through `verify_locators` like everything else, so a coincidental match
+    still cannot get through.
+
+    Only `confident_value_arrays` is offered here -- candidates the site's own
+    naming agrees with. Verification alone is not a sufficient gate for a list
+    field, because "reads a non-empty array" is true of a great many arrays on a
+    page like this one; affinity is what stops a well-shaped array under an
+    unrelated key from binding silently. The rest reach the model as hints,
+    where the snapshot is available to judge them against.
+    """
+
+    bound: dict[str, list[Candidate]] = {}
+    for name, spec in fields.items():
+        if spec.type.kind != "list":
+            continue
+        candidates = confident_value_arrays(structured_data, spec, name)
+        if not candidates:
+            continue
+        locators = [
+            Locator(**c.as_locator_args())  # type: ignore[arg-type]
+            for c in candidates
+        ]
+        resolving, _reason = await verify_locators(
+            locators, verify=verify, spec=spec, ctx=ctx,
+            trace=trace, stage="page_json",
+        )
+        if not resolving:
+            continue
+        bound[name] = _to_candidates(spec, resolving, verified_on=verified_on)
+        log.info(
+            "selector_agent.bound_from_page_json",
+            field=name,
+            kind=resolving[0].locator.kind,
+            path=resolving[0].locator.path,
+        )
+    return bound
+
+
 async def propose_and_verify(
     fields: dict[str, FieldSpec],
     *,
@@ -879,6 +1296,8 @@ async def propose_and_verify(
     dom_fallbacks: bool = True,
     failures: dict[str, str] | None = None,
     page_url: str = "",
+    trace: BuildTrace | None = None,
+    probe: ScopeProbe | None = None,
 ) -> dict[str, list[Candidate]]:
     """Propose -> verify -> (on total failure) retry with the failure fed back,
     then top up any JSON-only field with a DOM fallback.
@@ -903,6 +1322,24 @@ async def propose_and_verify(
     remaining = dict(fields)
     failures = dict(failures) if failures else None
     ctx = TransformContext(url=page_url)
+
+    # The page's own JSON first, and without a model call -- the same order
+    # `propose_rows` uses for tables. A field bound here is dropped from the
+    # prompt entirely, which also leaves more of the budget for the ones that
+    # actually need looking at.
+    for name, candidates in (
+        await bind_value_arrays(
+            remaining,
+            structured_data=structured_data,
+            verify=verify,
+            ctx=ctx,
+            verified_on=verified_on,
+            trace=trace,
+        )
+    ).items():
+        verified[name] = candidates
+        del remaining[name]
+
     # One transform repair per field. If a pipeline proposed with the value in
     # hand still does not work, another guess will not help -- that goes to a
     # person, who can see the raw value and decide.
@@ -917,17 +1354,22 @@ async def propose_and_verify(
             structured_data=structured_data,
             llm_config=llm_config,
             failures=failures,
+            trace=trace,
         )
         next_failures: dict[str, str] = {}
         for name in list(remaining):
             locators = proposals.get(name)
             if not locators:
                 next_failures[name] = "model did not propose a locator for this field"
+                record(
+                    trace, name, "propose", "rejected",
+                    reason="the model proposed no locator for this field",
+                )
                 continue
             spec = remaining[name]
             deduped = dedupe_locators(locators)
             resolving, reason = await verify_locators(
-                deduped, verify=verify, spec=spec, ctx=ctx
+                deduped, verify=verify, spec=spec, ctx=ctx, trace=trace, probe=probe
             )
 
             if not resolving and name not in retyped:
@@ -945,7 +1387,8 @@ async def propose_and_verify(
                     spec = repaired
                     remaining[name] = repaired
                     resolving, reason = await verify_locators(
-                        deduped, verify=verify, spec=spec, ctx=ctx
+                        deduped, verify=verify, spec=spec, ctx=ctx,
+                        trace=trace, stage="transform_repair", probe=probe,
                     )
 
             if not resolving:
@@ -967,6 +1410,8 @@ async def propose_and_verify(
             verify=verify,
             verified_on=verified_on,
             ctx=ctx,
+            trace=trace,
+            probe=probe,
         )
 
     return verified

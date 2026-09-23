@@ -17,9 +17,13 @@ from typing import Any
 from agentpilot.recipe.v2 import rows as rows_mod
 from agentpilot.recipe.v2.models import Locator
 from agentpilot.recipe.v2.rows import (
+    _problems_with,
+    find_row_arrays,
+    is_open_map,
     parse_row_proposal,
     propose_rows,
     verify_rows,
+    wanted_columns,
 )
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
 
@@ -230,6 +234,183 @@ async def test_each_cell_is_cleaned_by_its_own_declared_type() -> None:
         {"size": "S", "price": 9550.0},
         {"size": "M", "price": 8200.0},
     ]
+
+
+# --- finding the rows in the page's own JSON ---------------------------------
+
+# The shape a real Walmart page has: three sibling arrays, all
+# `[{name, value}]`, all of which verify. Only one is the specification sheet.
+WALMART_JSON = {
+    "hydration": {
+        "__NEXT_DATA__": {"props": {"pageProps": {"initialData": {"data": {"idml": {
+            "indications": [
+                {"name": "Stop Use Indications", "value": "DISCONTINUE IF RASH"},
+                {"name": "Warnings", "value": "External use only"},
+            ],
+            "specifications": [
+                {"name": "Primary ingredient", "value": "Shea butter"},
+                {"name": "Brand", "value": "Bodycology"},
+            ],
+            "productHighlights": [
+                {"name": "Skin type", "value": "All", "iconURL": None},
+                {"name": "Form", "value": "Cream", "iconURL": None},
+            ],
+        }}}}}},
+    },
+    "json_ld": [],
+    "metadata": {},
+}
+
+
+def test_the_rows_are_found_in_the_pages_json_without_a_model() -> None:
+    """The best possible answer used to be invisible. The blob shown to the
+    model is capped at 12k and Walmart's `__NEXT_DATA__` is 600k, so the spec
+    rows -- keyed exactly as the caller asked -- never appeared in the prompt at
+    all, and the model was left guessing CSS at a page containing no `<table>`
+    and no `<tr>`."""
+
+    got = find_row_arrays(WALMART_JSON, wanted_columns(SPECS), "specifications")
+
+    assert got
+    kind, path, sample = got[0]
+    assert kind == "hydration"
+    assert path.endswith(".specifications")
+    assert sample[0] == {"name": "Primary ingredient", "value": "Shea butter"}
+
+
+def test_the_sites_own_name_for_an_array_breaks_the_tie() -> None:
+    """All three arrays are `[{name, value}]` and all three would verify, so
+    without this the first one found wins -- which is the plausible-but-wrong
+    answer this whole module exists to avoid."""
+
+    for field_name, expected in [
+        ("specifications", ".specifications"),
+        ("product_highlights", ".productHighlights"),
+        ("indications", ".indications"),
+    ]:
+        spec = FieldSpec(
+            name=field_name,
+            type=TypeSpec(kind="table", columns=dict(SPECS.type.columns)),
+        )
+        top = find_row_arrays(WALMART_JSON, wanted_columns(spec), field_name)[0]
+        assert top[1].endswith(expected), f"{field_name} -> {top[1]}"
+
+
+def test_an_array_that_shares_only_one_key_ranks_below_a_real_match() -> None:
+    data = {
+        "hydration": {"d": {
+            "breadCrumbs": [{"name": "Personal Care", "url": "/cp/1"},
+                            {"name": "Body", "url": "/cp/2"}],
+            "specs": [{"name": "Brand", "value": "X"}, {"name": "Form", "value": "Y"}],
+        }},
+        "json_ld": [], "metadata": {},
+    }
+    got = find_row_arrays(data, wanted_columns(SPECS), "specifications")
+    assert got[0][1].endswith(".specs")
+
+
+def test_nothing_row_shaped_in_the_json_finds_nothing() -> None:
+    assert find_row_arrays({"hydration": {"a": {"b": 1}}, "json_ld": [], "metadata": {}},
+                           wanted_columns(SPECS), "specifications") == []
+    assert find_row_arrays(WALMART_JSON, {}, "specifications") == []
+
+
+async def test_a_json_match_is_bound_without_asking_a_model(monkeypatch) -> None:
+    """Deterministic first: an array already keyed the way the caller asked is
+    not a guess. It still goes through `verify_rows`, so a coincidental match
+    cannot get through -- but no model call is spent on it."""
+
+    async def never(*a, **k):
+        raise AssertionError("the model should not have been asked")
+
+    monkeypatch.setattr(rows_mod, "chat_json_conversation", never)
+
+    rows = WALMART_JSON["hydration"]["__NEXT_DATA__"]["props"]["pageProps"][
+        "initialData"]["data"]["idml"]["specifications"]
+
+    binding = await propose_rows(
+        SPECS,
+        snapshot_text="",
+        structured_data=WALMART_JSON,
+        reader=_Reader(json=rows),  # type: ignore[arg-type]
+        llm_config=None,
+    )
+
+    assert binding is not None
+    assert binding.repeat.kind == "json"
+    assert binding.repeat.rows_locator is not None
+    assert binding.repeat.rows_locator.path.endswith(".specifications")
+    assert binding.rows[0] == {"name": "Primary ingredient", "value": "Shea butter"}
+
+
+# --- an open key -> value map ------------------------------------------------
+
+SPEC_MAP = FieldSpec(
+    name="specifications",
+    description="the specification block",
+    type=TypeSpec(kind="object"),
+)
+
+
+def test_an_open_map_is_rows_underneath() -> None:
+    """`contract.py` emits `object` with no properties for "a map whose KEYS
+    come from the page". Asked for as a scalar it can only ever return the
+    block's own heading -- which is precisely what a Walmart build returned.
+    Underneath it is name/value rows, like any other table."""
+
+    assert is_open_map(SPEC_MAP)
+    assert sorted(wanted_columns(SPEC_MAP)) == ["name", "value"]
+
+    # An object whose keys the CALLER named is a different thing: each is its
+    # own field, not a row.
+    declared = FieldSpec(
+        name="dims",
+        type=TypeSpec(kind="object", properties={"w": TypeSpec(), "h": TypeSpec()}),
+    )
+    assert not is_open_map(declared)
+
+
+async def test_a_map_is_bound_as_rows_carrying_to_object() -> None:
+    """The pairing that has existed on both sides and never been connected:
+    `_replay_repeat` applies a repeat field's transform over its rows, and
+    `to_object` collapses `[{name, value}, ...]` into `{name: value}`. Nothing
+    at build time emitted it, so a map could not be produced at all."""
+
+    binding, reason = await verify_rows(
+        SPEC_MAP,
+        "dom_rows",
+        Locator(kind="css", selector="tr"),
+        _cols(name="th", value="td"),
+        reader=_Reader(rows=REAL_ROWS),  # type: ignore[arg-type]
+        page_url="",
+    )
+
+    assert reason is None
+    assert binding is not None
+    assert binding.repeat.kind == "dom_rows"
+    assert binding.repeat.row_field == "specifications"
+    assert [t.op for t in binding.field_transform] == ["to_object"]
+
+    # ...and running that pipeline over the rows gives the caller's shape.
+    from agentpilot.recipe.v2.transform import TransformContext, apply_transforms
+
+    got = apply_transforms(binding.rows, binding.field_transform, TransformContext())
+    assert got == {
+        "Brand": "Bodycology",
+        "Form": "Cream",
+        "Skin type": "All",
+        "Scent": "Pink Vanilla",
+        "Size": "8 oz",
+    }
+
+
+async def test_a_table_carries_no_reshape() -> None:
+    """A caller who declared `array of {name, value}` asked for rows and gets
+    rows. Only a map is collapsed."""
+
+    binding, _ = await _verify(_Reader(rows=REAL_ROWS))
+    assert binding is not None
+    assert binding.field_transform == []
 
 
 # --- parsing the model's reply -----------------------------------------------
@@ -448,3 +629,32 @@ async def test_a_table_with_no_columns_is_never_asked_about() -> None:
 def test_the_prompt_states_the_rule_the_failure_broke() -> None:
     assert "RELATIVE TO A SINGLE ROW" in rows_mod._SYSTEM_PROMPT
     assert "Do NOT set `all` on a column" in rows_mod._SYSTEM_PROMPT
+
+
+def test_two_columns_reading_the_same_locator_are_one_column_twice() -> None:
+    """Seen in a real Zara build: `material` and `percentage` were BOTH bound to
+    json_ld path `value`, and `cast to float` turned "100% viscose" into 100.0 --
+    so the single row looked entirely plausible.
+
+    The variance check below cannot catch it: with one row there is nothing to
+    vary. This check does not depend on the row count, because two columns
+    reading through the same locator are wrong however many rows there are.
+    """
+
+    same = Locator(kind="json_ld", path="value")
+    problems = _problems_with(
+        [{"material": "100% viscose", "percentage": "100% viscose"}],
+        {"material": same, "percentage": same},
+    )
+    assert problems
+    assert "same locator" in problems[0]
+    assert "one value reported twice" in problems[0]
+
+
+def test_columns_reading_different_paths_are_fine() -> None:
+    problems = _problems_with(
+        [{"name": "Brand", "value": "Zara"}, {"name": "Fit", "value": "Regular"}],
+        {"name": Locator(kind="json_ld", path="name"),
+         "value": Locator(kind="json_ld", path="value")},
+    )
+    assert problems == []

@@ -61,8 +61,36 @@ def test_the_step_trace_travels_with_the_ask() -> None:
     assert asks[0].step_trace == trace
 
 
+def test_what_was_already_tried_travels_with_the_ask() -> None:
+    """`reason` says what is wrong now; `tried` says what has been ruled out.
+
+    A person told "read 'Specifications' but this field is a table" knows the
+    last attempt landed on the heading. One told only "not found" has to
+    rediscover that -- which is the same work the build already did.
+    """
+
+    asks = build_asks(
+        {"specifications": "no locator resolved"},
+        {},
+        tried={"specifications": "rows: every one of the 10 rows came back identical"},
+    )
+    assert asks[0].tried == "rows: every one of the 10 rows came back identical"
+
+
+def test_an_ask_with_nothing_tried_says_nothing_about_it() -> None:
+    """Absent from the payload rather than an empty string: the panel renders a
+    section for it, and an empty one reads as "nothing was tried"."""
+
+    asks = build_asks({"price": "never found"}, {})
+    assert asks[0].tried == ""
+    assert "tried" not in asks[0].to_dict()
+
+
 def test_an_ask_round_trips_through_json() -> None:
-    ask = PendingAsk(field="price", kind="rejected", reason="wrong one", step_trace=[{"a": 1}])
+    ask = PendingAsk(
+        field="price", kind="rejected", reason="wrong one",
+        step_trace=[{"a": 1}], tried="propose: read nothing",
+    )
     assert PendingAsk.from_dict(ask.to_dict()) == ask
 
 
@@ -407,6 +435,73 @@ def test_an_unknown_shape_falls_back_to_a_single_value() -> None:
         _asks(),
     )
     assert got["price"].shape == "one"
+
+
+# --- a route and a region, in one answer -------------------------------------
+
+
+def test_a_scope_may_carry_the_route_that_reveals_it() -> None:
+    """The Walmart specifications case, and the reason it used to dead-end.
+
+    Answering it needs both halves -- open the accordion, then point at what
+    appeared -- and neither action could carry the other: `scope` alone reloads
+    into a shut accordion, `steps` alone throws the region away.
+    """
+
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "scope",
+            "locators": [{"kind": "css", "selector": "#specs"}],
+            "shape": "rows",
+            "html": "<table><tr><th>Brand</th><td>Bodycology</td></tr></table>",
+            "steps": [
+                {"op": "click", "kind": "css", "selector": "#spec-header",
+                 "text": "Specifications"},
+            ],
+        }],
+        _asks(),
+    )
+    resolution = got["price"]
+    assert resolution.action == "scope"
+    assert resolution.locators[0].selector == "#specs"
+    assert [s.op for s in resolution.steps] == ["click"]
+    assert resolution.steps[0].target is not None
+    assert resolution.steps[0].target.selector == "#spec-header"
+
+
+def test_a_pick_may_carry_the_route_that_reveals_it() -> None:
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "pick",
+            "locators": [{"kind": "css", "selector": ".price"}],
+            "steps": [{"op": "click", "kind": "css", "selector": "#more"}],
+        }],
+        _asks(),
+    )
+    assert got["price"].action == "pick"
+    assert [s.op for s in got["price"].steps] == ["click"]
+
+
+def test_a_missing_region_says_which_of_three_things_went_wrong() -> None:
+    """Reporting "record what you clicked" for all three is what made the
+    accordion case look unanswerable even after the person had answered it."""
+
+    from agentpilot.recipe.v2.assist import Resolution, _why_the_region_is_missing
+
+    bare = Resolution(field="specifications", action="scope")
+    assert "Record whatever you clicked" in _why_the_region_is_missing(bare, [])
+
+    step = parse_recorded_steps([{"op": "click", "kind": "css", "selector": "#s"}])
+    routed = Resolution(field="specifications", action="scope", steps=step)
+
+    # The route matched nothing, so it started from state only their session had.
+    assert "record it again from the top" in _why_the_region_is_missing(routed, [])
+
+    # The route ran and the region still is not there -- a different problem,
+    # and telling them to re-record would send them round the same loop.
+    ran = _why_the_region_is_missing(routed, [object()])
+    assert "1 of 1 did something" in ran
+    assert "still was not on the page" in ran
 
 
 # --- a recorded route -------------------------------------------------------

@@ -105,7 +105,11 @@ export function RecipeDetailPage() {
 
       <div className="flex flex-col gap-2">
         <h2 className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Actions</h2>
-        <RecipeRunPanel recipeId={recipe.recipe_id} urlPattern={recipe.url_pattern} />
+        <RecipeRunPanel
+          recipeId={recipe.recipe_id}
+          urlPattern={recipe.url_pattern}
+          document={recipe.document}
+        />
       </div>
 
       <div className="flex flex-col gap-2">

@@ -28,7 +28,23 @@ class RecipeConfig:
     assist_timeout_s: float
     """How long a parked run waits for a human before resuming without them.
     A parked run holds one of `_IDENTITY_SLOTS` warm identities plus a browser
-    and a proxy pin, so a forgotten tab must not starve the pool."""
+    and a proxy pin, so a forgotten tab must not starve the pool.
+
+    Raised from 900s once `RecipeStore.touch_park` existed. Answering an ask
+    properly is not a quick click -- reload, record the route, pick the region,
+    check what it read -- and at 900s the person doing the careful thing was the
+    one most likely to be dropped halfway through. The UI now pushes the
+    deadline out while the panel is open, so this is the ceiling for a tab
+    nobody is looking at rather than the budget for doing the work."""
+
+    trace_prompts: bool
+    """Whether to also persist what the model was SHOWN, not just what it
+    proposed and why each proposal was rejected.
+
+    The trace is always kept -- it is small, and its rejection strings are the
+    diagnosis. This adds the outline of the page's structured data, which is
+    large and carries page content, and answers the one question the trace
+    cannot: whether the path a build failed to write was ever visible to it."""
 
     @classmethod
     def from_env(cls) -> RecipeConfig:
@@ -50,6 +66,9 @@ class RecipeConfig:
                 os.environ.get("AGENTPILOT_RECIPE_ONBOARD_SAMPLE_RUNS", "2")
             ),
             assist_timeout_s=float(
-                os.environ.get("AGENTPILOT_RECIPE_ASSIST_TIMEOUT_S", "900")
+                os.environ.get("AGENTPILOT_RECIPE_ASSIST_TIMEOUT_S", "1800")
             ),
+            trace_prompts=os.environ.get(
+                "AGENTPILOT_RECIPE_TRACE_PROMPTS", "0"
+            ).strip().lower() in ("1", "true", "yes", "on"),
         )

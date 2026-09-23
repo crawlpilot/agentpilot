@@ -4,10 +4,13 @@ import {
   createRecipe,
   getRecipe,
   getRecipeRun,
+  getRunArtifacts,
   healRecipe,
+  heartbeatAssist,
   listRecipes,
   listRecipeVersions,
   onboardRecipe,
+  requestAssist,
   runRecipe,
   saveRecipeV2,
   submitAssist,
@@ -165,5 +168,60 @@ export function useSubmitAssist(recipeId: string, runId: string) {
       submitAssist(apiKey!, recipeId, runId, { resolutions }),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: queryKeys.recipeRun(recipeId, runId) }),
+  })
+}
+
+/**
+ * Keep a parked run alive while somebody is working on it.
+ *
+ * The park holds a worker slot, a warm identity, a browser and a proxy pin, so
+ * it is bounded — but a fixed bound drops the person doing the careful thing,
+ * which is the reload, the recording, the pick and the look at what it read. A
+ * heartbeat while the panel is open is what makes a longer ceiling safe rather
+ * than merely longer.
+ *
+ * `enabled` gates it on the run actually being parked: extending a run that is
+ * not waiting for anyone is a 409, and polling for one would be noise.
+ */
+export function useAssistHeartbeat(recipeId: string, runId: string, enabled: boolean) {
+  const { apiKey } = useAuth()
+  useQuery({
+    queryKey: [...queryKeys.recipeRun(recipeId, runId), 'heartbeat'],
+    queryFn: () => heartbeatAssist(apiKey!, recipeId, runId),
+    enabled: Boolean(apiKey) && enabled,
+    // Comfortably inside the shortest sensible park, and idempotent, so a missed
+    // beat costs nothing and the next one covers it.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    // A 409 means the run stopped being parked, which the run poll will report
+    // on its own. Retrying would just repeat the 409.
+    retry: false,
+  })
+}
+
+/**
+ * Ask a running build to stop for a person before it finishes.
+ *
+ * For the failure that is not an empty field but a wrong one: on a page whose
+ * own JSON carries a sponsored competitor under the same key names, every field
+ * resolves and one of them is the wrong product. Nothing mechanical catches it.
+ */
+export function useRequestAssist(recipeId: string, runId: string) {
+  const { apiKey } = useAuth()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => requestAssist(apiKey!, recipeId, runId),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.recipeRun(recipeId, runId) }),
+  })
+}
+
+/** What the build proposed for each field, and why each attempt was rejected. */
+export function useRunArtifacts(recipeId: string, runId: string, kind?: string) {
+  const { apiKey } = useAuth()
+  return useQuery({
+    queryKey: [...queryKeys.recipeRun(recipeId, runId), 'artifacts', kind ?? 'all'],
+    queryFn: () => getRunArtifacts(apiKey!, recipeId, runId, kind),
+    enabled: Boolean(apiKey) && Boolean(runId),
   })
 }

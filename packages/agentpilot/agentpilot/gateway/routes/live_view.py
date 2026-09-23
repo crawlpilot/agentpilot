@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentpilot.control.identity import tenant_of
@@ -43,6 +45,8 @@ from crawlpilot.spi.streaming import (
     WheelEvent,
 )
 
+log = structlog.get_logger(__name__)
+
 router = APIRouter(tags=["live-view"])
 _UNAUTHORIZED = 4401
 
@@ -50,21 +54,63 @@ _NOT_FOUND = 4404
 _UNSUPPORTED = 4501
 
 
+# Buttons `Input.dispatchMouseEvent` accepts. The `Literal` on
+# `MouseButtonEvent` is a dataclass annotation and enforces nothing at runtime,
+# and what arrives here is a JSON message from a browser -- so a client sending
+# the DOM's numeric `MouseEvent.button` would put `0` straight into a CDP call.
+_BUTTONS = frozenset({"left", "right", "middle"})
+
+
+def _coord(value: Any) -> float | None:
+    """One screen coordinate, or None if it is not a usable number.
+
+    This is the check that was missing, and it cost a live view that silently
+    would not accept clicks. `JSON.stringify` does not fail on `NaN` or
+    `Infinity` -- it writes `null` -- so a browser whose canvas had not yet
+    decoded its first frame sent `{"x": null, "y": null}`, which reached Chrome
+    as `Input.dispatchMouseEvent` with a null coordinate and came back
+    `Invalid parameters`. That error propagated out of the route handler and
+    closed the websocket, so the live view stopped responding entirely.
+
+    The client is fixed not to produce those, but this is the trust boundary:
+    the message comes from a browser, and everything past here goes to CDP.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def _parse_input_event(msg: dict[str, Any]) -> InputEvent | None:
     kind = msg.get("kind")
-    if kind == "mousemove":
-        return MouseMoveEvent(x=msg["x"], y=msg["y"])
-    if kind in ("mousedown", "mouseup"):
+
+    if kind in ("mousemove", "mousedown", "mouseup", "wheel"):
+        x, y = _coord(msg.get("x")), _coord(msg.get("y"))
+        if x is None or y is None:
+            log.debug("live_view.bad_coordinates", kind=kind, x=msg.get("x"), y=msg.get("y"))
+            return None
+        if kind == "mousemove":
+            return MouseMoveEvent(x=x, y=y)
+        if kind == "wheel":
+            dx, dy = _coord(msg.get("deltaX")), _coord(msg.get("deltaY"))
+            if dx is None or dy is None:
+                return None
+            return WheelEvent(x=x, y=y, delta_x=dx, delta_y=dy)
+        button = msg.get("button", "left")
+        if button not in _BUTTONS:
+            log.debug("live_view.bad_button", button=button)
+            return None
         return MouseButtonEvent(
-            x=msg["x"],
-            y=msg["y"],
-            button=msg.get("button", "left"),
+            x=x, y=y, button=button,
             action="down" if kind == "mousedown" else "up",
         )
-    if kind == "wheel":
-        return WheelEvent(x=msg["x"], y=msg["y"], delta_x=msg["deltaX"], delta_y=msg["deltaY"])
+
     if kind in ("keydown", "keyup"):
-        return KeyEvent(key=msg["key"], action="down" if kind == "keydown" else "up")
+        key = msg.get("key")
+        if not isinstance(key, str) or not key:
+            return None
+        return KeyEvent(key=key, action="down" if kind == "keydown" else "up")
     return None
 
 
@@ -87,8 +133,20 @@ async def _receive_input(
     while True:
         msg = await websocket.receive_json()
         event = _parse_input_event(msg)
-        if event is not None:
+        if event is None:
+            continue
+        try:
             await driver.dispatch_input(ctx, event, page_id)
+        except Exception as exc:  # noqa: BLE001 - see below
+            # One rejected event must not take the session down with it. This
+            # used to propagate through the route handler and close the socket,
+            # so a single malformed click ended the live view -- and the person
+            # watching saw a page that had simply stopped responding, with the
+            # reason only in a worker's log.
+            log.warning(
+                "live_view.input_rejected",
+                kind=type(event).__name__, error=str(exc),
+            )
 
 
 async def _watch_disconnect(websocket: WebSocket) -> None:

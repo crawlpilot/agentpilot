@@ -790,6 +790,13 @@ export interface PendingAsk {
    * never have run, and the two need opposite fixes.
    */
   step_trace: Array<Record<string, unknown>>
+  /**
+   * What the build already attempted for this field, and why each attempt was
+   * rejected. `reason` says what is wrong now; this says what has been ruled
+   * out — so the question becomes "here is what I tried" rather than "find
+   * this". Comes straight from the verifier, which writes it to be read.
+   */
+  tried?: string
 }
 
 export interface RecipeResolution {
@@ -807,10 +814,17 @@ export interface RecipeResolution {
   /** `scope`: the region's markup, as prompt context. Verified against the live page regardless. */
   html?: string
   /**
-   * `steps`: the route a person recorded to the field — what they clicked,
-   * filled and scrolled to make it visible. Replayed against a *freshly
-   * loaded* page before anything is bound, because the route they recorded
-   * probably started from a page they had already opened.
+   * The route a person recorded to the field — what they clicked, filled and
+   * scrolled to make it visible. Replayed against a *freshly loaded* page
+   * before anything is bound, because the route they recorded probably started
+   * from a page they had already opened.
+   *
+   * A modifier, not only an action of its own. `action: 'steps'` means "run
+   * these and let the model look at what they revealed"; sent alongside `pick`
+   * or `scope` it means "run these FIRST, then here is the element or region".
+   * The second is what an accordion actually needs — the pick alone binds
+   * against a section replay loads shut, and the route alone discards the
+   * region that was pointed at.
    */
   steps?: Array<Record<string, unknown>>
 }
@@ -824,11 +838,34 @@ export interface RecipeAssistResponse {
   accepted: string[]
 }
 
+export interface RecipeRunArtifact {
+  kind: 'trace' | 'outline' | 'prompt' | 'response' | 'snapshot'
+  field?: string | null
+  body: Record<string, unknown>
+  created_at?: string | null
+}
+
+/** What a build tried, for looking at after it went wrong. */
+export interface RecipeRunArtifactsResponse {
+  success: boolean
+  artifacts: RecipeRunArtifact[]
+}
+
 
 /** Live narration from a build that takes minutes. */
 export interface RunProgress {
   phase?: 'exploring' | 'verifying'
-  steps?: Array<{ n: number; goal: string; actions: string[]; found: string[] }>
+  steps?: Array<{
+    n: number
+    goal: string
+    actions: string[]
+    /** Fields — as the caller declared them, never a table's column names. */
+    found: string[]
+    /** Fields bound again that an earlier step had already bound: a loop. */
+    rebound?: string[]
+    /** Field -> why what was tried for it was turned down, verbatim. */
+    rejected?: Record<string, string>
+  }>
   /** Fields bound so far. */
   found?: string[]
   /** Fields still being looked for. */

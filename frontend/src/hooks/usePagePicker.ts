@@ -24,6 +24,47 @@ import {
 // little anyway. Mirrors `_MAX_FRAGMENT_CHARS` in `selector_agent.py`.
 const MAX_FRAGMENT_CHARS = 20_000
 
+// Elements that are never the value a person pointed at, and are routinely most
+// of the bytes. Mirrors `_DEAD_MARKUP` in `selector_agent.py`.
+const DEAD_TAGS = ['script', 'style', 'svg', 'noscript', 'template', 'iframe', 'canvas']
+
+// Attributes worth keeping: the ones a selector can be built out of, plus the
+// few that carry a value. Everything else on a React page is generated, and
+// `propose_within` is explicitly told it rarely needs a class name inside a
+// region that is already scoped. Mirrors `_KEEP_ATTR` in `selector_agent.py`.
+const KEEP_ATTR = '^(?:id|class|role|itemprop|itemtype|href|src|alt|title|value|content|type|name|colspan|rowspan)$|^(?:data|aria)-'
+
+/**
+ * An expression that returns the region's markup with the dead parts removed.
+ *
+ * Built as a string because it runs in the page through `execute_js`, not here.
+ * The selector and the constants travel as JSON literals so nothing in them is
+ * ever read as syntax.
+ */
+export const PRUNED_OUTER_HTML = (selector: string): string =>
+  `(function(){` +
+  `var e=document.querySelector(${JSON.stringify(selector)});` +
+  `if(!e)return '';` +
+  `var c=e.cloneNode(true);` +
+  `var dead=${JSON.stringify(DEAD_TAGS)};` +
+  `var keep=new RegExp(${JSON.stringify(KEEP_ATTR)},'i');` +
+  `var strip=function(n){` +
+  `for(var i=n.attributes.length-1;i>=0;i--){` +
+  `var a=n.attributes[i].name;if(!keep.test(a))n.removeAttribute(a);}};` +
+  `strip(c);` +
+  `for(var d=0;d<dead.length;d++){` +
+  `var gone=c.querySelectorAll(dead[d]);` +
+  `for(var g=0;g<gone.length;g++){if(gone[g].parentNode)gone[g].parentNode.removeChild(gone[g]);}}` +
+  `var all=c.querySelectorAll('*');` +
+  `for(var j=0;j<all.length;j++){strip(all[j]);}` +
+  // Comments are hydration markers on a React page and say nothing about where
+  // a value is. A TreeWalker is the only way to reach them.
+  `var w=document.createTreeWalker(c,NodeFilter.SHOW_COMMENT,null);` +
+  `var cs=[];while(w.nextNode()){cs.push(w.currentNode);}` +
+  `for(var k=0;k<cs.length;k++){if(cs[k].parentNode)cs[k].parentNode.removeChild(cs[k]);}` +
+  `return c.outerHTML.replace(/[ \\t\\r\\n]+/g,' ').slice(0,${MAX_FRAGMENT_CHARS});` +
+  `})()`
+
 /**
  * Drives the visual picker inside a live session's page.
  *
@@ -212,10 +253,15 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
       // payload, which would mean regenerating the vendored bundle for one
       // string. The selector travels as a JSON literal, so one containing a
       // quote is data rather than syntax -- the discipline `evaluate.py` uses.
-      const html = await run(
-        `(function(){var e=document.querySelector(${JSON.stringify(selector)});` +
-          `return e?e.outerHTML.slice(0,${MAX_FRAGMENT_CHARS}):'';})()`,
-      )
+      //
+      // Pruned IN the page, before the slice. A specifications section on a
+      // React page is mostly inline styles, generated class names and inert
+      // script tags, so a raw slice of `outerHTML` routinely cut off mid-table:
+      // the person pointed at the right region and the model was shown the
+      // first third of it. Doing it here rather than server-side is what the
+      // real DOM buys -- `prune_fragment` in `selector_agent.py` is the
+      // regex-based guard for markup arriving from anywhere else.
+      const html = await run(PRUNED_OUTER_HTML(selector))
       return typeof html === 'string' ? html : ''
     },
     [run],

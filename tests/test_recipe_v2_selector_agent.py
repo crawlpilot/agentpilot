@@ -233,7 +233,10 @@ class StubLLM:
         self.replies = replies
         self.prompts: list[str] = []
 
-    async def __call__(self, fields, *, snapshot_text, structured_data, llm_config, failures=None):
+    async def __call__(
+        self, fields, *, snapshot_text, structured_data, llm_config,
+        failures=None, trace=None,
+    ):
         self.prompts.append(
             build_user_message(
                 fields, snapshot_text=snapshot_text,
@@ -749,3 +752,440 @@ async def test_declining_to_propose_a_pipeline_is_a_real_answer(monkeypatch) -> 
         FIELDS["price"], "Contact us for pricing", llm_config=None
     )
     assert got is None
+
+
+# --- the picked region's markup ---------------------------------------------
+
+
+def test_pruning_keeps_the_values_and_the_selectable_attributes() -> None:
+    """A region is only worth scoping to if the model gets to see all of it.
+
+    A specifications section on a React page is mostly inline styles, generated
+    class names and inert script tags, so a raw 20 000-character slice of
+    `outerHTML` routinely cut off mid-table: the person pointed at the right
+    region and the model was shown the first third of it.
+    """
+
+    from agentpilot.recipe.v2.selector_agent import prune_fragment
+
+    raw = (
+        '<section id="specs" class="dc_v3" style="padding:12px" '
+        'data-testid="spec-block" onclick="track()" tabindex="-1">'
+        "<!--$-->"
+        "<script>window.__NEXT_DATA__={huge:true}</script>"
+        "<style>.dc_v3{color:red}</style>"
+        '<h2 aria-label="Specifications">Specifications</h2>'
+        "<table><tr><th>Brand</th>"
+        '<td itemprop="brand">Bodycology</td></tr></table>'
+        '<svg viewBox="0 0 8 8"><path d="M0 0L8 8"/></svg>'
+        "</section>"
+    )
+    out = prune_fragment(raw)
+
+    # The values, and the relationships `_WITHIN_SYSTEM_PROMPT` asks for.
+    assert "Bodycology" in out
+    assert 'id="specs"' in out
+    assert 'data-testid="spec-block"' in out
+    assert 'itemprop="brand"' in out
+    assert 'aria-label="Specifications"' in out
+    assert "<table>" in out
+
+    # None of what is never the answer.
+    assert "__NEXT_DATA__" not in out
+    assert "<script" not in out
+    assert "<style" not in out
+    assert "<svg" not in out
+    assert "viewBox" not in out
+    assert "onclick" not in out
+    assert "style=" not in out
+    assert "tabindex" not in out
+    assert "<!--" not in out
+    assert len(out) < len(raw)
+
+
+def test_pruning_respects_the_fragment_budget() -> None:
+    from agentpilot.recipe.v2.selector_agent import prune_fragment
+
+    assert len(prune_fragment("<p>" + "x" * 5_000 + "</p>", limit=100)) == 100
+
+
+def test_pruning_an_empty_fragment_is_not_an_error() -> None:
+    """A person picked, then the page re-rendered. `propose_within` handles an
+    empty region by returning no candidates; a throw would lose the batch."""
+
+    from agentpilot.recipe.v2.selector_agent import prune_fragment
+
+    assert prune_fragment("") == ""
+
+
+# --- binding a list straight from the page's JSON ---------------------------
+
+
+def _walmart_fixture() -> dict[str, Any]:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).parent / "fixtures" / "walmart_401967617_structured.json"
+    return json.loads(path.read_text())
+
+
+@pytest.mark.asyncio
+async def test_a_list_field_binds_from_the_page_json_with_no_model_call(monkeypatch) -> None:
+    """The `highlights` half of the bug report, on the page it failed on.
+
+    An array the site itself names the way the caller named the field is not a
+    guess. `propose_rows` has made this move for tables since it was written;
+    a `list` field had no equivalent, so it was left guessing CSS at a page with
+    no `<table>` and no `<tr>` -- and the path it needed was past the prompt's
+    truncation point anyway.
+    """
+
+    from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
+
+    images = FieldSpec(
+        name="images",
+        type=TypeSpec(kind="list", items=TypeSpec(kind="scalar", value_type="url")),
+    )
+    url = (
+        "__NEXT_DATA__.props.pageProps.initialData.data.product"
+        ".imageInfo.allImages[*].url"
+    )
+
+    async def refuses(*args: Any, **kwargs: Any):
+        raise AssertionError("the model must not be asked about a field the JSON answers")
+
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", refuses)
+
+    got = await propose_and_verify(
+        {"images": images},
+        snapshot_text="",
+        structured_data=_walmart_fixture(),
+        llm_config=None,
+        verify=fake_page({("hydration", url): [
+            "https://i5.walmartimages.com/asr/0.jpeg",
+            "https://i5.walmartimages.com/asr/1.jpeg",
+        ]}),
+        dom_fallbacks=False,
+    )
+
+    assert [c.locator.path for c in got["images"]] == [url]
+    assert got["images"][0].locator.path_lang == "jmespath"
+    assert got["images"][0].locator.kind == "hydration"
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_name_value_array_is_left_to_the_model(monkeypatch) -> None:
+    """For a field called `highlights`, "Skin type" and "All" are each half of
+    one fact, and nothing in the data says which half was asked for. Binding the
+    winner of that tie would be a coin flip that looks like a measurement -- so
+    the model is asked, with both readings and the page in front of it."""
+
+    from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
+
+    highlights = FieldSpec(
+        name="highlights",
+        description="Key product benefits, features, selling points, or bullet highlights",
+        type=TypeSpec(kind="list", items=TypeSpec(kind="scalar", value_type="string")),
+    )
+    path = (
+        "__NEXT_DATA__.props.pageProps.initialData.data.idml"
+        ".productHighlights[*].value"
+    )
+    stub = StubLLM([{"fields": [
+        {"field": "highlights", "candidates": [
+            {"kind": "hydration", "path": path, "path_lang": "jmespath"},
+        ]},
+    ]}])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"highlights": highlights},
+        snapshot_text="",
+        structured_data=_walmart_fixture(),
+        llm_config=None,
+        verify=fake_page({("hydration", path): ["All", "Dryness", "Moisturizing"]}),
+        dom_fallbacks=False,
+    )
+
+    # The model WAS asked, and both readings were offered to it -- which is the
+    # whole reason it can answer at all.
+    assert len(stub.prompts) == 1
+    assert "productHighlights[*].name" in stub.prompts[0]
+    assert "productHighlights[*].value" in stub.prompts[0]
+    assert [c.locator.path for c in got["highlights"]] == [path]
+
+
+def test_the_prompt_shows_the_paths_a_raw_prefix_would_have_cut(monkeypatch) -> None:
+    """The `specifications` array sits ~40 KB into this page's blob. A 12 000-char
+    prefix of `json.dumps` did not reach it, so the model was asked to write an
+    anchored path into data it had never seen."""
+
+    structured = _walmart_fixture()
+    msg = build_user_message(FIELDS, snapshot_text="", structured_data=structured)
+
+    import json as _j
+    assert "idml.specifications" not in _j.dumps(structured)[:12_000]
+    assert "idml.specifications" in msg
+    # And never the sponsored competitor the page carries under `configs.ad`.
+    assert "St. Ives" not in msg
+
+
+# --- where the matches actually live ----------------------------------------
+
+
+def scoped_page(values: dict[tuple, Any], scopes: dict[tuple, Any]):
+    """A verifier that also reports where each locator's matches live, the way
+    `PageReader.read_with_scope` does."""
+
+    async def _probe(loc: Locator):
+        key = (loc.kind, loc.selector or loc.path)
+        return values.get(key), scopes.get(key)
+
+    return _probe
+
+
+CARE_FIELD = parse_fields({
+    "care": {"type": {"kind": "list", "items": {"kind": "scalar", "value_type": "string"}}}
+})["care"]
+
+# What the page came back with on the build this exists for.
+CHROME_AND_CARE = [
+    "Bag0", "LOG IN", "Help", "FRUIT OF THE LOOMTHE NEWJACKETS",
+    "Machine wash at max. 40ºC/104ºF with short spin cycle", "Do not use bleach",
+]
+CARE_ONLY = [
+    "Machine wash at max. 40ºC/104ºF with short spin cycle", "Do not use bleach",
+    "Iron at a maximum of 150ºC/302ºF",
+]
+
+
+@pytest.mark.asyncio
+async def test_a_list_whose_matches_span_the_page_is_refused() -> None:
+    """The Zara `care` failure, at the gate that now stops it.
+
+    Every one of those six strings is a legitimate match for the expression. The
+    only thing separating the answer from the site header is that they do not
+    share a container -- so the nearest common ancestor of the whole set is
+    <body>, and that is the measurement.
+    """
+
+    loc = Locator(kind="css", selector="li", all=True)
+    resolving, reason = await verify_locators(
+        [loc],
+        verify=fake_page({}),
+        spec=CARE_FIELD,
+        ctx=TransformContext(),
+        probe=scoped_page(
+            {("css", "li"): CHROME_AND_CARE},
+            {("css", "li"): {"spans_document": True, "tag": "body", "matched": 6}},
+        ),
+    )
+
+    assert resolving == []
+    assert reason is not None
+    assert "spread across the whole page" in reason
+    assert "<body>" in reason
+
+
+@pytest.mark.asyncio
+async def test_a_list_that_shares_a_container_is_scoped_to_it() -> None:
+    """The same measurement, used the other way round: the container the values
+    were found in is exactly the `within` the binding should carry."""
+
+    loc = Locator(kind="css", selector="li", all=True)
+    scope = {
+        "spans_document": False, "tag": "ul", "matched": 3,
+        "selector": "ul.care-list",
+    }
+    resolving, _reason = await verify_locators(
+        [loc],
+        verify=fake_page({}),
+        spec=CARE_FIELD,
+        ctx=TransformContext(),
+        probe=scoped_page({("css", "li"): CARE_ONLY}, {("css", "li"): scope}),
+    )
+
+    assert len(resolving) == 1
+    bound = resolving[0].locator
+    assert bound.within is not None
+    assert bound.within.selector == "ul.care-list"
+    assert bound.selector == "li"
+
+
+@pytest.mark.asyncio
+async def test_a_scalar_is_never_scoped_to_itself() -> None:
+    """A single match's "common ancestor" is the element. Scoping it to that
+    would make the read resolve the container and then look for the element
+    INSIDE it, which finds nothing -- and every scalar field takes this path."""
+
+    loc = Locator(kind="css", selector="h1")
+    scope = {"spans_document": False, "tag": "h1", "matched": 1, "selector": "h1.title"}
+    resolving, _reason = await verify_locators(
+        [loc],
+        verify=fake_page({}),
+        spec=FIELDS["name"],
+        ctx=TransformContext(),
+        probe=scoped_page({("css", "h1"): "Dove"}, {("css", "h1"): scope}),
+    )
+
+    assert len(resolving) == 1
+    assert resolving[0].locator.within is None
+
+
+@pytest.mark.asyncio
+async def test_a_scope_that_changes_what_is_read_is_not_applied() -> None:
+    """The scope selector resolves to `containers[0]`, and on a page carrying
+    two same-shaped sections that need not be the one measured. So the scoped
+    form is re-read and kept only if it still produces the same value."""
+
+    loc = Locator(kind="css", selector="li", all=True)
+    scope = {
+        "spans_document": False, "tag": "ul", "matched": 3, "selector": "ul.list",
+    }
+
+    async def probe(loc: Locator):
+        if loc.within is not None:
+            return ["something", "else"], None   # a different `ul.list`
+        return CARE_ONLY, scope
+
+    resolving, _reason = await verify_locators(
+        [loc], verify=fake_page({}), spec=CARE_FIELD,
+        ctx=TransformContext(), probe=probe,
+    )
+
+    assert len(resolving) == 1
+    assert resolving[0].locator.within is None
+    assert resolving[0].value == CARE_ONLY
+
+
+@pytest.mark.asyncio
+async def test_without_a_probe_nothing_about_scoping_happens() -> None:
+    """The old behaviour exactly, which is what lets every browser-free test
+    here stay as it was."""
+
+    loc = Locator(kind="css", selector="li", all=True)
+    resolving, _reason = await verify_locators(
+        [loc],
+        verify=fake_page({("css", "li"): CHROME_AND_CARE}),
+        spec=CARE_FIELD,
+        ctx=TransformContext(),
+    )
+    assert len(resolving) == 1
+    assert resolving[0].locator.within is None
+
+
+# --- arity, in both directions ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_list_field_reading_one_value_is_refused() -> None:
+    """The mirror of the scalar guard, and it was missing. A Zara build bound
+    `highlights` -- declared a list -- to a selector with no `all`, so the
+    recipe promised an array and produced a string."""
+
+    resolving, reason = await verify_locators(
+        [Locator(kind="css", selector=".expandable-text__inner-content p")],
+        verify=fake_page({
+            ("css", ".expandable-text__inner-content p"): "Midi dress made from viscose."
+        }),
+        spec=CARE_FIELD,
+        ctx=TransformContext(),
+    )
+
+    assert resolving == []
+    assert reason is not None
+    assert "this field is a list" in reason
+    assert "`all`" in reason
+
+
+# --- an expression that cannot be contained ---------------------------------
+
+
+def test_an_escaping_axis_never_becomes_a_candidate() -> None:
+    """Dropped at parse time, so it never reaches the page at all."""
+
+    raw = {"fields": [{"field": "care", "candidates": [
+        {"kind": "xpath",
+         "selector": "//*[contains(text(),'care')]/following::ul[1]/li", "all": True},
+        {"kind": "xpath", "selector": ".//ul[@class='care-list']/li", "all": True},
+    ]}]}
+    got = parse_proposals(raw, {"care": CARE_FIELD})
+    assert [loc.selector for loc in got["care"]] == [".//ul[@class='care-list']/li"]
+
+
+@pytest.mark.asyncio
+async def test_an_escaping_axis_arriving_any_other_way_is_still_refused() -> None:
+    resolving, reason = await verify_locators(
+        [Locator(kind="xpath", selector=".//p/following::ul/li", all=True)],
+        verify=fake_page({("xpath", ".//p/following::ul/li"): CHROME_AND_CARE}),
+        spec=CARE_FIELD,
+        ctx=TransformContext(),
+    )
+    assert resolving == []
+    assert "following::" in (reason or "")
+
+
+# --- brittle beats nothing, and loses to better -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_positional_chain_is_dropped_beside_a_good_selector(monkeypatch) -> None:
+    stub = StubLLM([{"fields": [{"field": "name", "candidates": [
+        {"kind": "css", "selector": "div > div > div > div > div > h1"},
+        {"kind": "css", "selector": "[itemprop=name]"},
+    ]}]}])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"name": FIELDS["name"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=fake_page({
+            ("css", "div > div > div > div > div > h1"): "Dove",
+            ("css", "[itemprop=name]"): "Dove",
+        }),
+        dom_fallbacks=False,
+    )
+    assert [c.locator.selector for c in got["name"]] == ["[itemprop=name]"]
+
+
+@pytest.mark.asyncio
+async def test_a_positional_chain_is_kept_when_it_is_all_there_is(monkeypatch) -> None:
+    """A field with no binding collects nothing on every run, which is strictly
+    worse than a selector that might rot."""
+
+    chain = "div > div > div > div > div > h1"
+    stub = StubLLM([{"fields": [
+        {"field": "name", "candidates": [{"kind": "css", "selector": chain}]},
+    ]}])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"name": FIELDS["name"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=fake_page({("css", chain): "Dove"}),
+        dom_fallbacks=False,
+    )
+    assert [c.locator.selector for c in got["name"]] == [chain]
+
+
+@pytest.mark.asyncio
+async def test_a_weak_dom_selector_is_not_dropped_for_a_json_path(monkeypatch) -> None:
+    """They are not competing on brittleness -- they are each other's
+    insurance. `_add_dom_fallbacks` spends a whole extra model call to give a
+    JSON-only field a DOM candidate, because a renamed hydration key fails
+    silently and totally."""
+
+    chain = "div > div > div > div > div > h1"
+    stub = StubLLM([{"fields": [{"field": "name", "candidates": [
+        {"kind": "json_ld", "path": "[0].name"},
+        {"kind": "css", "selector": chain},
+    ]}]}])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"name": FIELDS["name"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=fake_page({("json_ld", "[0].name"): "Dove", ("css", chain): "Dove"}),
+        dom_fallbacks=False,
+    )
+    assert [c.locator.kind for c in got["name"]] == ["json_ld", "css"]

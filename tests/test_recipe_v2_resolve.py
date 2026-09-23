@@ -261,3 +261,118 @@ def test_assertions_never_upgrade_a_failed_field() -> None:
 def test_unknown_assertion_kind_is_skipped_not_fatal() -> None:
     result = evaluate_assertions(1, [Assertion(kind="from_the_future")])[0]
     assert result.passed and "skipped" in result.detail
+
+
+# --- which selector matched, and what the others did ------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_winning_locator_travels_with_the_value() -> None:
+    """`source` is only the locator's KIND, and on a field with four css
+    candidates the kind is the one thing that does not distinguish them. Without
+    the locator itself, "this value came from css" cannot be acted on."""
+
+    res = await resolve_field(
+        NAME,
+        [cand(selector="#gone"), cand(selector="[itemprop=name]")],
+        evaluate=page({("css", "[itemprop=name]"): "Bodycology"}),
+        ctx=TransformContext(),
+    )
+
+    assert res.value == "Bodycology"
+    assert res.locator is not None
+    assert res.locator.selector == "[itemprop=name]"
+    # The position only means something next to the length of the chain.
+    assert res.candidate_index == 1
+    assert res.considered == 2
+    assert res.status == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_every_candidate_ahead_of_the_winner_is_accounted_for() -> None:
+    """"Fell through to candidate 2" is half a diagnosis. The other half is
+    whether the ones ahead of it stopped matching or merely stopped producing a
+    usable value -- different breakages, different fixes."""
+
+    res = await resolve_field(
+        PRICE,
+        [
+            cand(selector="#gone"),
+            cand(selector=".legend"),
+            cand(selector=".price"),
+        ],
+        evaluate=page({
+            # Matches nothing at all any more.
+            (".legend", None): None,
+            ("css", ".legend"): "Contact us for pricing",
+            ("css", ".price"): "$4.97",
+        }),
+        ctx=TransformContext(),
+    )
+
+    assert res.value == 4.97
+    assert [(a.index, a.outcome) for a in res.attempts] == [
+        (0, "empty"),
+        (1, "cleaned_to_nothing"),
+        (2, "won"),
+    ]
+    # The selector that is fine but whose value no longer survives the cast is
+    # the most misleading of the failures, so it says what it read.
+    assert res.attempts[1].detail == "Contact us for pricing"
+    assert res.attempts[2].locator.selector == ".price"
+
+
+@pytest.mark.asyncio
+async def test_a_locator_that_throws_is_recorded_as_having_thrown() -> None:
+    async def explodes(loc: Locator) -> Any:
+        if loc.selector == "#bad":
+            raise ValueError("'#bad' is not a valid selector")
+        return "Dove"
+
+    res = await resolve_field(
+        NAME,
+        [cand(selector="#bad"), cand(selector=".ok")],
+        evaluate=explodes,
+        ctx=TransformContext(),
+    )
+
+    assert res.value == "Dove"
+    assert res.attempts[0].outcome == "raised"
+    assert "not a valid selector" in (res.attempts[0].detail or "")
+
+
+@pytest.mark.asyncio
+async def test_a_field_that_resolved_nothing_still_says_what_it_tried() -> None:
+    """The case most worth having the attempts for: an empty field with no
+    winning locator to point at."""
+
+    res = await resolve_field(
+        NAME,
+        [cand(selector="#a"), cand(selector="#b")],
+        evaluate=page({}),
+        ctx=TransformContext(),
+    )
+
+    assert res.status == "empty"
+    assert res.locator is None
+    assert res.considered == 2
+    assert [a.outcome for a in res.attempts] == ["empty", "empty"]
+
+
+@pytest.mark.asyncio
+async def test_an_attempt_serializes_to_something_a_person_can_read() -> None:
+    res = await resolve_field(
+        NAME,
+        [cand(selector=".n")],
+        evaluate=page({("css", ".n"): "Dove"}),
+        ctx=TransformContext(),
+    )
+    # `Locator.to_dict` omits defaults, so a provenance payload carries only
+    # what actually distinguishes one selector from another.
+    assert res.attempts[0].to_dict() == {
+        "index": 0,
+        "outcome": "won",
+        "locator": {"kind": "css", "selector": ".n"},
+    }
+    # `detail` is absent rather than null when there is nothing to say.
+    assert "detail" not in res.attempts[0].to_dict()

@@ -10,6 +10,7 @@ stays in one place.
 
 from __future__ import annotations
 
+import json as _json
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -74,13 +75,53 @@ async def applicable_candidates(
     return sorted(out, key=lambda c: c.priority)
 
 
+class CandidateAttempt:
+    """One candidate that was tried, and what it did.
+
+    The losers, not just the winner. `candidate_index` says a chain fell
+    through to position 2; this says *why* -- the id selector now matches
+    nothing, or it still matches and its text stopped surviving the cast. Those
+    are different breakages needing different fixes, and the index alone cannot
+    tell them apart.
+    """
+
+    __slots__ = ("index", "locator", "outcome", "detail")
+
+    def __init__(
+        self,
+        *,
+        index: int,
+        locator: Locator,
+        outcome: str,
+        detail: str | None = None,
+    ) -> None:
+        self.index = index
+        self.locator = locator
+        self.outcome = outcome
+        """`won`, `empty`, `raised`, `transform_failed`, or `cleaned_to_nothing`."""
+        self.detail = detail
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "index": self.index,
+            "outcome": self.outcome,
+            "locator": self.locator.to_dict(),
+        }
+        if self.detail:
+            out["detail"] = self.detail
+        return out
+
+
 class FieldResolution:
     """What resolving one field produced, including *which* candidate produced
     it. The candidate index is the drift signal the whole operational model
     turns on: a field that starts resolving from candidate 2 instead of
     candidate 0 is breaking, days before it breaks."""
 
-    __slots__ = ("value", "raw", "status", "candidate_index", "source", "reason")
+    __slots__ = (
+        "value", "raw", "status", "candidate_index", "source", "reason",
+        "locator", "considered", "attempts",
+    )
 
     def __init__(
         self,
@@ -91,6 +132,9 @@ class FieldResolution:
         candidate_index: int | None = None,
         source: str | None = None,
         reason: str | None = None,
+        locator: Locator | None = None,
+        considered: int = 0,
+        attempts: list[CandidateAttempt] | None = None,
     ) -> None:
         self.value = value
         self.raw = raw
@@ -98,6 +142,15 @@ class FieldResolution:
         self.candidate_index = candidate_index
         self.source = source
         self.reason = reason
+        self.locator = locator
+        """The locator that actually produced the value. `source` is only its
+        kind, and on a page with four css candidates the kind is the one thing
+        that does not distinguish them."""
+        self.considered = considered
+        """How many candidates applied under the active variant and guards.
+        Without it `candidate: 2` does not say whether the chain has one option
+        left or is comfortably in the middle."""
+        self.attempts = attempts if attempts is not None else []
 
 
 async def resolve_field(
@@ -128,13 +181,28 @@ async def resolve_field(
         )
 
     first_reason: str | None = None
+    # Every candidate ahead of the winner, and what became of it. Kept rather
+    # than discarded because "this field fell through to candidate 2" is only
+    # half a diagnosis -- the other half is whether candidates 0 and 1 stopped
+    # matching or merely stopped producing a usable value.
+    attempts: list[CandidateAttempt] = []
+
+    def attempted(index: int, cand: Candidate, outcome: str, detail: str | None = None) -> None:
+        attempts.append(
+            CandidateAttempt(
+                index=index, locator=cand.locator, outcome=outcome, detail=detail
+            )
+        )
+
     for position, cand in enumerate(ordered):
         try:
             raw = await evaluate(cand.locator)
         except Exception as exc:  # noqa: BLE001 - a broken locator is data, not a crash
             first_reason = first_reason or f"candidate {position} failed to evaluate: {exc}"
+            attempted(position, cand, "raised", str(exc))
             continue
         if is_empty(raw):
+            attempted(position, cand, "empty")
             continue
 
         pipeline = cand.transform if cand.transform is not None else spec.transform
@@ -142,22 +210,40 @@ async def resolve_field(
             value = apply_transforms(raw, pipeline, ctx)
         except TransformError as exc:
             first_reason = first_reason or f"candidate {position} transform failed: {exc}"
+            attempted(position, cand, "transform_failed", str(exc))
             continue
         if is_empty(value):
+            # Read something, cleaned up to nothing. The most misleading of the
+            # failures: the selector is fine and the pipeline is the problem.
+            attempted(position, cand, "cleaned_to_nothing", _show(raw))
             continue
 
+        attempted(position, cand, "won")
         return FieldResolution(
             value=value,
             raw=raw,
             status="resolved" if position == 0 else "fallback",
             candidate_index=position,
             source=cand.locator.kind,
+            locator=cand.locator,
+            considered=len(ordered),
+            attempts=attempts,
         )
 
     return FieldResolution(
         status="failed" if spec.required else "empty",
         reason=first_reason or f"all {len(ordered)} candidate(s) resolved empty",
+        considered=len(ordered),
+        attempts=attempts,
     )
+
+
+def _show(value: Any) -> str:
+    """A raw read, short enough to sit in a run's provenance."""
+
+    text = value if isinstance(value, str) else _json.dumps(value, default=str)
+    text = " ".join(text.split())
+    return text[:120] + "..." if len(text) > 120 else text
 
 
 # --- assertions -------------------------------------------------------------

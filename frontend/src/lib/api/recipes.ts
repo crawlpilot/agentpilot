@@ -2,6 +2,7 @@ import { apiRequest } from './client'
 import type {
   RecipeAssistRequest,
   RecipeAssistResponse,
+  RecipeRunArtifactsResponse,
   RecipeCodegenLanguage,
   RecipeCreateRequest,
   RecipeCreateResponse,
@@ -81,6 +82,55 @@ export function submitAssist(
     body: req,
     token,
   })
+}
+
+/**
+ * Say that somebody is still working on a parked run.
+ *
+ * The park is bounded because it holds a worker slot, a warm identity, a browser
+ * and a proxy pin — but a fixed bound drops the person doing the careful thing,
+ * which is the reload, the recording, the pick and the look at what it read.
+ * Called on a timer while the assist panel is open.
+ */
+export function heartbeatAssist(token: string, recipeId: string, runId: string) {
+  return apiRequest<RecipeAssistResponse>(
+    `/v1/recipes/${recipeId}/runs/${runId}/assist/heartbeat`,
+    { method: 'POST', token },
+  )
+}
+
+/**
+ * Ask a running build to stop for a person before it finishes.
+ *
+ * Takes effect at the build's next park point, with the browser session still
+ * open on the page. Until this existed, taking over meant waiting for the build
+ * to give up — so a build that bound every field, correctly or not, finished and
+ * saved without ever offering.
+ */
+export function requestAssist(token: string, recipeId: string, runId: string) {
+  return apiRequest<RecipeAssistResponse>(
+    `/v1/recipes/${recipeId}/runs/${runId}/assist/request`,
+    { method: 'POST', token },
+  )
+}
+
+/**
+ * What the build proposed for each field, and why each attempt was rejected.
+ *
+ * Its own endpoint rather than part of the run poll: a trace carries every
+ * locator tried plus a sample of what each read, and the run is polled every few
+ * seconds while a build takes minutes.
+ */
+export function getRunArtifacts(
+  token: string,
+  recipeId: string,
+  runId: string,
+  kind?: string,
+) {
+  return apiRequest<RecipeRunArtifactsResponse>(
+    `/v1/recipes/${recipeId}/runs/${runId}/artifacts`,
+    { token, query: kind ? { kind } : {} },
+  )
 }
 
 /** The scraper marketplace: recipes published as prebuilt templates. */

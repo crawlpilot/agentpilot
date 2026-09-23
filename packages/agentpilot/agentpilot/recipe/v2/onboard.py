@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -44,8 +44,10 @@ from agentpilot.agent.state import AgentStepRecord
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.v2 import capture
 from agentpilot.recipe.v2.assertions import baseline_assertions, with_assertions
+from agentpilot.recipe.v2.build_trace import BuildTrace
 from agentpilot.recipe.v2.classify import classify_current_page
 from agentpilot.recipe.v2.evaluate import PageReader
+from agentpilot.recipe.v2.json_index import outline
 from agentpilot.recipe.v2.models import (
     Candidate,
     FieldGroup,
@@ -55,7 +57,7 @@ from agentpilot.recipe.v2.models import (
     TargetSpec,
     UrlMatcher,
 )
-from agentpilot.recipe.v2.rows import RowBinding, propose_rows
+from agentpilot.recipe.v2.rows import RowBinding, is_open_map, propose_rows
 from agentpilot.recipe.v2.schema import (
     FieldSpec,
     all_leaf_fields,
@@ -134,9 +136,64 @@ class OnboardOutcome:
     steps_taken: int = 0
     agent_result: str | None = None
 
+    page_json_outline: str = ""
+    """What the selector prompts were shown of the page's structured data.
+
+    The first question about a build that wrote a path resolving to nothing --
+    or wrote none at all -- is whether the path was ever visible. Nothing else
+    can answer it once the browser is gone."""
+
+    trace: BuildTrace = field(default_factory=BuildTrace)
+    """Every locator the build proposed and why each rejection happened.
+
+    Carried out of the build rather than logged away, because "it is failing"
+    was previously a report about a run whose reasoning no longer existed. The
+    worker persists it and `build_asks` puts the relevant part in front of the
+    person being asked -- which turns "find this" into "here is what I tried"."""
+
     @property
     def complete(self) -> bool:
         return not self.unresolved
+
+
+def silently_unbound(
+    fields: dict[str, FieldSpec],
+    groups: list[FieldGroup],
+    failures: dict[str, str],
+) -> dict[str, str]:
+    """Declared fields that reached neither a binding nor a failure.
+
+    A field in that state has simply vanished: the recipe promises it, no run
+    will ever produce it, and nothing anywhere says so. Measured on a Zara
+    build, where `origin` disappeared exactly this way -- declared as an open
+    key->value map, routed to `propose_rows` because that is what an open map
+    is, declined by it, and then not put back among the scalars because
+    `_column_to_table` has no entry for a field with no declared columns.
+
+    Deliberately a sweep over the *outcome* rather than a fix to that path.
+    Every route into this state ends the same way, and the next one will not be
+    that one. An unresolved field becomes an ask a person can answer; a silent
+    one cannot be answered because nobody is told.
+    """
+
+    bound = {
+        name for group in groups for name in (*group.bindings, *group.field_names)
+    }
+    out: dict[str, str] = {}
+    for name, spec in fields.items():
+        if name in bound or name in failures:
+            continue
+        # A table is bound one column at a time and its own name may never
+        # appear in `bindings`; it is satisfied when its columns are.
+        columns = set(spec.type.columns)
+        if columns and columns <= bound:
+            continue
+        out[name] = (
+            "never located on this page, and no attempt was recorded against it -- "
+            "it may not be present, or the exploration may have run out of steps "
+            "before reaching it"
+        )
+    return out
 
 
 def looks_variable(segment: str) -> bool:
@@ -350,6 +407,23 @@ class ExplorationState:
 
         self.global_setup: list[Step] = []
         self.field_groups: list[FieldGroup] = []
+        # Every locator proposed and every reason one was turned down. Collected
+        # unconditionally: the reasons are already being computed and written for
+        # a person to read, and throwing them away is what made "the build
+        # failed" an unanswerable report. See `build_trace`.
+        self.trace = BuildTrace()
+        # Fields that have ever been bound, so a re-bind can be reported as the
+        # loop it is rather than as fresh progress.
+        self._ever_bound: set[str] = set()
+        self.page_json_outline = ""
+        """What the selector prompts were shown of the page's JSON, as first
+        read. Saved as an artifact only when asked for -- it is large -- but
+        collected either way, because by the time anyone wants it the browser is
+        gone."""
+        # Field name -> the pipeline its whole row set goes through. Only an
+        # open map has one (`to_object`), and it has to reach the recipe's
+        # `fields`, which is where `_replay_repeat` reads it from.
+        self.field_transforms: dict[str, list[Any]] = {}
 
     @property
     def unfound_fields(self) -> dict[str, FieldSpec]:
@@ -486,15 +560,27 @@ class ExplorationState:
 
         return list(self._path)
 
+    def _declared_names(self, names: Any) -> list[str]:
+        """Leaf names as the things the CALLER asked for.
+
+        A table is located one column at a time, so `name` and `value` are how
+        `specifications` gets found -- they are not fields anybody declared.
+        Reporting them raw is how a build that was busily binding `composition`
+        told the person watching it "found name, value", over and over, naming
+        neither the field it had bound nor the two other tables that happen to
+        declare columns by the same names.
+
+        Shared by `failures` and `_narrate` so the two cannot drift: the rule was
+        written down for the first and quietly not applied to the second.
+        """
+
+        return sorted({self._column_to_table.get(n) or n for n in names})
+
     @property
     def failures(self) -> dict[str, str]:
         """Why each still-unfound field failed, most recent attempt wins.
 
-        A table's unfound columns collapse into ONE entry under the table's own
-        name. Columns are how a table gets located, not something the caller
-        asked for: putting `value` to a person as an unanswered field asks them
-        about a field they never declared, three times over for a three-column
-        table, when what they declared was `specifications`.
+        Keyed by what the caller declared -- see `_declared_names`.
         """
 
         out: dict[str, str] = {}
@@ -512,19 +598,40 @@ class ExplorationState:
 
         if self._on_progress is None:
             return
+
+        bound = self._declared_names(just_found)
+        # A field bound on a step that had already bound it is not progress, it
+        # is a loop -- and it was completely invisible. A build that re-bound
+        # `composition` every thirty seconds for its whole budget reported
+        # "found name, value" each time, which reads like steady progress.
+        again = sorted(f for f in bound if f in self._ever_bound)
+        self._ever_bound.update(bound)
+
         self._steps.append({
             "n": step_record.step_number,
             "goal": step_record.next_goal,
             "actions": [a.get("type", "") for a in step_record.actions],
-            "found": just_found,
+            "found": bound,
+            # Why the fields this step did NOT bind were turned down, in the
+            # verifier's own words. Without it a step says what it achieved and
+            # nothing about what it attempted, which is the whole of "I cannot
+            # see what is happening".
+            "rejected": {
+                field: self.trace.explain(field)
+                for field in self._declared_names(self._unfound)
+                if self.trace.explain(field)
+            },
+            **({"rebound": again} if again else {}),
         })
         del self._steps[:-_MAX_NARRATED_STEPS]
         try:
             await self._on_progress({
                 "phase": "exploring",
                 "steps": list(self._steps),
-                "found": sorted(set(self._all_fields) - set(self._unfound)),
-                "remaining": sorted(self._unfound),
+                "found": self._declared_names(
+                    set(self._all_fields) - set(self._unfound)
+                ),
+                "remaining": self._declared_names(self._unfound),
             })
         except Exception:  # noqa: BLE001 - see docstring
             log.debug("onboard.progress_write_failed", exc_info=True)
@@ -601,6 +708,14 @@ class ExplorationState:
         structured = await self._reader.structured_data()
         snapshot_text = serialize(snapshot).llm_text
 
+        # Exactly what the selector prompts were shown of the page's JSON, kept
+        # once. When a build writes a path that resolves to nothing -- or writes
+        # none at all -- the first question is whether the path was even visible,
+        # and this is the only thing that can answer it. `outline` replaced a raw
+        # 12 000-character prefix of a 352 KB blob for precisely that reason.
+        if not self.page_json_outline:
+            self.page_json_outline = outline(structured, wanted=self._all_fields)
+
         # A field presumed absent is not proposed again. This is the whole of
         # the fix for the loop: the model was being asked, every step, to find
         # something that is not there, and answering honestly ("I could not")
@@ -630,6 +745,7 @@ class ExplorationState:
                 llm_config=self._llm_config,
                 page_url=self._reader.base_url,
                 max_rows=self._max_repeat_iterations,
+                trace=self.trace,
             )
             if binding is not None:
                 row_bindings[table_name] = binding
@@ -656,54 +772,89 @@ class ExplorationState:
                 # `url_resolve` needs it, and without it every url field would
                 # validate a relative href against nothing and pass.
                 page_url=self._reader.base_url,
+                trace=self.trace,
+                # Ask the page where each DOM match lives, so a selector that
+                # reaches across the whole document is refused and one that does
+                # not is confined to the container it found its values in. See
+                # `selector_agent.scope_problem`.
+                probe=self._reader.read_with_scope,
             )
             if scalars
             else {}
         )
-        # A step that found something is evidence the page moved somewhere
+        # Only what actually reached a group counts as found. A column whose
+        # rows could not be iterated resolved to a value and still has no way to
+        # produce rows, so it stays unfound and reaches the assist loop -- rather
+        # than being dropped for having been "verified".
+        #
+        # Freezing happens BEFORE the patience bookkeeping below, and that order
+        # is the whole of the fix. There are two notions of "found" here --
+        # "the selector agent resolved it" and "it became a binding" -- and the
+        # counters used to be advanced from the first one, twenty lines before
+        # `_freeze` decided the second.
+        frozen: set[str] = set()
+        if verified or row_bindings:
+            frozen = await self._freeze(
+                verified, row_bindings, snapshot=snapshot, clicked_ref=clicked_ref,
+                option_tree=step_record.observed_tree,
+            )
+        for name in frozen:
+            self._unfound.pop(name, None)
+            self._failures.pop(name, None)
+
+        # A step that bound something is evidence the page moved somewhere
         # useful, so every field gets its patience back: what was invisible a
-        # moment ago may be on screen now. A step that found nothing is not, so
+        # moment ago may be on screen now. A step that bound nothing is not, so
         # the counters advance.
-        progressed = bool(verified or row_bindings)
-        found = set(verified) | {
+        #
+        # Measured, on a Zara build whose `Composition, care & origin` accordion
+        # never yielded a `RepeatSpec`: its two columns verified on every single
+        # step, so `_misses` was cleared on every single step and
+        # `_MAX_FIELD_ATTEMPTS` could never fire. The field was re-proposed for
+        # the whole budget, and because `progressed` was also true every step,
+        # every OTHER field's counter was pinned at zero too -- one unfreezable
+        # table stopped the build giving up on anything at all. The agent, told
+        # each time that a field it had just located was still missing, spent its
+        # remaining steps hunting for "fresh refs" it did not need.
+        # Resolved to a value and still not bound -- the table whose rows could
+        # not be iterated. Giving up on these is right, but describing them as
+        # absent is not: the value is demonstrably on the page, and telling a
+        # person it "may simply not be there" invites them to drop a field that
+        # only needed the reveal recording. `_freeze` already wrote the accurate
+        # reason, so it is left alone.
+        resolved = set(verified) | {
             column
             for table in row_bindings
             for column in self._all_fields[table].type.columns
         }
+        unbound = resolved - frozen
+
+        progressed = bool(frozen)
         for name in looking_for:
-            if name in found:
+            if name in frozen:
                 self._misses.pop(name, None)
                 continue
             if progressed:
                 self._misses[name] = 0
-                self._failures[name] = "not found yet on this page state"
+                if name not in unbound:
+                    self._failures[name] = "not found yet on this page state"
                 continue
             missed = self._misses.get(name, 0) + 1
             self._misses[name] = missed
             if missed >= _MAX_FIELD_ATTEMPTS:
                 self.presumed_absent.add(name)
-                self._failures[name] = (
-                    f"looked for it {missed} times and found nothing -- it may simply "
-                    "not be on this page"
+                if name not in unbound:
+                    self._failures[name] = (
+                        f"looked for it {missed} times and found nothing -- it may "
+                        "simply not be on this page"
+                    )
+                log.info(
+                    "onboard.field_presumed_absent",
+                    field=name, attempts=missed, resolved_but_unbound=name in unbound,
                 )
-                log.info("onboard.field_presumed_absent", field=name, attempts=missed)
-            else:
+            elif name not in self._failures:
                 self._failures[name] = "no proposed locator resolved on this page state"
 
-        if not verified and not row_bindings:
-            await self._narrate(step_record, [])
-            return
-
-        # Only what actually reached a group counts as found. A column whose
-        # rows could not be iterated resolved to a value and still has no way to
-        # produce rows, so it stays unfound and reaches the assist loop -- rather
-        # than being dropped for having been "verified".
-        frozen = await self._freeze(
-            verified, row_bindings, snapshot=snapshot, clicked_ref=clicked_ref
-        )
-        for name in frozen:
-            self._unfound.pop(name, None)
-            self._failures.pop(name, None)
         await self._narrate(step_record, sorted(frozen))
 
     def _split_by_shape(
@@ -723,6 +874,14 @@ class ExplorationState:
             table = self._column_to_table.get(name)
             if table and table in self._all_fields:
                 tables[table] = self._all_fields[table]
+            elif is_open_map(spec):
+                # A specifications block: rows underneath, a `{name: value}` map
+                # to the caller. It is the same question a table asks -- where
+                # are the rows, and where in a row is each side of the pair --
+                # so it goes to the same place, and `to_object` collapses the
+                # rows afterwards. Asked as a scalar it could only ever return
+                # the block's own heading.
+                tables[name] = spec
             else:
                 scalars[name] = spec
         return scalars, tables
@@ -734,8 +893,25 @@ class ExplorationState:
         *,
         snapshot: Any,
         clicked_ref: str | None,
+        option_tree: Any = None,
     ) -> set[str]:
-        """Returns the names that made it into a group."""
+        """Returns the names that made it into a group.
+
+        `option_tree` is the tree the agent's `clicked_ref` was allocated
+        against, and generalising an option set has to use it rather than
+        `snapshot`.
+
+        The distinction is the one `on_step` documents at length and this used to
+        ignore: a ref is `e{backend_node_id}`, and a click that re-renders a
+        subtree gets every id in it reassigned. `snapshot` is taken *after* the
+        click, so on any React page `find_node(snapshot, clicked_ref)` misses --
+        `generalize_option_locator` and `single_option_fallback` both return
+        None, the table gets no `RepeatSpec`, and it is reported as "could not
+        work out how to iterate its rows" on every step for the rest of the
+        build. `stabilize_action_dict` was fixed to resolve against the observed
+        tree; this was left behind, so the fix only covered recording the step
+        and not binding what the step revealed.
+        """
         rows = dict(row_bindings or {})
         by_table: dict[str, dict[str, list[Candidate]]] = {}
         scalar: dict[str, list[Candidate]] = {}
@@ -792,9 +968,15 @@ class ExplorationState:
             )
             self._group_urls.append(here)
             frozen |= set(binding.bindings)
+            # `to_object` for an open map, so the rows underneath become the
+            # `{name: value}` the caller asked for. Carried out to the recipe's
+            # field spec, which is where `_replay_repeat` looks for it.
+            if binding.field_transform:
+                self.field_transforms[table_name] = binding.field_transform
             log.info(
                 "onboard.table_bound_as_rows",
                 field=table_name, kind=binding.repeat.kind, rows=len(binding.rows),
+                reshape=[t.op for t in binding.field_transform] or None,
             )
 
         for table_name, columns in by_table.items():
@@ -825,13 +1007,16 @@ class ExplorationState:
 
             repeat: RepeatSpec | None = None
             if clicked_ref is not None:
+                # Against the tree the ref came from -- see this method's
+                # docstring for why `snapshot` cannot answer this.
+                tree = option_tree if option_tree is not None else snapshot
                 repeat = capture.generalize_option_locator(
-                    snapshot=snapshot,
+                    snapshot=tree,
                     clicked_ref=clicked_ref,
                     row_field=table_name,
                     max_iterations=self._max_repeat_iterations,
                 ) or capture.single_option_fallback(
-                    snapshot=snapshot, clicked_ref=clicked_ref, row_field=table_name
+                    snapshot=tree, clicked_ref=clicked_ref, row_field=table_name
                 )
             if repeat is None:
                 # `validate_document` rejects a table whose group has no repeat,
@@ -1091,6 +1276,13 @@ async def onboard_recipe(
     checked = with_assertions(
         fields, baseline_assertions(fields, bindings_by_field(state.field_groups))
     )
+    # A field whose rows have to be reshaped before they are the thing the
+    # caller asked for -- an open map, collapsed by `to_object`. Applied here
+    # rather than in `_freeze` because it belongs to the FIELD, and `_freeze`
+    # only ever builds groups.
+    for name, pipeline in state.field_transforms.items():
+        if name in checked:
+            checked[name] = replace(checked[name], transform=pipeline)
 
     recipe = Recipe(
         recipe_id=recipe_id,
@@ -1106,10 +1298,18 @@ async def onboard_recipe(
         health_status="healthy" if not state.unfound_fields else "degraded",
         built_under={"landed_url": verdict.landed_url, "page_verdict": verdict.verdict.value},
     )
+    for field_name, reason in silently_unbound(
+        checked, state.field_groups, state.failures
+    ).items():
+        state.failures[field_name] = reason
+        log.info("onboard.field_silently_unbound", field=field_name)
+
     outcome = OnboardOutcome(
         unresolved=state.failures,
         landed_url=verdict.landed_url,
         steps_taken=len(run_result.steps.steps),
         agent_result=run_result.result,
+        trace=state.trace,
+        page_json_outline=state.page_json_outline,
     )
     return recipe, outcome

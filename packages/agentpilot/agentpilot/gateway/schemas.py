@@ -479,6 +479,19 @@ class RecipeOnboardRequest(BaseModel):
     """More pages of the same kind. Two or more sharpen the derived
     `target.match` from a guess into the URLs' actual shared shape."""
 
+    mode: Literal["auto", "assisted"] = "auto"
+    """Whether to stop for a person before finishing.
+
+    `auto` parks only when something is unresolved or the judge rejected it --
+    a build that bound everything finishes on its own.
+
+    `assisted` always parks, even when every field bound. The failure that
+    motivates it is not an empty field but a *wrong* one: on a page whose own
+    JSON carries a sponsored competitor with the same key names as the real
+    product, a locator can resolve to a perfectly well-typed value from the
+    wrong product and keep doing so forever. Nothing mechanical catches that,
+    and `assisted` is how a person gets to look before the recipe is saved."""
+
 
 class RecipeOnboardResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -735,6 +748,29 @@ class RecipeRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
     data: RecipeRunOut
+
+
+class RecipeRunArtifactOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["trace", "outline", "prompt", "response", "snapshot"]
+    field: str | None = None
+    body: dict[str, Any]
+    created_at: str | None = None
+
+
+class RecipeRunArtifactsResponse(BaseModel):
+    """What a build tried, for looking at after it went wrong.
+
+    Its own endpoint rather than a field on `RecipeRunOut`: the run is polled
+    every few seconds while a build takes minutes, and a trace carries every
+    locator proposed plus a sample of what each one read. Making the status poll
+    carry that would be paying for the diagnosis on every request that does not
+    want it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    success: bool
+    artifacts: list[RecipeRunArtifactOut]
 
 
 class RecipeRunQueuedResponse(BaseModel):

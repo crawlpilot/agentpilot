@@ -25,27 +25,50 @@ export function LiveViewCanvas({ frameUrl, mode, onInputEvent }: Props) {
     // and the actual visible (letterboxed) image content can now differ --
     // the click math has to account for `object-contain`'s own centering
     // and scale-to-fit, not just naively rescale against the outer box.
+    /**
+     * Client-space pointer position in natural-image space, or `null` when the
+     * geometry cannot answer that yet.
+     *
+     * **`null` is not a formality.** Until the first screencast frame has
+     * decoded, `naturalWidth`/`naturalHeight` are 0, so `scale` is `Infinity`,
+     * `naturalWidth * scale` is `NaN`, and every coordinate below comes out
+     * `NaN`. `JSON.stringify({x: NaN})` does not fail — it emits `{"x": null}`
+     * — so the websocket cheerfully sent `{"x": null, "y": null}` and Chrome
+     * answered `Input.dispatchMouseEvent: Invalid parameters`, which propagated
+     * out of the route handler and tore down the live-view socket. The symptom
+     * was simply that clicking in the live view did nothing.
+     *
+     * A zero-width rect (the panel collapsed or still laying out) divides the
+     * other way and produces `Infinity`, which serialises to `null` just the
+     * same. Hence the finite check rather than a check for either cause.
+     */
     const toImageCoords = (e: MouseEvent) => {
       const rect = img.getBoundingClientRect()
+      if (!img.naturalWidth || !img.naturalHeight || !rect.width || !rect.height) return null
       const scale = Math.min(rect.width / img.naturalWidth, rect.height / img.naturalHeight)
-      const renderedWidth = img.naturalWidth * scale
-      const renderedHeight = img.naturalHeight * scale
-      const offsetX = (rect.width - renderedWidth) / 2
-      const offsetY = (rect.height - renderedHeight) / 2
-      return {
-        x: (e.clientX - rect.left - offsetX) / scale,
-        y: (e.clientY - rect.top - offsetY) / scale,
-      }
+      const offsetX = (rect.width - img.naturalWidth * scale) / 2
+      const offsetY = (rect.height - img.naturalHeight * scale) / 2
+      const x = (e.clientX - rect.left - offsetX) / scale
+      const y = (e.clientY - rect.top - offsetY) / scale
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
     }
 
-    const onMouseMove = (e: MouseEvent) => onInputEvent({ kind: 'mousemove', ...toImageCoords(e) })
-    const onMouseDown = (e: MouseEvent) =>
-      onInputEvent({ kind: 'mousedown', ...toImageCoords(e), button: 'left' })
-    const onMouseUp = (e: MouseEvent) =>
-      onInputEvent({ kind: 'mouseup', ...toImageCoords(e), button: 'left' })
+    const onMouseMove = (e: MouseEvent) => {
+      const at = toImageCoords(e)
+      if (at) onInputEvent({ kind: 'mousemove', ...at })
+    }
+    const onMouseDown = (e: MouseEvent) => {
+      const at = toImageCoords(e)
+      if (at) onInputEvent({ kind: 'mousedown', ...at, button: 'left' })
+    }
+    const onMouseUp = (e: MouseEvent) => {
+      const at = toImageCoords(e)
+      if (at) onInputEvent({ kind: 'mouseup', ...at, button: 'left' })
+    }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      onInputEvent({ kind: 'wheel', ...toImageCoords(e), deltaX: e.deltaX, deltaY: e.deltaY })
+      const at = toImageCoords(e)
+      if (at) onInputEvent({ kind: 'wheel', ...at, deltaX: e.deltaX, deltaY: e.deltaY })
     }
     // Keyboard listeners are on `window` (there's no way to focus the `img`
     // element itself), so anything else focusable on the page -- the live

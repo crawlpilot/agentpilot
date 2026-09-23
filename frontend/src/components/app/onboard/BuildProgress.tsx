@@ -104,6 +104,35 @@ export function BuildProgress({ runId, progress }: { runId: string; progress: Ru
                     {step.found.length > 0 && (
                       <p className="mt-0.5 text-success">found {step.found.join(', ')}</p>
                     )}
+                    {/*
+                      A field bound on a step that had already bound it is a
+                      loop, not progress -- and it used to look exactly like
+                      progress, which is how a build could spend its whole
+                      budget re-binding one table with nothing on screen to say
+                      so.
+                    */}
+                    {step.rebound && step.rebound.length > 0 && (
+                      <p className="mt-0.5 text-warning">
+                        re-bound {step.rebound.join(', ')} &mdash; already found on an
+                        earlier step, so this step made no progress
+                      </p>
+                    )}
+                    {/*
+                      What was tried for the fields this step did NOT bind, in
+                      the verifier's own words. Without it a step says what it
+                      achieved and nothing about what it attempted.
+                    */}
+                    {step.rejected &&
+                      Object.entries(step.rejected).map(([field, why]) => (
+                        <details key={field} className="mt-0.5">
+                          <summary className="cursor-pointer select-none text-muted-foreground">
+                            {field} not bound
+                          </summary>
+                          <pre className="mt-0.5 whitespace-pre-wrap pl-3 text-[10px] text-muted-foreground">
+                            {why}
+                          </pre>
+                        </details>
+                      ))}
                   </li>
                 ))}
               </ol>

@@ -15,7 +15,7 @@ from fusion_fixtures import fnode
 
 from agentpilot.agent.state import AgentStepRecord
 from agentpilot.recipe.v2 import onboard as onboard_mod
-from agentpilot.recipe.v2.models import Candidate, Locator
+from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator
 from agentpilot.recipe.v2.onboard import (
     ExplorationState,
     OnboardOutcome,
@@ -54,6 +54,9 @@ class _Reader:
         # "still there"; set it to simulate a step that closed what a previous
         # one opened.
         self.reads: object = "value"
+        # The post-action snapshot, when a test needs it to differ from the
+        # tree the agent's refs were allocated against.
+        self.tree: Any = None
         # What `PageReader.overlay` reports. No dialog, unless a test says so.
         self.dialog: dict[str, Any] = {
             "open": False, "locked": False, "close": None, "label": None,
@@ -69,13 +72,24 @@ class _Reader:
         self.invalidated += 1
 
     async def snapshot(self):
-        return _tree()
+        # The page as it stands AFTER the agent's actions. A test that wants it
+        # to differ from what the agent saw sets `tree`.
+        return self.tree if self.tree is not None else _tree()
 
     async def structured_data(self) -> dict[str, Any]:
         return {"json_ld": [], "metadata": {}, "hydration": {}}
 
     async def read(self, locator):
         return self.reads
+
+    # What the scope probe reports for a DOM locator. `None` means the page said
+    # nothing about where the matches live, which is how every test here behaves
+    # unless it is specifically about scoping -- `verify_locators` then neither
+    # rejects nor narrows, exactly as before the probe existed.
+    scope: dict[str, Any] | None = None
+
+    async def read_with_scope(self, locator):
+        return self.reads, self.scope
 
 
 def _css(selector: str) -> list[Candidate]:
@@ -145,11 +159,48 @@ async def test_a_reveal_belongs_to_the_field_it_revealed_not_to_global_setup(
     assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
 
 
-async def test_groundwork_before_any_field_is_global_setup(patched) -> None:
-    """The cookie banner, which is what `global_setup` exists for: dismissed in
-    a batch that bound nothing, so it is not a reveal for anything and every
-    group needs it."""
+async def test_a_site_popup_is_global_setup_and_a_reveal_is_not(patched) -> None:
+    """The two are different in kind and are kept apart, not sliced out of one
+    list.
 
+    `global_setup` is cleanup after a navigation -- a cookie wall, a newsletter
+    modal, something the site shows on load that nobody asked for and that comes
+    back on every page load. A reveal opens something on an already-loaded page
+    to expose data, and belongs to the field it reveals: run before every group
+    it would have one field's drawer covering another field's control.
+
+    They are told apart by when the page is checked, not by guessing at intent:
+    anything already open before the agent has revealed anything is the page's
+    own doing."""
+
+    reader = _Reader()
+    reader.dialog = {"open": True, "locked": False, "close": "#cookies", "label": "Accept"}
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        reader.dialog = {"open": False, "locked": False, "close": None, "label": None}
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    patched.answer = lambda unfound: {"title": _css("h1")}
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    # The popup is setup, and was cleared then and there so the agent is not
+    # left clicking at a page under an overlay.
+    assert [s.op for s in state.global_setup] == ["click"]
+    assert state.global_setup[0].target is not None
+    assert state.global_setup[0].target.selector == "#cookies"
+    assert dispatched
+
+    # The agent's own click is a reveal, and stays out of setup.
+    assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
+
+
+async def test_a_page_with_no_popup_has_no_global_setup(patched) -> None:
     state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
 
     patched.answer = lambda unfound: {}
@@ -157,9 +208,60 @@ async def test_groundwork_before_any_field_is_global_setup(patched) -> None:
     patched.answer = lambda unfound: {"title": _css("h1")}
     await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
 
-    assert [s.op for s in state.global_setup] == ["click"]
-    # ...and the group's own route starts after it, with the reveal that
-    # actually satisfied the field.
+    assert state.global_setup == []
+    # Both clicks are reveals, and both are in the route.
+    assert [s.op for s in state.field_groups[0].steps] == [
+        "click", "click", "wait_for_selector",
+    ]
+
+
+async def test_a_ref_is_resolved_against_the_tree_the_agent_saw(patched) -> None:
+    """THE reason reveal steps were silently lost.
+
+    A ref is `e{backend_node_id}` and only means anything in the tree it was
+    allocated from. A click that re-renders a subtree gets every id in it
+    reassigned, so resolving the agent's refs against a snapshot taken *after*
+    the click finds nothing -- and `stabilize_action` returning None is
+    indistinguishable from it declining a `navigate`. A whole Walmart build
+    recorded no steps at all and looked exactly like a page that needed none.
+
+    Here the clicked node exists only in the observed tree, which is precisely
+    the case that used to fail."""
+
+    post_click = fnode("main", "Product", "e1", children=[
+        # Re-rendered: same button, new backend node id.
+        fnode("button", "Details", "e999"),
+    ])
+    reader = _Reader()
+    reader.tree = post_click
+    state = ExplorationState(fields=SCALARS, reader=reader, llm_config=None)  # type: ignore[arg-type]
+    patched.answer = lambda unfound: {"title": _css("h1")}
+
+    record = _step([{"type": "ClickAction", "ref": "e5"}])
+    record.observed_tree = _tree()  # `e5` lives here and nowhere else
+
+    await state.on_step(record)
+
+    assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
+    target = state.field_groups[0].steps[0].target
+    assert target is not None and target.name_contains == "Details"
+
+
+async def test_without_an_observed_tree_it_falls_back_rather_than_dropping(
+    patched,
+) -> None:
+    """`observed_tree` is None only when the loop failed to observe. Falling
+    back to the post-action snapshot is better than dropping the batch -- it is
+    what recovers a dismissal on the very first step."""
+
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    patched.answer = lambda unfound: {"title": _css("h1")}
+
+    record = _step([{"type": "ClickAction", "ref": "e5"}])
+    assert record.observed_tree is None
+
+    await state.on_step(record)
+
     assert [s.op for s in state.field_groups[0].steps] == ["click", "wait_for_selector"]
 
 
@@ -287,9 +389,12 @@ async def test_no_wait_is_added_after_a_non_revealing_step(patched) -> None:
     patched.answer = lambda unfound: {"price": _css("#price")}
     await state.on_step(_step([{"type": "WaitAction", "ms": 100}]))
 
-    # No wait synthesised: `wait` is not a revealing op, so there is nothing
-    # whose rendering has to be waited for.
-    assert [s.op for s in state.field_groups[0].steps] == ["wait"]
+    # No wait synthesised for the `wait` step: it is not a revealing op, so
+    # there is nothing whose rendering has to be waited for. The route still
+    # carries the earlier click and the wait that click did earn.
+    assert [s.op for s in state.field_groups[0].steps] == [
+        "click", "wait_for_selector", "wait",
+    ]
 
 
 async def test_a_table_field_gets_a_repeat_and_is_keyed_by_column(patched) -> None:
@@ -322,11 +427,14 @@ async def test_the_representative_click_is_not_also_a_reveal_step(patched) -> No
     assert state.field_groups[0].steps == []
 
 
-async def test_a_dialog_left_open_is_closed_before_the_next_reveal(patched) -> None:
-    """A modal opened to expose one field covers everything under it. The
-    dismissal goes at the head of the NEXT batch, never the tail of this one:
-    the fields just frozen are often inside the dialog, so appending it here
-    would close the thing being read."""
+async def test_a_dialog_the_agent_opened_is_closed_after_it_is_read(patched) -> None:
+    """A modal opened to expose one field covers everything under it, so it has
+    to be closed -- but only once the fields inside it have been read.
+
+    The dismissal therefore lands AFTER this group's reveals and BEFORE the next
+    one's, which is what appending it to the running route gives for free. This
+    is the agent's own dialog, not the site's: it was not there when the page
+    was checked on load."""
 
     reader = _Reader()
     dispatched: list[Any] = []
@@ -340,12 +448,18 @@ async def test_a_dialog_left_open_is_closed_before_the_next_reveal(patched) -> N
         dispatch_step=dispatch,
     )
 
-    reader.dialog = {
-        "open": True, "locked": True, "close": "#close", "label": "Close",
-    }
-    patched.answer = lambda unfound: {"title": _css("h1")}
+    def answer(unfound):
+        # The click opened a dialog; we find out when we come to read.
+        reader.dialog = {
+            "open": True, "locked": True, "close": "#close", "label": "Close",
+        }
+        return {"title": _css("h1")}
+
+    patched.answer = answer
     await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
 
+    # Not mistaken for a site popup: the page was clear when it loaded.
+    assert state.global_setup == []
     # Dispatched, so the agent's remaining steps are not spent under an overlay.
     assert [s.op for s in dispatched] == ["click"]
     # ...and the group that read from inside the dialog kept its own bindings.
@@ -354,12 +468,13 @@ async def test_a_dialog_left_open_is_closed_before_the_next_reveal(patched) -> N
     patched.answer = lambda unfound: {"price": _css("#price")}
     await state.on_step(_step([{"type": "ClickAction", "ref": "e11"}]))
 
-    # The dismissal leads the steps that follow, so the next reveal is not
-    # clicking at a page under an overlay.
-    steps = [s.op for s in state.field_groups[-1].steps]
-    assert steps[0] == "click"
-    assert state.field_groups[-1].steps[0].label is not None
-    assert "close the dialog" in state.field_groups[-1].steps[0].label
+    steps = state.field_groups[-1].steps
+    labels = [s.label or "" for s in steps]
+    closed = next(i for i, label in enumerate(labels) if "close the dialog" in label)
+    # After the reveal it followed, and before the next one -- so the second
+    # click is not aimed at a page under an overlay.
+    assert steps[closed - 1].op == "wait_for_selector"
+    assert steps[closed + 1].op == "click"
 
 
 async def test_no_dialog_means_no_step(patched) -> None:
@@ -400,8 +515,11 @@ async def test_a_table_read_as_rows_keeps_the_click_that_revealed_it(patched) ->
     group = state.field_groups[0]
     assert group.repeat is not None and group.repeat.kind == "dom_rows"
     assert sorted(group.bindings) == ["size", "stock"]
-    # The click became global_setup rather than being thrown away.
-    assert [s.op for s in state.global_setup] == ["click"]
+    # The click is a reveal for these rows, so it stays in the group's route --
+    # not thrown away, and not promoted into `global_setup` where every other
+    # group would perform it too.
+    assert state.global_setup == []
+    assert [s.op for s in group.steps] == ["click", "wait_for_selector"]
     # The columns are satisfied by the repeat; only the scalars nobody proposed
     # are still outstanding.
     assert sorted(state.unfound_fields) == ["price", "title"]
@@ -764,3 +882,271 @@ async def test_giving_up_on_one_field_does_not_stop_the_others(patched) -> None:
     patched.answer = count
     await state.on_step(_step([]))
     assert calls == []
+
+
+# --- a field that vanished ---------------------------------------------------
+
+
+def _spec(name: str, **kw) -> FieldSpec:
+    return FieldSpec(name=name, type=TypeSpec(**kw) if kw else TypeSpec())
+
+
+def test_a_field_bound_by_no_group_and_blamed_by_nothing_is_reported() -> None:
+    """Seen on a real Zara build: `origin` was declared, appeared in no group,
+    and was in no failure list. The recipe promised it, no run would ever
+    produce it, and nothing anywhere said so."""
+
+    from agentpilot.recipe.v2.onboard import silently_unbound
+
+    fields = {"title": _spec("title"), "origin": _spec("origin", kind="object")}
+    groups = [FieldGroup(group_id="g0", field_names=["title"],
+                         bindings={"title": _css("h1")})]
+
+    unbound = silently_unbound(fields, groups, failures={})
+    assert list(unbound) == ["origin"]
+    assert "never located on this page" in unbound["origin"]
+
+
+def test_a_field_already_blamed_is_not_blamed_twice() -> None:
+    """Its own reason is more specific than this sweep's, and overwriting it
+    would replace "the model proposed nothing" with a shrug."""
+
+    from agentpilot.recipe.v2.onboard import silently_unbound
+
+    fields = {"price": _spec("price")}
+    unbound = silently_unbound(fields, [], failures={"price": "no locator resolved"})
+    assert unbound == {}
+
+
+def test_a_table_is_satisfied_by_its_columns() -> None:
+    """A table is bound one column at a time and its own name may never appear
+    in `bindings`, so looking only there would report every working table as
+    missing."""
+
+    from agentpilot.recipe.v2.onboard import silently_unbound
+
+    fields = {
+        "material": _spec(
+            "material", kind="table",
+            columns={"material": TypeSpec(), "percentage": TypeSpec()},
+        )
+    }
+    groups = [FieldGroup(
+        group_id="g0", field_names=["material"],
+        bindings={"material": _css(".m"), "percentage": _css(".p")},
+    )]
+    assert silently_unbound(fields, groups, failures={}) == {}
+
+
+# --- giving up on a field that verifies but cannot be bound ------------------
+
+MEASUREMENTS = {
+    "title": FieldSpec(name="title", type=TypeSpec(kind="scalar")),
+    "measurements": FieldSpec(
+        name="measurements",
+        type=TypeSpec(kind="table", columns={"name": TypeSpec(), "value": TypeSpec()}),
+    ),
+}
+
+
+@pytest.fixture
+def unbindable_table(monkeypatch):
+    """A table whose columns always verify and which can never be frozen.
+
+    The shape of a real Zara build: `propose_rows` declines because the
+    measurements block is not row-shaped in the page's JSON, so the columns fall
+    through to the per-column path, resolve there, and then need a `RepeatSpec`
+    that only a resolvable clicked ref can produce.
+    """
+
+    async def no_rows(spec, **kwargs):
+        return None
+
+    async def always_verifies(fields, **kwargs):
+        return {name: _css(f".{name}") for name in fields}
+
+    monkeypatch.setattr(onboard_mod, "propose_rows", no_rows)
+    monkeypatch.setattr(onboard_mod, "propose_and_verify", always_verifies)
+
+
+async def test_a_field_that_verifies_but_never_binds_is_eventually_given_up_on(
+    unbindable_table,
+) -> None:
+    """THE loop this guards against.
+
+    There are two notions of "found" -- "the selector agent resolved it" and "it
+    became a binding" -- and the patience counter used to advance from the first
+    while `_freeze` decided the second. So a column that verified every step had
+    its counter cleared every step, `_MAX_FIELD_ATTEMPTS` could never fire, and
+    the agent was told for the whole budget that a field it had just located was
+    still missing. Its steps went on hunting for "fresh refs" it did not need.
+    """
+
+    state = ExplorationState(
+        fields=MEASUREMENTS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+
+    for _ in range(onboard_mod._MAX_FIELD_ATTEMPTS + 1):
+        await state.on_step(_step([]))   # findelements/findtext: no click
+
+    # `_look` skips anything in `presumed_absent`, so this is what hands the
+    # agent's remaining steps back instead of spending them re-finding a column
+    # that has already been located and cannot be bound.
+    assert state.presumed_absent == {"name", "value"}
+    # And the reason a person is given says which of the two things went wrong.
+    # Reported under the TABLE's name, not the columns': `measurements` is what
+    # the caller declared, and `value` is how it gets located.
+    assert "could not work out how to iterate" in state.failures["measurements"]
+
+
+async def test_one_unbindable_table_does_not_pin_every_other_counter(
+    unbindable_table, monkeypatch,
+) -> None:
+    """`progressed` was computed from `verified` too, so a table that verified
+    and froze nothing counted as progress -- and reset the counter of every
+    other field on the page. One unbindable table stopped the build giving up on
+    anything at all."""
+
+    async def only_columns_verify(fields, **kwargs):
+        return {name: _css(f".{name}") for name in fields if name != "sku"}
+
+    monkeypatch.setattr(onboard_mod, "propose_and_verify", only_columns_verify)
+
+    fields = {**MEASUREMENTS, "sku": FieldSpec(name="sku", type=TypeSpec(kind="scalar"))}
+    del fields["title"]
+    state = ExplorationState(
+        fields=fields, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+
+    for _ in range(onboard_mod._MAX_FIELD_ATTEMPTS + 1):
+        await state.on_step(_step([]))
+
+    assert "sku" in state.presumed_absent
+
+
+async def test_a_clicked_ref_is_generalised_against_the_tree_it_came_from(
+    patched,
+) -> None:
+    """A ref is `e{backend_node_id}`, and a click that re-renders a subtree gets
+    every id in it reassigned. `snapshot` is taken AFTER the click, so resolving
+    the ref there misses on any React page -- which is exactly how an accordion
+    reveal produced no `RepeatSpec` and reported "could not work out how to
+    iterate its rows" for the whole build.
+
+    `stabilize_action_dict` was fixed to use the observed tree; `_freeze` was
+    left resolving against the post-action snapshot.
+    """
+
+    reader = _Reader()
+    # The post-action page: the clicked node's id has been reassigned, so the
+    # ref the agent used resolves to nothing here.
+    reader.tree = fnode("main", "Product", "e900", children=[
+        fnode("group", "Select size", "e901", children=[
+            fnode("button", "S", "e902"),
+            fnode("button", "M", "e903"),
+        ]),
+    ])
+
+    state = ExplorationState(
+        fields=WITH_TABLE, reader=reader, llm_config=None,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {"size": _css(".size"), "stock": _css(".stock")}
+
+    record = _step([{"type": "ClickAction", "ref": "e12"}])
+    # `e12` exists in the tree the agent chose from, and not in the page after.
+    record.observed_tree = _tree()
+    await state.on_step(record)
+
+    table_groups = [g for g in state.field_groups if g.repeat is not None]
+    assert table_groups, "the table froze no group -- the ref was resolved against the wrong tree"
+    assert table_groups[0].repeat is not None
+
+
+# --- what a person watching the build is told --------------------------------
+
+THREE_TABLES = {
+    "title": FieldSpec(name="title", type=TypeSpec(kind="scalar")),
+    "composition": FieldSpec(
+        name="composition",
+        type=TypeSpec(kind="table", columns={"name": TypeSpec(), "value": TypeSpec()}),
+    ),
+    "measurements": FieldSpec(
+        name="measurements",
+        type=TypeSpec(kind="table", columns={"name": TypeSpec(), "value": TypeSpec()}),
+    ),
+}
+
+
+async def test_progress_names_the_field_the_caller_asked_for(monkeypatch) -> None:
+    """A table is located one column at a time, so `name` and `value` are how
+    `composition` gets found -- not fields anybody declared.
+
+    Reporting them raw is what a real build did for its entire budget: busily
+    binding `composition` every thirty seconds and telling the person watching
+    "found name, value", naming neither the field it had bound nor the second
+    table that declares columns by the same names. `failures` has collapsed
+    columns into their table since it was written; the progress payload never
+    applied the same rule.
+    """
+
+    async def no_rows(spec, **kwargs):
+        return None
+
+    async def binds_columns(fields, **kwargs):
+        return {n: _css(f".{n}") for n in fields}
+
+    monkeypatch.setattr(onboard_mod, "propose_rows", no_rows)
+    monkeypatch.setattr(onboard_mod, "propose_and_verify", binds_columns)
+
+    seen: list[dict[str, Any]] = []
+
+    async def sink(payload: dict[str, Any]) -> None:
+        seen.append(payload)
+
+    state = ExplorationState(
+        fields=THREE_TABLES, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        on_progress=sink,
+    )
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert seen, "nothing was reported"
+    step = seen[-1]["steps"][-1]
+    # Never the column names.
+    assert "value" not in step["found"]
+    assert "value" not in seen[-1]["remaining"]
+    # The things the caller actually declared.
+    assert set(seen[-1]["remaining"]) <= {"composition", "measurements", "title"}
+
+
+async def test_a_field_bound_twice_is_reported_as_a_repeat(monkeypatch) -> None:
+    """A field bound on a step that had already bound it is a loop, not
+    progress -- and it looked identical to progress, which is why a build could
+    spend its whole budget re-binding one table without anyone being able to
+    tell."""
+
+    async def rows_always_bind(spec, **kwargs):
+        return None
+
+    async def binds(fields, **kwargs):
+        return {n: _css(f".{n}") for n in fields}
+
+    monkeypatch.setattr(onboard_mod, "propose_rows", rows_always_bind)
+    monkeypatch.setattr(onboard_mod, "propose_and_verify", binds)
+
+    seen: list[dict[str, Any]] = []
+
+    async def sink(payload: dict[str, Any]) -> None:
+        seen.append(payload)
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        on_progress=sink,
+    )
+    await state.on_step(_step([]))
+    first = seen[-1]["steps"][-1]
+    assert "rebound" not in first, "a first binding is not a repeat"
+
+    # Put them back as if the loop re-proposed them, and bind again.
+    state._unfound.update(SCALARS)
+    await state.on_step(_step([]))
+    assert seen[-1]["steps"][-1].get("rebound"), "a re-bind was reported as fresh progress"

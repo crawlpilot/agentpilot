@@ -1,15 +1,18 @@
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Play, Wand2, Code } from 'lucide-react'
+import { Play, Wand2, Code, FileJson } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge, type BadgeProps } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { CopyButton } from '@/components/app/CopyButton'
 import { EmptyState } from '@/components/app/EmptyState'
+import { RunFieldDetails } from '@/components/app/RunFieldDetails'
+import { BuildTracePanel } from '@/components/app/BuildTracePanel'
 import { useRunRecipe, useHealRecipe, useCodegenRecipe, useRecipeRun } from '@/hooks/useRecipes'
 import { useRecentRuns } from '@/hooks/useRecentRuns'
 import { useToast } from '@/components/ui/toast'
 import type { RecipeCodegenLanguage, RecipeRunKind, RecipeRunStatus } from '@/lib/api/types'
+import type { AssertionResult, FieldProvenance, FieldStatus } from '@/lib/recipe/types'
 
 // Only what the v2 generator can actually emit. `node-puppeteer` and
 // `python-requests-only` exist in the v1 module and are each one language pack
@@ -36,9 +39,23 @@ function statusVariant(status: RecipeRunStatus): NonNullable<BadgeProps['variant
   }
 }
 
-export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; urlPattern: string }) {
+export function RecipeRunPanel({
+  recipeId,
+  urlPattern,
+  document: recipeDocument,
+}: {
+  recipeId: string
+  urlPattern: string
+  /**
+   * The v2 document — what replay actually executes, and what the marketplace
+   * publishes as a template. Passed down rather than fetched again here: the
+   * detail page already has it.
+   */
+  document?: Record<string, unknown> | null
+}) {
   const [searchParams, setSearchParams] = useSearchParams()
   const [language, setLanguage] = useState<RecipeCodegenLanguage>('python-playwright')
+  const [showRaw, setShowRaw] = useState(false)
 
   const activeRunId = searchParams.get('runId')
 
@@ -90,6 +107,20 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
   // at the place that takes URLs instead of failing in the worker.
   const hasOwnUrl = urlPattern.trim().length > 0
 
+  // Serialized once per render rather than inside the collapsed branch, so the
+  // copy button has something to copy the moment the panel opens.
+  const hasDocument = Boolean(recipeDocument && Object.keys(recipeDocument).length > 0)
+  const rawDocument = hasDocument ? JSON.stringify(recipeDocument, null, 2) : ''
+
+  // The worker puts everything about *how* a value was collected into
+  // `field_failures` -- which is a misleading name for it, but it is the column
+  // that exists and the shape a caller reading the API already gets.
+  const failures = (run?.field_failures ?? {}) as Record<string, unknown>
+  const provenance = failures.provenance as Record<string, FieldProvenance> | undefined
+  const fieldStatus = (failures.field_status ?? {}) as Record<string, FieldStatus>
+  const runAssertions = (failures.assertions ?? {}) as Record<string, AssertionResult[]>
+  const runTruncated = (failures.truncated ?? {}) as Record<string, boolean>
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -139,7 +170,44 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
             Generate
           </Button>
         </div>
+        {/*
+          The document replay actually executes, next to the button that runs
+          it. A run that collects the wrong value is a question about the
+          recipe -- which locator won, what its `within` was scoped to, which
+          steps the group carries -- and until this was here the only way to
+          read that was the studio or a curl against the API.
+        */}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setShowRaw((open) => !open)}
+          disabled={!hasDocument}
+          aria-expanded={showRaw}
+          title={
+            hasDocument
+              ? undefined
+              : 'This recipe has no v2 document yet — it has not finished building.'
+          }
+        >
+          <FileJson className="size-3.5" />
+          {showRaw ? 'Hide raw recipe' : 'Raw recipe'}
+        </Button>
       </div>
+
+      {showRaw && hasDocument && (
+        <div className="rounded-md border border-border">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
+            <span className="text-xs text-muted-foreground">
+              The v2 document &mdash; what replay executes, and what the marketplace
+              publishes as a template.
+            </span>
+            <CopyButton text={rawDocument} />
+          </div>
+          <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap p-3 text-xs">
+            {rawDocument}
+          </pre>
+        </div>
+      )}
 
       {!hasOwnUrl && (
         <p className="text-xs text-muted-foreground">
@@ -159,6 +227,13 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
               {run.status}
             </Badge>
           </div>
+
+          {/*
+            Shown for any focused run, including a failed one -- that is the run
+            whose trace matters most, and it is exactly the case where `data` is
+            empty and there is otherwise nothing on screen to look at.
+          */}
+          {activeRunId && <BuildTracePanel recipeId={recipeId} runId={activeRunId} />}
 
           {run.status === 'failed' && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
@@ -187,6 +262,25 @@ export function RecipeRunPanel({ recipeId, urlPattern }: { recipeId: string; url
             </div>
           ) : run.status === 'completed' ? (
             <div className="flex flex-col gap-2">
+              {/*
+                Which selector produced each value, before the values
+                themselves. A recipe binds a CHAIN per field, and the raw data
+                dump below shows only what came out the end of it -- so a value
+                that looks wrong used to raise a question nothing on this page
+                could answer.
+              */}
+              {provenance && (
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs text-muted-foreground">Selectors that matched</span>
+                  <RunFieldDetails
+                    data={(run.data ?? {}) as Record<string, unknown>}
+                    provenance={provenance}
+                    fieldStatus={fieldStatus}
+                    assertions={runAssertions}
+                    truncated={runTruncated}
+                  />
+                </div>
+              )}
               <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-border p-3 text-xs">
                 {JSON.stringify(run.data ?? {}, null, 2)}
               </pre>

@@ -258,11 +258,24 @@ async def _replay_repeat(
     result.field_status[field_name] = (
         "suspect" if (truncated or reshape_failed) else "resolved"
     )
+    # A table has no candidate chain -- it has a rows locator and one binding
+    # per column, and those are what a person debugging it needs to see. The
+    # misalignment `rows.py` exists to prevent (a column resolving against the
+    # whole page rather than inside a row) is visible in exactly this shape:
+    # a column selector that is not relative.
     result.provenance[field_name] = {
         "candidate": 0,
+        "candidates": 1,
         "source": "json" if repeat.kind == "json" else "dom",
         "variant": result.variant_id,
         "rows": len(rows),
+        "repeat_kind": repeat.kind,
+        "locator": repeat.rows_locator.to_dict() if repeat.rows_locator else None,
+        "columns": {
+            name: chain[0].locator.to_dict()
+            for name, chain in group.bindings.items()
+            if chain
+        },
     }
 
 
@@ -478,10 +491,20 @@ async def _record(
         result.data[field_name] = res.value
         if spec.emit_raw and res.raw is not None:
             result.data[f"{field_name}_raw"] = res.raw
+        # Which selector actually produced this, in enough detail to act on.
+        # `source` is only the locator's *kind*, and on a page with four css
+        # candidates the kind is the one thing that does not distinguish them --
+        # so the winning locator and the chain around it travel with the value.
         result.provenance[field_name] = {
             "candidate": res.candidate_index,
+            "candidates": res.considered,
             "source": res.source,
             "variant": tctx.variant,
+            "locator": res.locator.to_dict() if res.locator is not None else None,
+            # The losers. A field that fell through to candidate 2 is breaking,
+            # and what happened to 0 and 1 is what says whether the selector
+            # stopped matching or its value stopped surviving the cleanup.
+            "attempts": [a.to_dict() for a in res.attempts],
         }
 
     status = res.status

@@ -327,10 +327,42 @@ export interface Recipe {
 export type FieldStatus = 'resolved' | 'fallback' | 'suspect' | 'empty' | 'failed'
 export type RunOutcome = 'ok' | 'partial' | 'failed' | 'blocked'
 
+/** One candidate that was tried during a run, and what became of it. */
+export interface CandidateAttempt {
+  index: number
+  /** `won`, `empty`, `raised`, `transform_failed`, or `cleaned_to_nothing`. */
+  outcome: string
+  locator: Record<string, unknown>
+  detail?: string
+}
+
 export interface FieldProvenance {
   candidate: number
   source: LocatorKind
   variant: string | null
+  /**
+   * How many candidates applied. Without it `candidate: 2` does not say whether
+   * the chain has one option left or is comfortably in the middle — and
+   * "falling through to the last one" is the interesting case.
+   */
+  candidates?: number
+  /**
+   * The locator that actually produced the value. `source` is only its *kind*,
+   * and on a field with four css candidates the kind is the one thing that does
+   * not distinguish them.
+   */
+  locator?: Record<string, unknown> | null
+  /**
+   * The losers. A field that fell through to candidate 2 is breaking, and what
+   * happened to 0 and 1 says whether the selector stopped matching or its value
+   * stopped surviving the cleanup — different breakages, different fixes.
+   */
+  attempts?: CandidateAttempt[]
+  /** Table fields only: how the rows were found, and how many came back. */
+  rows?: number
+  repeat_kind?: 'json' | 'dom_rows' | 'dom'
+  /** Table fields only: the per-column locator, resolved inside one row. */
+  columns?: Record<string, Record<string, unknown>>
 }
 
 export interface AssertionResult {

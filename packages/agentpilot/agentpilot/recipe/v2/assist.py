@@ -70,13 +70,26 @@ class PendingAsk:
     reveal step is `optional: true, on_error: continue` by construction, so a
     step that matched nothing is otherwise completely silent."""
 
+    tried: str = ""
+    """What the build already attempted for this field, and why each attempt was
+    rejected -- from `BuildTrace.explain`.
+
+    `reason` says what is wrong now; this says what has already been ruled out.
+    A person told "read 'Specifications' but this field is a table" knows the
+    pick landed on the heading; one told only "not found" has to rediscover
+    that. The strings come straight from `verify_locators` and
+    `rows._problems_with`, which write them to be read."""
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "field": self.field,
             "kind": self.kind,
             "reason": self.reason,
             "step_trace": self.step_trace,
         }
+        if self.tried:
+            out["tried"] = self.tried
+        return out
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PendingAsk:
@@ -85,6 +98,7 @@ class PendingAsk:
             kind=d.get("kind", "unresolved"),
             reason=str(d.get("reason") or ""),
             step_trace=list(d.get("step_trace") or []),
+            tried=str(d.get("tried") or ""),
         )
 
 
@@ -107,11 +121,20 @@ class Resolution:
     live page."""
 
     steps: list[Step] = field(default_factory=list)
-    """`steps`: what the person did to the page, recorded in their browser.
+    """What the person did to the page, recorded in their browser.
 
     The answer to "how do I get to it?", which pointing at an element cannot
     give. A field behind three clicks, a scroll and a dismissal has no selector
-    that describes the route -- and this is the route."""
+    that describes the route -- and this is the route.
+
+    **A modifier, not only an action of its own.** `action="steps"` means "run
+    these and let the model look at what they revealed"; carried alongside
+    `pick` or `scope` it means "run these FIRST, then here is the element or the
+    region". The second is what a specifications accordion actually needs, and
+    splitting it across two round trips was a dead end: `scope` alone reloads
+    the page, finds the accordion shut, and can only answer "something has to
+    open it first" -- while `steps` alone throws away the region the person
+    pointed at and hands the model the whole page again."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Resolution | None:
@@ -265,6 +288,7 @@ def build_asks(
     *,
     absent: dict[str, str] | None = None,
     step_trace: list[dict[str, Any]] | None = None,
+    tried: dict[str, str] | None = None,
 ) -> list[PendingAsk]:
     """The asks, easiest to answer first.
 
@@ -283,18 +307,23 @@ def build_asks(
     """
 
     trace = list(step_trace or [])
+    attempted = tried or {}
+
+    def ask(name: str, kind: AskKind, reason: str) -> PendingAsk:
+        return PendingAsk(
+            field=name, kind=kind, reason=reason, step_trace=trace,
+            tried=attempted.get(name, ""),
+        )
+
     gone = absent or {}
     asks = [
-        PendingAsk(field=name, kind="rejected", reason=reason, step_trace=trace)
+        ask(name, "rejected", reason)
         for name, reason in sorted(rejected.items())
         if name not in gone
     ]
+    asks += [ask(name, "absent", reason) for name, reason in sorted(gone.items())]
     asks += [
-        PendingAsk(field=name, kind="absent", reason=reason, step_trace=trace)
-        for name, reason in sorted(gone.items())
-    ]
-    asks += [
-        PendingAsk(field=name, kind="unresolved", reason=reason, step_trace=trace)
+        ask(name, "unresolved", reason)
         for name, reason in sorted(unresolved.items())
         if name not in rejected and name not in gone
     ]
@@ -361,7 +390,11 @@ async def apply_resolutions(
     unsettled: dict[str, str] = {}
 
     skips = [r for r in resolutions.values() if r.action == "skip"]
-    picks = [r for r in resolutions.values() if r.action == "pick"]
+    # A pick carrying a recorded route is a different operation: it has to be
+    # verified against the page that route produces, not against the state the
+    # person's own session happened to be in. See `_apply_pick_after_steps`.
+    picks = [r for r in resolutions.values() if r.action == "pick" and not r.steps]
+    routed_picks = [r for r in resolutions.values() if r.action == "pick" and r.steps]
     scopes = [r for r in resolutions.values() if r.action == "scope"]
     recordings = [r for r in resolutions.values() if r.action == "steps"]
     describes = {r.field: r.hint for r in resolutions.values() if r.action == "describe"}
@@ -369,6 +402,14 @@ async def apply_resolutions(
     for resolution in skips:
         recipe = drop_field(recipe, resolution.field)
         log.info("assist.field_skipped", field=resolution.field)
+
+    for resolution in routed_picks:
+        recipe, problem = await _apply_pick_after_steps(
+            recipe, resolution, url=url, session=session, registry=registry,
+            driver=driver,
+        )
+        if problem:
+            unsettled[resolution.field] = problem
 
     if picks:
         reader = PageReader(
@@ -426,6 +467,77 @@ async def apply_resolutions(
                 unsettled[name] = "could not find it from that description either"
 
     return recipe, unsettled
+
+
+async def _apply_pick_after_steps(
+    recipe: Recipe,
+    resolution: Resolution,
+    *,
+    url: str,
+    session: InteractiveSession,
+    registry: RegistryProtocol,
+    driver: BrowserDriver,
+) -> tuple[Recipe, str | None]:
+    """Bind an element a person pointed at, behind the route they recorded to it.
+
+    A plain `pick` is verified against the live session, because the person is
+    looking at it and that is the page they picked from. The moment a route
+    comes with it that stops being true: the route exists precisely because the
+    element is not there on load, so verifying against a session that already
+    has it open would certify a locator that returns nothing on every real run.
+    So this reloads, replays the route, and only then reads what they picked --
+    the same discipline `_apply_scope` follows, for the same reason.
+    """
+
+    from agentpilot.recipe.v2.review import restore_page
+    from agentpilot.recipe.v2.schema import all_leaf_fields
+    from agentpilot.recipe.v2.steps import run_steps
+    from agentpilot.recipe.v2.transform import TransformContext
+
+    leaves = all_leaf_fields(recipe.fields)
+    spec = leaves.get(resolution.field)
+    if spec is None:
+        return recipe, "that field is not in this recipe any more"
+
+    reader, ctx = await restore_page(
+        recipe, url, session=session, registry=registry, driver=driver
+    )
+    group, _key = _group_of(recipe, resolution.field)
+    if group is not None and group.steps:
+        await run_steps(group.steps, ctx)
+    trace, _policy = await run_steps(resolution.steps, ctx)
+    reader.invalidate()
+
+    ran = [o for o in trace if o.status in ("ok", "recovered")]
+    if not ran:
+        return recipe, (
+            "none of the recorded steps found anything on a freshly loaded page. "
+            "The route probably starts from something your session already had "
+            "open -- reload the page and record it again from the top."
+        )
+
+    resolving, reason = await verify_locators(
+        resolution.locators,
+        verify=reader.read,
+        spec=spec,
+        ctx=TransformContext(url=url),
+    )
+    if not resolving:
+        return recipe, (
+            reason
+            or f"those steps ran ({len(ran)} of {len(resolution.steps)} did "
+            "something), but the element you picked did not resolve afterwards"
+        )
+
+    log.info(
+        "assist.bound_from_recording",
+        field=resolution.field, steps=len(resolution.steps), ran=len(ran),
+        picked=True,
+    )
+    recipe = _bind(
+        recipe, resolution.field, rank_candidates([v.locator for v in resolving])
+    )
+    return _with_steps(recipe, resolution.field, resolution.steps), None
 
 
 async def _apply_steps(
@@ -513,6 +625,7 @@ async def _apply_steps(
         llm_config=llm_config,
         verify=reader.read,
         page_url=url,
+        probe=reader.read_with_scope,
     )
     candidates = verified.get(resolution.field)
     if not candidates:
@@ -577,12 +690,19 @@ async def _apply_scope(
     pointing at it. Binding against that state produces a locator that verifies
     here and returns nothing on every real run, because replay loads the page
     closed. So the page is reloaded and the recipe's own steps re-run, and the
-    region has to survive that. If it does not, the answer is not "bad pick" but
-    "we are missing the step that opens it", and that is what the person is told.
+    region has to survive that.
 
-    **Then the model looks inside it.** They supplied the region, which is the
-    part they know; the model supplies which node in it holds the value, which is
-    the part it is good at. See `propose_within`.
+    **Then whatever the person recorded runs, before the region is looked for.**
+    That is what makes the accordion case answerable at all. Told "something has
+    to open it first", the honest reply is a click -- and until it could be sent
+    with the pick, the two halves of one answer had nowhere to meet: `scope`
+    alone reloads into a shut accordion, `steps` alone discards the region. The
+    recorded route is checked here and, if it holds, written onto the group, so
+    replay opens the section the same way.
+
+    **Then the model looks inside it.** They supplied the region and the route,
+    which are the parts they know; the model supplies which node in it holds the
+    value, which is the part it is good at. See `propose_within`.
     """
 
     from agentpilot.recipe.v2.review import restore_page
@@ -609,34 +729,81 @@ async def _apply_scope(
     group, _key = _group_of(recipe, resolution.field)
     if group is not None and group.steps:
         await run_steps(group.steps, ctx)
+
+    ran: list[Any] = []
+    if resolution.steps:
+        trace, _policy = await run_steps(resolution.steps, ctx)
+        ran = [o for o in trace if o.status in ("ok", "recovered")]
     reader.invalidate()
 
     if not await _resolves(reader, scope):
-        return recipe, (
-            "that section is not on the page when it loads fresh -- something has "
-            "to open it first. Point at whatever you clicked to reveal it."
-        )
+        return recipe, _why_the_region_is_missing(resolution, ran)
 
     if is_table:
-        return await _bind_rows_in(
+        recipe, problem = await _bind_rows_in(
             recipe, spec, scope,
             reader=reader, llm_config=llm_config, url=url, html=resolution.html,
         )
+    else:
+        verified = await propose_within(
+            {resolution.field: _shaped(spec, resolution.shape)},
+            scope=scope,
+            fragment_html=resolution.html,
+            llm_config=llm_config,
+            verify=reader.read,
+            page_url=url,
+            probe=reader.read_with_scope,
+        )
+        candidates = verified.get(resolution.field)
+        if candidates:
+            recipe.fields[resolution.field] = _shaped(spec, resolution.shape)
+            recipe = _bind(recipe, resolution.field, candidates)
+            problem = None
+        else:
+            problem = "nothing in that section resolved to a value for this field"
 
-    verified = await propose_within(
-        {resolution.field: _shaped(spec, resolution.shape)},
-        scope=scope,
-        fragment_html=resolution.html,
-        llm_config=llm_config,
-        verify=reader.read,
-        page_url=url,
+    if problem is not None:
+        return recipe, problem
+
+    # The route travels with the binding. Without this the recipe would carry a
+    # locator scoped to a section that replay never opens, which resolves here
+    # and returns nothing on every real run.
+    if resolution.steps:
+        log.info(
+            "assist.bound_from_recording",
+            field=resolution.field, steps=len(resolution.steps), ran=len(ran),
+            scoped=True,
+        )
+        recipe = _with_steps(recipe, resolution.field, resolution.steps)
+    return recipe, None
+
+
+def _why_the_region_is_missing(resolution: Resolution, ran: list[Any]) -> str:
+    """What to tell a person whose picked region is not on a freshly loaded page.
+
+    Three different situations, needing three different things from them, and
+    reporting the first for all three is what made the accordion case look
+    unanswerable.
+    """
+
+    if not resolution.steps:
+        return (
+            "that section is not on the page when it loads fresh -- something has "
+            "to open it first. Record whatever you clicked to reveal it and send "
+            "it along with the pick."
+        )
+    if not ran:
+        return (
+            "none of the recorded steps found anything on a freshly loaded page. "
+            "The route probably starts from something your session already had "
+            "open -- reload the page and record it again from the top."
+        )
+    return (
+        f"those steps ran ({len(ran)} of {len(resolution.steps)} did something), "
+        "but the section you pointed at still was not on the page afterwards. "
+        "The route may be missing a step, or the region may only exist in the "
+        "state your own session was already in."
     )
-    candidates = verified.get(resolution.field)
-    if not candidates:
-        return recipe, "nothing in that section resolved to a value for this field"
-
-    recipe.fields[resolution.field] = _shaped(spec, resolution.shape)
-    return _bind(recipe, resolution.field, candidates), None
 
 
 async def _bind_rows_in(

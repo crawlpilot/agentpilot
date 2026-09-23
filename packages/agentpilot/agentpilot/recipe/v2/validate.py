@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentpilot.recipe.v2.locator_lint import (
+    partial_case_fold_reason,
+    xpath_escape_reason,
+)
+
 
 def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return `(errors, warnings)` for a v2 document."""
@@ -109,6 +114,25 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
                         errors.append(
                             f'{at}: scoped to variant "{variant}", which no variant declares'
                         )
+
+                    # The agent is held to this at proposal time; a hand-authored
+                    # or hand-edited recipe reaches replay without passing
+                    # through any of that, so the rule is stated once more here.
+                    # An expression on one of these axes cannot be contained by
+                    # the `within` beside it, which makes the scope a comment
+                    # rather than a constraint.
+                    if locator.get("kind") == "xpath":
+                        escape = xpath_escape_reason(
+                            str(locator.get("selector") or ""),
+                            scoped=bool(locator.get("within")),
+                        )
+                        if escape is not None:
+                            errors.append(f"{at}: {escape}")
+                        fold = partial_case_fold_reason(
+                            str(locator.get("selector") or "")
+                        )
+                        if fold is not None:
+                            warnings.append(f"{at}: {fold}")
 
         repeat = group.get("repeat")
         if repeat:

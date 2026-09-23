@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
+log = structlog.get_logger(__name__)
+
 if TYPE_CHECKING:
     from psycopg_pool import AsyncConnectionPool
 
@@ -115,6 +119,13 @@ class RecipeRunOut:
     """What a long-running build is doing right now -- which fields it has
     found, what it is trying next. Written as it goes, so a caller polling a
     run that takes minutes has something to show."""
+    params: dict[str, Any] | None = None
+    """The run's inputs. Read back mid-run rather than only at claim time,
+    because `request_assist` writes into it while the build is running."""
+    parked_until: datetime | None = None
+    """While `status` is `needs_input`: when the park gives up. Pushed out by
+    `touch_park` while somebody has the assist panel open, so the worker re-reads
+    it rather than holding the value computed when it parked."""
 
 
 def _recipe_from_row(row: dict[str, Any]) -> RecipeOut:
@@ -155,6 +166,8 @@ def _run_from_row(row: dict[str, Any]) -> RecipeRunOut:
         url=row.get("url"),
         pending_asks=row.get("pending_asks"),
         progress=row.get("progress"),
+        params=row.get("params"),
+        parked_until=row.get("parked_until"),
     )
 
 
@@ -166,7 +179,8 @@ _RECIPE_COLUMNS = (
 
 _RUN_COLUMNS = (
     "run_id, recipe_id, tenant, kind, status, data, field_failures, error, "
-    "created_at, started_at, finished_at, job_id, url, pending_asks, progress"
+    "created_at, started_at, finished_at, job_id, url, pending_asks, progress, "
+    "params, parked_until"
 )
 
 # A job plus its rollup, counted from the runs in one pass. `finished_at` is
@@ -736,6 +750,131 @@ class PostgresRecipeStore:
                 "UPDATE recipe_runs SET progress = %s WHERE run_id = %s AND lock = %s",
                 (Jsonb(progress), run_id, lock),
             )
+
+    async def request_assist(self, run_id: str, tenant: str) -> bool:
+        """Ask a running build to stop for a person before it finishes.
+
+        Written into `params`, which the worker already reads, rather than a new
+        column: this is an input to the run, exactly like `mode`, and a run that
+        has not reached its park yet has not read `params` for the last time.
+
+        Returns False when the run is not in a state where stopping means
+        anything -- already finished, already parked, or not this tenant's.
+        Reporting success for that would leave the caller waiting for a park
+        that is never coming.
+        """
+
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE recipe_runs
+                   SET params = COALESCE(params, '{}'::jsonb)
+                                || '{"assist_requested": true}'::jsonb
+                 WHERE run_id = %s AND tenant = %s
+                   AND status IN ('queued', 'running')
+                """,
+                (run_id, tenant),
+            )
+            return cur.rowcount > 0
+
+    async def touch_park(
+        self, run_id: str, tenant: str, *, extend_by_s: float
+    ) -> datetime | None:
+        """Push a parked run's deadline out while somebody is still working on it.
+
+        The park holds a worker slot, a warm identity, a browser and a proxy pin,
+        so it has to be bounded -- but a fixed bound means a person doing the
+        careful thing (reload, record the route, pick the region, check what it
+        read) is the one most likely to be dropped halfway through. The studio
+        calls this while the assist panel is open, which is what makes a longer
+        ceiling safe rather than merely longer.
+
+        Tenant-scoped rather than lock-scoped, because the caller is the API and
+        the lock belongs to the worker. Only a `needs_input` run is affected, so
+        this cannot extend anything that is not actually waiting for a person.
+        Returns the new deadline, or None when there was nothing to extend.
+        """
+
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE recipe_runs
+                   SET parked_until = now() + %s * INTERVAL '1 second'
+                 WHERE run_id = %s AND tenant = %s AND status = 'needs_input'
+                RETURNING parked_until
+                """,
+                (extend_by_s, run_id, tenant),
+            )
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+    async def save_artifact(
+        self,
+        run_id: str,
+        tenant: str,
+        kind: str,
+        body: dict[str, Any],
+        *,
+        field: str | None = None,
+    ) -> None:
+        """Keep something a build produced, for looking at afterwards.
+
+        Best-effort, like `update_run_progress` and for the same reason: this is
+        a diagnostic record, and failing a build because its trace could not be
+        written would throw away the build to preserve the notes about it.
+
+        No `lock` check. A trace is written by the worker that holds the run and
+        is append-only, so there is no update to lose -- and requiring the lock
+        would mean a trace could not be saved from the failure path, which is
+        precisely when it matters.
+        """
+
+        from psycopg.types.json import Jsonb
+
+        try:
+            async with self._pool.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO recipe_run_artifacts (run_id, tenant, kind, field, body)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (run_id, tenant, kind, field, Jsonb(body)),
+                )
+        except Exception:  # noqa: BLE001 - see the docstring
+            log.warning("recipe_store.artifact_write_failed", run_id=run_id, kind=kind)
+
+    async def run_artifacts(
+        self, run_id: str, tenant: str, *, kinds: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
+        """Everything a run left behind, oldest first -- the order it happened in.
+
+        Tenant-scoped in the query rather than checked afterwards, matching every
+        other read here: a trace carries page content and locator paths, which is
+        not something to hand out on a run id alone.
+        """
+
+        sql = [
+            "SELECT kind, field, body, created_at FROM recipe_run_artifacts",
+            "WHERE run_id = %s AND tenant = %s",
+        ]
+        params: list[Any] = [run_id, tenant]
+        if kinds:
+            sql.append("AND kind = ANY(%s)")
+            params.append(list(kinds))
+        sql.append("ORDER BY seq")
+
+        async with self._pool.connection() as conn:
+            cur = await conn.execute(" ".join(sql), tuple(params))
+            rows = await cur.fetchall()
+        return [
+            {
+                "kind": row[0],
+                "field": row[1],
+                "body": row[2],
+                "created_at": row[3].isoformat() if row[3] else None,
+            }
+            for row in rows
+        ]
 
     async def park_run(
         self,

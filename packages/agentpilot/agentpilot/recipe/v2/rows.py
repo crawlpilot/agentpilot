@@ -36,22 +36,28 @@ from __future__ import annotations
 
 import json as _json
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from typing import Any
 
 import structlog
 
 from agentpilot.llm.client import LLMConfig, chat_json_conversation
+from agentpilot.recipe.v2.build_trace import BuildTrace, record
 from agentpilot.recipe.v2.evaluate import PageReader
+from agentpilot.recipe.v2.json_index import find_row_arrays as _find_row_arrays
+from agentpilot.recipe.v2.json_index import outline
 from agentpilot.recipe.v2.models import Candidate, Locator, RepeatSpec
 from agentpilot.recipe.v2.paths import resolve_path
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
-from agentpilot.recipe.v2.transform import TransformContext
+from agentpilot.recipe.v2.transform import Transform, TransformContext, parse_transforms
 
 log = structlog.get_logger(__name__)
 
 # Mirrors the caps in `selector_agent.py` -- the same page, shown for the same
-# reason, so showing a different amount of it here would be arbitrary.
-_MAX_STRUCTURED_CHARS = 12_000
+# reason, so showing a different amount of it here would be arbitrary. The
+# structured budget buys an *outline* rather than a prefix of the raw dump, and
+# an outline is dense enough that a bigger budget is worth spending.
+_MAX_STRUCTURED_CHARS = 16_000
 _MAX_SNAPSHOT_CHARS = 24_000
 
 # How many rows to read while deciding whether a proposal is any good. The
@@ -158,6 +164,41 @@ _JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+# The columns an open key -> value map is read through. Its keys come from the
+# page, so the caller never declared any; the rows underneath are still
+# name/value pairs, and `to_object` collapses them at the end.
+MAP_COLUMNS = ("name", "value")
+
+
+def is_open_map(spec: FieldSpec) -> bool:
+    """An open key -> value map -- a specifications block, where the keys come
+    from the page rather than from the caller.
+
+    `contract.py` emits exactly this for "an open key->value map whose KEYS come
+    from the page and are not known in advance". An object WITH declared
+    properties is a different thing: the caller named the keys, so each is its
+    own field.
+    """
+
+    return spec.type.kind == "object" and not spec.type.properties
+
+
+def wanted_columns(spec: FieldSpec) -> dict[str, TypeSpec]:
+    """The columns one row of this field must have."""
+
+    if is_open_map(spec):
+        return {name: TypeSpec(kind="scalar", value_type="string") for name in MAP_COLUMNS}
+    return dict(spec.type.columns)
+
+
+# Finding the rows already present in the page's own JSON moved to
+# `json_index`, where the same walk also answers the list-field and outline
+# questions -- three readers of one blob that must agree about what is in it.
+# Re-exported: `find_row_arrays` is this module's published surface and the
+# tests address it here.
+find_row_arrays = _find_row_arrays
+
+
 @dataclass
 class RowBinding:
     """A verified way to produce a table field's rows."""
@@ -167,6 +208,15 @@ class RowBinding:
     rows: list[dict[str, Any]]
     """What was actually read while verifying. Nothing at build time could show
     an author the rows their recipe will produce; this is where they exist."""
+
+    field_transform: list[Transform] = dataclass_field(default_factory=list)
+    """The pipeline the FIELD carries, over the whole row set.
+
+    `to_object` for an open map, and empty for a table. `_replay_repeat` already
+    applies a repeat field's transform over its rows -- and that plumbing has
+    existed, unused, because nothing at build time ever emitted the pairing. A
+    specification block is rows underneath and a `{name: value}` map to the
+    caller, and this is the one step between them."""
 
     @property
     def sample(self) -> list[dict[str, Any]]:
@@ -217,7 +267,7 @@ def parse_row_proposal(
     if rows is None:
         return None
 
-    wanted = set(spec.type.columns)
+    wanted = set(wanted_columns(spec))
     columns: dict[str, Locator] = {}
     for item in raw.get("columns") or []:
         if not isinstance(item, dict):
@@ -281,6 +331,25 @@ def _problems_with(rows: list[dict[str, Any]], columns: dict[str, Locator]) -> l
         return ["the rows locator matched nothing"]
 
     problems: list[str] = []
+
+    # Two columns reading through the SAME locator are one column reported
+    # twice, whatever the values happen to look like. Checked before the
+    # row-count-dependent tests below, because it does not need more than one
+    # row -- and a one-row table is exactly where it slipped through: a Zara
+    # build bound both `material` and `percentage` to json_ld path `value`, and
+    # `cast to float` turned "100% viscose" into 100.0, so the row looked right.
+    seen: dict[tuple[Any, ...], str] = {}
+    for name, locator in columns.items():
+        key = (locator.kind, locator.selector, locator.path, locator.path_lang,
+               locator.attribute, locator.index)
+        first = seen.get(key)
+        if first is not None:
+            problems.append(
+                f"columns {first!r} and {name!r} read through the same locator, so "
+                "they are one value reported twice rather than two columns"
+            )
+        else:
+            seen[key] = name
     for name in columns:
         filled = sum(1 for row in rows if not _blank(row.get(name)))
         if filled / len(rows) < _MIN_COLUMN_FILL:
@@ -301,6 +370,17 @@ def _problems_with(rows: list[dict[str, Any]], columns: dict[str, Locator]) -> l
     return problems
 
 
+def _key_in(row: dict[str, Any], name: str) -> str:
+    """The row's own spelling of a column name -- `Name` where the schema says
+    `name`. A path is matched case-sensitively, so the row's spelling is the one
+    that resolves."""
+
+    for key in row:
+        if str(key).lower() == name.lower():
+            return str(key)
+    return name
+
+
 def _blank(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
@@ -316,7 +396,7 @@ def _column_spec(spec: FieldSpec, name: str) -> FieldSpec:
     return FieldSpec(
         name=name,
         description=f"{name} (one per row of {spec.name})",
-        type=spec.type.columns.get(name, TypeSpec(kind="scalar")),
+        type=wanted_columns(spec).get(name, TypeSpec(kind="scalar")),
     )
 
 
@@ -410,7 +490,20 @@ async def verify_rows(
         max_iterations=max_rows,
         rows_locator=rows_locator,
     )
-    return RowBinding(repeat=repeat, bindings=bindings, rows=cleaned), None
+
+    # An open map is rows underneath and a `{name: value}` map to the caller.
+    # `_replay_repeat` applies a repeat field's transform over the whole row
+    # set, and `to_object` is written for exactly this -- the two have been
+    # implemented and never connected, because nothing at build time emitted
+    # the pairing.
+    field_transform = (
+        parse_transforms([{"op": "to_object", "key": "name", "value": "value"}])
+        if is_open_map(spec)
+        else []
+    )
+    return RowBinding(
+        repeat=repeat, bindings=bindings, rows=cleaned, field_transform=field_transform
+    ), None
 
 
 def build_user_message(
@@ -422,20 +515,38 @@ def build_user_message(
 ) -> str:
     columns = "\n".join(
         f"  - {name} ({column.value_type if column.kind == 'scalar' else column.kind})"
-        for name, column in spec.type.columns.items()
+        for name, column in wanted_columns(spec).items()
     )
-    blob = _json.dumps(structured_data, ensure_ascii=False)
-    truncated = len(blob) > _MAX_STRUCTURED_CHARS
-
     parts = [
         f"Table field: {spec.name}",
         spec.description or "",
         f"Columns each row must have:\n{columns}",
         f"\nPage snapshot:\n{snapshot_text[:_MAX_SNAPSHOT_CHARS]}",
-        "\nParsed structured data (json_ld / hydration / metadata)"
-        + (" -- TRUNCATED, deeper keys may exist" if truncated else "")
-        + f":\n{blob[:_MAX_STRUCTURED_CHARS]}",
+        "\nPaths available in this page's structured data (json_ld / hydration / "
+        "metadata). Each path is written the way a locator takes it:\n"
+        + outline(
+            structured_data,
+            wanted={spec.name: spec},
+            max_chars=_MAX_STRUCTURED_CHARS,
+        ),
     ]
+    # Arrays already in the page's JSON that look like these rows, pulled out by
+    # hand because the blob above is truncated and the useful part is routinely
+    # past the cut. Without this the model is guessing CSS at a page it can only
+    # see an accessibility tree of.
+    candidates = find_row_arrays(structured_data, wanted_columns(spec), spec.name)
+    if candidates:
+        lines = "\n".join(
+            f"- kind={kind} path={path!r} first row: "
+            f"{_json.dumps(sample[0], ensure_ascii=False)[:200]}"
+            for kind, path, sample in candidates
+        )
+        parts.append(
+            "\nArrays already in this page's JSON that may be these rows. If one "
+            "is right, answer kind 'json' with its path -- it costs no clicks and "
+            f"survives a redesign:\n{lines}"
+        )
+
     if not structured_data or not any(structured_data.values()):
         parts.append(
             "\nNOTE: this page publishes no usable structured data, so 'json' is "
@@ -462,6 +573,7 @@ async def propose_rows(
     max_rows: int = DEFAULT_MAX_ROWS,
     max_retries: int = 1,
     scope: Locator | None = None,
+    trace: BuildTrace | None = None,
 ) -> RowBinding | None:
     """Locate a table field's rows and columns, verified against the page.
 
@@ -482,8 +594,42 @@ async def propose_rows(
 
     from agentpilot.agent.reliability import RetryStrategy
 
-    if not spec.type.columns:
+    wanted = wanted_columns(spec)
+    if not wanted:
         return None
+
+    # The page's own JSON first, and without a model call. An array already
+    # keyed the way the caller asked is not a guess -- and it costs no clicks,
+    # survives a redesign, and is verified through the same `verify_rows` as
+    # anything else, so a coincidental match cannot get through.
+    for kind, path, sample in find_row_arrays(structured_data, wanted, spec.name):
+        keys = {str(k).lower() for k in sample[0]}
+        columns = {
+            name: Locator(kind=kind, path=_key_in(sample[0], name))  # type: ignore[arg-type]
+            for name in wanted
+            if name.lower() in keys
+        }
+        if len(columns) != len(wanted):
+            continue
+        binding, reason = await verify_rows(
+            spec, "json", Locator(kind=kind, path=path), columns,
+            reader=reader, page_url=page_url, max_rows=max_rows,
+        )
+        if binding is not None:
+            log.info("rows.bound_from_page_json", field=spec.name, kind=kind, path=path,
+                     rows=len(binding.rows))
+            record(
+                trace, spec.name, "rows_page_json", "bound",
+                locator=Locator(kind=kind, path=path),  # type: ignore[arg-type]
+                read=binding.sample,
+            )
+            return binding
+        log.info("rows.json_candidate_rejected", field=spec.name, path=path, reason=reason)
+        record(
+            trace, spec.name, "rows_page_json", "rejected",
+            locator=Locator(kind=kind, path=path),  # type: ignore[arg-type]
+            reason=reason,
+        )
 
     failure: str | None = None
     for _attempt in range(max_retries + 1):
@@ -504,9 +650,16 @@ async def propose_rows(
                     json_schema=_JSON_SCHEMA,
                 )
             )
-        except Exception:  # noqa: BLE001 - the caller falls back to the dom path
+        except Exception as exc:  # noqa: BLE001 - the caller falls back to the dom path
             log.info("rows.proposal_failed", field=spec.name, exc_info=True)
+            record(
+                trace, spec.name, "rows", "rejected",
+                reason=f"asking for a row proposal failed: {exc}",
+            )
             return None
+
+        if trace is not None:
+            trace.exchanged("rows", [spec.name], user, raw)
 
         parsed = parse_row_proposal(raw, spec)
         if parsed is None:
@@ -520,7 +673,15 @@ async def propose_rows(
                 kind=raw.get("kind"),
                 rows=raw.get("rows"),
                 columns=[c.get("name") for c in (raw.get("columns") or []) if isinstance(c, dict)],
-                wanted=sorted(spec.type.columns),
+                wanted=sorted(wanted_columns(spec)),
+            )
+            record(
+                trace, spec.name, "rows", "rejected",
+                reason=(
+                    f"the model answered kind={raw.get('kind')!r} and it was not "
+                    "usable as rows -- either it declined, or no column we asked "
+                    f"for came back (wanted {sorted(wanted_columns(spec))})"
+                ),
             )
             return None
 
@@ -537,8 +698,20 @@ async def propose_rows(
                 field=spec.name, kind=kind, rows=len(binding.rows),
                 columns=sorted(columns),
             )
+            record(
+                trace, spec.name, "rows", "bound",
+                locator=rows_locator, read=binding.sample,
+            )
             return binding
         log.info("rows.rejected", field=spec.name, kind=kind, reason=reason)
+        # The three checks in `_problems_with` are the most diagnostic strings
+        # this system produces -- "every one of the 10 rows came back identical"
+        # names the exact failure that made a recommended-products carousel look
+        # like a specification sheet. They were going to stdout.
+        record(
+            trace, spec.name, "rows", "rejected",
+            locator=rows_locator, reason=reason,
+        )
         failure = reason
 
     return None
