@@ -21,6 +21,8 @@ from agentpilot.recipe.v2.selector_agent import (
     parse_proposals,
     propose_and_verify,
     rank_candidates,
+    shared_locator_failures,
+    tautological_read,
     verify_locators,
 )
 from agentpilot.recipe.v2.transform import TransformContext, apply_transforms
@@ -1189,3 +1191,243 @@ async def test_a_weak_dom_selector_is_not_dropped_for_a_json_path(monkeypatch) -
         dom_fallbacks=False,
     )
     assert [c.locator.kind for c in got["name"]] == ["json_ld", "css"]
+
+
+# --- two fields, one locator -------------------------------------------------
+#
+# Straight from a real Zara build. The agent clicked the "Composition, care &
+# origin" accordion open, and the model then bound BOTH `care` and `origin` to
+# the accordion's own button, so both fields collected the string
+# "COMPOSITION, CARE & ORIGIN".
+#
+# Every per-field check passed: the locator resolved, it read a non-empty
+# string, and the string cast cleanly to the declared type. The problem is the
+# relationship between two fields, which nothing looking at one field at a time
+# can see. `rows.py::_problems_with` has had the equivalent check for table
+# columns since a build bound `material` and `percentage` to one json_ld path.
+
+CARE_ORIGIN = parse_fields({
+    "care": {"type": {"kind": "scalar", "value_type": "string"}, "description": "care instructions"},
+    "origin": {"type": {"kind": "scalar", "value_type": "string"}, "description": "country of origin"},
+})
+
+_ACCORDION = {
+    "kind": "ax_role", "role": "button",
+    "name_contains": "Composition, care & origin",
+}
+
+
+def _ax_page(values: dict[tuple, Any]):
+    """A verifier keyed on role/name, so an `ax_role` locator resolves."""
+
+    async def _verify(loc: Locator) -> Any:
+        if loc.kind == "ax_role":
+            return values.get(("ax_role", loc.name_contains))
+        return values.get((loc.kind, loc.selector or loc.path))
+
+    return _verify
+
+
+def test_shared_locator_failures_names_both_fields() -> None:
+    both = Locator(**_ACCORDION)
+    verified = {
+        "care": [Candidate(locator=both)],
+        "origin": [Candidate(locator=both)],
+    }
+    out = shared_locator_failures(verified)
+
+    assert set(out) == {"care", "origin"}
+    assert "'origin'" in out["care"]
+    assert "'care'" in out["origin"]
+
+
+def test_a_shared_fallback_is_fine() -> None:
+    """Only the WINNING locator is compared. Later candidates are fallbacks
+    that did not produce this value, and two fields may share one."""
+
+    shared = Locator(kind="css", selector=".panel")
+    verified = {
+        "care": [Candidate(locator=Locator(kind="css", selector=".care")), Candidate(locator=shared)],
+        "origin": [Candidate(locator=Locator(kind="css", selector=".origin")), Candidate(locator=shared)],
+    }
+    assert shared_locator_failures(verified) == {}
+
+
+def test_distinct_locators_are_left_alone() -> None:
+    verified = {
+        "care": [Candidate(locator=Locator(kind="json_ld", path="[0].care"))],
+        "origin": [Candidate(locator=Locator(kind="json_ld", path="[0].origin"))],
+    }
+    assert shared_locator_failures(verified) == {}
+
+
+@pytest.mark.asyncio
+async def test_two_fields_bound_to_one_element_are_both_re_asked(monkeypatch) -> None:
+    """The regression. Round one gives both fields the accordion button; round
+    two, told about the clash, finds the content inside it."""
+
+    # Deliberately NOT the accordion button: that value would be refused by
+    # `tautological_read` first, and this test is about the collision check.
+    # One shared panel, whose text is nobody's search term.
+    shared = {"kind": "css", "selector": ".panel"}
+    stub = StubLLM([
+        {"fields": [
+            {"field": "care", "candidates": [dict(shared)]},
+            {"field": "origin", "candidates": [dict(shared)]},
+        ]},
+        {"fields": [
+            {"field": "care", "candidates": [{"kind": "css", "selector": ".care-body"}]},
+            {"field": "origin", "candidates": [{"kind": "css", "selector": ".origin-body"}]},
+        ]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        CARE_ORIGIN,
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({
+            ("css", ".panel"): "Composition 100% polyester. Made in China.",
+            ("css", ".care-body"): "Machine wash at 30",
+            ("css", ".origin-body"): "Made in Portugal",
+        }),
+        max_retries=1,
+        dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.selector == ".care-body"
+    assert got["origin"][0].locator.selector == ".origin-body"
+    # The clash, not "did not resolve", is what it was told -- the locator DID
+    # resolve, which is the whole reason nothing else caught this.
+    assert "very same locator" in stub.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_a_collision_that_does_not_converge_binds_neither(monkeypatch) -> None:
+    """An ask beats a confidently wrong value. Both fields read a real string
+    that casts cleanly, so binding either would put the section heading into the
+    dataset and nothing downstream would ever question it."""
+
+    stub = StubLLM([
+        {"fields": [
+            {"field": "care", "candidates": [dict(_ACCORDION)]},
+            {"field": "origin", "candidates": [dict(_ACCORDION)]},
+        ]},
+        {"fields": [
+            {"field": "care", "candidates": [dict(_ACCORDION)]},
+            {"field": "origin", "candidates": [dict(_ACCORDION)]},
+        ]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        CARE_ORIGIN,
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({
+            ("ax_role", "Composition, care & origin"): "COMPOSITION, CARE & ORIGIN",
+        }),
+        max_retries=1,
+        dom_fallbacks=False,
+    )
+
+    assert got == {}
+
+
+@pytest.mark.asyncio
+async def test_one_field_alone_on_a_locator_still_binds(monkeypatch) -> None:
+    """The guard must not cost a field that simply has no rival."""
+
+    stub = StubLLM([{"fields": [
+        {"field": "care", "candidates": [dict(_ACCORDION)]},
+    ]}])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"care": CARE_ORIGIN["care"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({("ax_role", "Composition, care & origin"): "Machine wash"}),
+        dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.role == "button"
+
+
+# --- a locator that reads back its own search term ---------------------------
+#
+# How a real Zara build lost `care`. The agent scrolled the "Composition, care
+# & origin" accordion into view; the model proposed
+# `ax_role button name_contains="Composition, care & origin"`; that read the
+# string "COMPOSITION, CARE & ORIGIN" -- non-empty, casts cleanly to the
+# declared type -- so nothing objected and the field was FROZEN, twelve seconds
+# before the click that opens the panel. Freezing removes a field from
+# `unfound`, so when the real care text appeared one step later nothing was
+# looking for it, and the recipe shipped reading the button's label for ever.
+#
+# From the run's own trace:
+#   11:16:23  care -> {'role':'button','name_contains':'Composition, care & origin'}  frozen=['care']
+#   11:16:35  route_step  op=click  target={'name_contains':'COMPOSITION, CARE & ORIGIN'}
+
+
+def test_a_locator_reading_back_its_own_name_is_refused() -> None:
+    loc = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
+    why = tautological_read(loc, "COMPOSITION, CARE & ORIGIN")
+
+    assert why is not None
+    assert "label of the element" in why
+
+
+def test_case_and_whitespace_do_not_save_it() -> None:
+    loc = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
+    assert tautological_read(loc, "  Composition,   care & origin ") is not None
+
+
+def test_a_text_locator_is_held_to_the_same_rule() -> None:
+    assert tautological_read(Locator(kind="text", text="Made in"), "Made in") is not None
+
+
+def test_a_strict_superset_is_a_real_reading() -> None:
+    """Matching on "Made in" and reading "Made in China" learned something the
+    selector did not already contain. This must keep working -- it is how the
+    same build correctly bound `origin`."""
+
+    assert tautological_read(Locator(kind="text", text="Made in"), "Made in China") is None
+
+
+def test_a_locator_that_matches_on_nothing_is_unaffected() -> None:
+    loc = Locator(kind="css", selector=".care")
+    assert tautological_read(loc, "Do not wash") is None
+
+
+def test_a_non_string_read_is_unaffected() -> None:
+    loc = Locator(kind="ax_role", role="button", name_contains="4")
+    assert tautological_read(loc, 4) is None
+
+
+@pytest.mark.asyncio
+async def test_the_accordion_label_does_not_bind_the_field(monkeypatch) -> None:
+    """End to end: the button's label is refused, so the field stays unfound and
+    is still being looked for when the click reveals its real content."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "ax_role", "role": "button",
+             "name_contains": "Composition, care & origin"},
+        ]}]},
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-body"},
+        ]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"care": CARE_ORIGIN["care"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({
+            ("ax_role", "Composition, care & origin"): "COMPOSITION, CARE & ORIGIN",
+            ("css", ".care-body"): "Do not wash. Do not bleach.",
+        }),
+        max_retries=1,
+        dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.selector == ".care-body"
+    assert "searched for" in stub.prompts[1]

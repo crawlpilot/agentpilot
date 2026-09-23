@@ -165,3 +165,69 @@ def test_css_and_xpath_locators_are_not_tree_resolvable() -> None:
     tree = fnode(children=[fnode("button", "x", "e1")])
     assert find_nodes(tree, Locator(kind="css", selector="button")) == []
     assert find_nodes(tree, Locator(kind="xpath", selector="//button")) == []
+
+
+# --- a text locator resolves to the innermost match --------------------------
+#
+# A `text` locator matches on SUBTREE text, so every ancestor of a hit is a hit
+# too. Document order put the outermost first and `index or 0` took it, so
+# `{"kind": "text", "text": "Made in"}` resolved to the whole document.
+#
+# Measured on a Zara build: `origin` bound exactly that way and read back ninety
+# kilobytes -- the page title, the OneTrust consent script, the analytics JSON
+# and the stylesheet -- as the value of a field declared a string. It passed
+# every check, because that is technically a non-empty string containing
+# "Made in".
+
+
+def _page_with_nested_text() -> EnhancedDOMTreeNode:
+    label = fnode(tag="span", ref="e3")
+    label.children_nodes = [text_node("Made in China")]
+    label.children_nodes[0].parent_node = label
+
+    panel = fnode(tag="div", ref="e2", children=[label])
+    body = fnode(tag="body", ref="e1", children=[panel])
+    return body
+
+
+def test_a_text_locator_matches_the_innermost_element() -> None:
+    body = _page_with_nested_text()
+    found = find_nodes(body, Locator(kind="text", text="Made in"))
+
+    assert len(found) == 1
+    assert found[0].tag_name == "span"
+
+
+def test_the_innermost_rule_does_not_collapse_siblings() -> None:
+    """Two separate hits are two hits -- only an ancestor of another hit goes."""
+
+    one = fnode(tag="li", ref="e5")
+    one.children_nodes = [text_node("Made in China")]
+    two = fnode(tag="li", ref="e6")
+    two.children_nodes = [text_node("Made in Portugal")]
+    for parent in (one, two):
+        parent.children_nodes[0].parent_node = parent
+    body = fnode(tag="body", ref="e1", children=[one, two])
+
+    found = find_nodes(body, Locator(kind="text", text="Made in"))
+    assert [n.backend_node_id for n in found] == [5, 6]
+
+
+def test_script_and_style_text_is_not_a_value() -> None:
+    """Their text nodes carry source code, not content. Without the skip,
+    reading any ancestor near the root returns the page's inline scripts."""
+
+    script = fnode(tag="script", ref="e4")
+    script.children_nodes = [text_node("var zara = {analytics: 'Made in'};")]
+    style = fnode(tag="style", ref="e5")
+    style.children_nodes = [text_node(".a{content:'Made in'}")]
+    copy = fnode(tag="p", ref="e6")
+    copy.children_nodes = [text_node("Made in China")]
+    for parent in (script, style, copy):
+        parent.children_nodes[0].parent_node = parent
+
+    body = fnode(tag="body", ref="e1", children=[script, style, copy])
+
+    assert "var zara" not in node_text(body)
+    assert "content:" not in node_text(body)
+    assert "Made in China" in node_text(body)

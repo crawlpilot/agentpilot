@@ -19,11 +19,47 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
+import structlog
+
+log = structlog.get_logger(__name__)
+
+# How much of each message to log. The page snapshot a selector prompt carries
+# runs to 24 000 characters and the JSON outline another 16 000, so logging
+# them whole would bury every other line in the run.
+#
+# `AGENTPILOT_LLM_LOG_CHARS=0` turns the content off and leaves only the
+# shape/timing line; a large value logs the prompt in full, which is what you
+# want when the question is "was the accordion's text even in what the model
+# was shown?".
+_LOG_CHARS = int(os.environ.get("AGENTPILOT_LLM_LOG_CHARS", "1200"))
+
+
+def _as_text(content: Any) -> str:
+    """A message's content as text. Vision messages carry a parts list, whose
+    image blocks are megabytes of base64 and say nothing here."""
+
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return str(content)
+
+
+def _clip(text: str) -> str:
+    if len(text) <= _LOG_CHARS:
+        return text
+    half = _LOG_CHARS // 2
+    return f"{text[:half]}\n  …[{len(text) - _LOG_CHARS} chars elided]…\n{text[-half:]}"
 
 _BEDROCK_DEFAULT_MODEL = "anthropic.claude-opus-5"
 """Bedrock model IDs carry an `anthropic.` provider prefix; a bare
@@ -230,13 +266,60 @@ async def chat_json_conversation_with_usage(
     `llm/schema_extract.py`, `recipe/locator_proposal.py`, `recipe/codegen.py`)
     is provider-blind."""
 
+    # Every LLM call in the system funnels through here -- the selector agent,
+    # the rows proposal, the judge, the contract, the agent loop -- so this is
+    # the one place that can answer "what was the model actually shown, and what
+    # did it say?". Without it a build's reasoning is only inferable from its
+    # outcomes: a field that bound to a section heading looks identical whether
+    # the heading was all the model was given or it simply chose badly.
+    schema_name = ""
+    if json_schema:
+        props = json_schema.get("properties") or {}
+        schema_name = ",".join(sorted(props)[:6])
+    log.info(
+        "llm.request",
+        model=config.model,
+        provider=config.provider,
+        answers=schema_name,
+        messages=[
+            {"role": m.get("role"), "chars": len(_as_text(m.get("content")))}
+            for m in messages
+        ],
+        # System messages are static per call site and repeat on every step of
+        # every run -- 7 700 characters of the agent's instructions, fifteen
+        # times a build, saying nothing that differs between them. Their length
+        # is in `messages` above; the content worth reading is the part that
+        # changes, which is the page state and the field list.
+        content=[
+            {"role": m.get("role"), "text": _clip(_as_text(m.get("content")))}
+            for m in messages
+            if m.get("role") != "system"
+        ] if _LOG_CHARS else None,
+    )
+
+    started = time.monotonic()
     if config.provider == "bedrock":
         # Imported here, not at module scope: `anthropic` is an optional extra
         # and the OpenAI path must keep working without it installed.
         from agentpilot.llm.bedrock import chat_json_bedrock
 
-        return await chat_json_bedrock(messages, config=config, json_schema=json_schema)
-    return await _chat_openai_compatible(messages, config=config, json_schema=json_schema)
+        parsed, usage = await chat_json_bedrock(
+            messages, config=config, json_schema=json_schema
+        )
+    else:
+        parsed, usage = await _chat_openai_compatible(
+            messages, config=config, json_schema=json_schema
+        )
+
+    log.info(
+        "llm.response",
+        model=config.model,
+        ms=int((time.monotonic() - started) * 1000),
+        reply=_clip(json.dumps(parsed, ensure_ascii=False, default=str))
+        if _LOG_CHARS
+        else None,
+    )
+    return parsed, usage
 
 
 async def _chat_openai_compatible(

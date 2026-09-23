@@ -82,7 +82,23 @@ def node_text(node: EnhancedDOMTreeNode) -> str:
     return " ".join(p for p in parts if p).strip()
 
 
+# Their text nodes carry source code, not content. The serializer prunes the
+# same set (`dom/serializer._DISABLED_TAGS`) before a model ever sees the page.
+_NON_CONTENT_TAGS = frozenset({"script", "style", "noscript", "template"})
+
+
 def _collect_text(node: EnhancedDOMTreeNode, out: list[str]) -> None:
+    """Descendant text, skipping the tags whose contents are code.
+
+    Without the skip, reading the text of any ancestor near the root returns
+    the page's inline scripts and stylesheets. A Zara build produced exactly
+    that for `origin`: ninety kilobytes beginning with the OneTrust consent
+    script and the analytics JSON blob, offered as the value of a field
+    declared a string.
+    """
+
+    if node.tag_name in _NON_CONTENT_TAGS:
+        return
     if node.node_type == NodeType.TEXT_NODE and node.node_value:
         out.append(str(node.node_value).strip())
     for child in node.children_and_shadow_roots:
@@ -156,4 +172,39 @@ def find_nodes(root: EnhancedDOMTreeNode, locator: Locator) -> list[EnhancedDOMT
             wanted = locator.text or ""
             if wanted and wanted.lower() in node_text(node).lower():
                 matches.append(node)
+
+    if locator.kind == "text":
+        matches = _innermost(matches)
     return matches
+
+
+def _innermost(matches: list[EnhancedDOMTreeNode]) -> list[EnhancedDOMTreeNode]:
+    """Drop any match that contains another match.
+
+    A `text` locator matches on SUBTREE text, so every ancestor of a hit is a
+    hit too -- `<html>` and `<body>` included. Document order then puts the
+    outermost first, and `index or 0` takes it, so `{"kind": "text", "text":
+    "Made in"}` resolved to the whole document.
+
+    Measured on a Zara build, where `origin` bound exactly that way and read
+    back ninety kilobytes: the page title, the OneTrust script, the analytics
+    JSON and the stylesheet, all as one "value" for a field declared a string.
+    It passed every check because it is, technically, a non-empty string
+    containing "Made in".
+
+    Innermost is also what every text-selector engine means by this -- it is
+    Playwright's rule for `text=` -- so a locator written by hand or copied
+    from the studio behaves the way its author expects.
+    """
+
+    if len(matches) < 2:
+        return matches
+    identities = {id(node) for node in matches}
+    contains_another: set[int] = set()
+    for node in matches:
+        parent = node.parent_node
+        while parent is not None:
+            if id(parent) in identities:
+                contains_another.add(id(parent))
+            parent = parent.parent_node
+    return [node for node in matches if id(node) not in contains_another]

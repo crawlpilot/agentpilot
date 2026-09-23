@@ -600,17 +600,125 @@ def rank_candidates(locators: list[Locator], *, verified_on: int = 1) -> list[Ca
     return sorted(candidates, key=lambda c: c.priority)
 
 
+def tautological_read(loc: Locator, raw: Any) -> str | None:
+    """Why this locator's value is its own search term, or None if it is not.
+
+    A locator that finds an element BY its text and then reads that same text
+    back has learned nothing from the page: the value was in the selector
+    before the page was ever consulted. It is always the label of the thing
+    matched -- a section heading, an accordion trigger, a tab -- never the
+    content behind it.
+
+    This is how a real Zara build lost `care`. The agent scrolled the
+    "Composition, care & origin" accordion into view; the model proposed
+    `ax_role button name_contains="Composition, care & origin"` for `care`;
+    that read the string "COMPOSITION, CARE & ORIGIN", which is a non-empty
+    string that casts cleanly to the declared type. Nothing objected, so the
+    field was frozen -- *twelve seconds before the click that opens the panel*.
+    Freezing removes a field from `unfound`, so when the real care text
+    appeared a step later nothing was looking for it any more, and the recipe
+    shipped with `care` reading the button's label for ever.
+
+    A strict superset is fine and must stay fine: matching on "Made in" and
+    reading "Made in China" is a real reading of the page. Only an exact
+    round-trip is refused.
+    """
+
+    needle = (loc.name_contains or loc.text or "").strip()
+    if not needle or not isinstance(raw, str):
+        return None
+    if " ".join(raw.split()).casefold() != " ".join(needle.split()).casefold():
+        return None
+    matcher = "name_contains" if loc.name_contains else "text"
+    return (
+        f"this reads back exactly the {matcher} it searched for ({needle!r}), so "
+        f"it is the label of the element you matched rather than anything on the "
+        f"page -- for a section heading or an accordion trigger, the value lives "
+        f"in the content it reveals, not in the control itself"
+    )
+
+
+def locator_key(loc: Locator) -> tuple[Any, ...]:
+    """Everything that decides what a locator reads.
+
+    Two locators with the same key are the same read, so they cannot be two
+    different values -- which is what `dedupe_locators` uses it for within one
+    field's chain, and `shared_locator_failures` across fields.
+    """
+
+    return (
+        loc.kind, loc.selector, loc.path, loc.path_lang,
+        loc.attribute, loc.all, loc.index, loc.role, loc.name_contains,
+    )
+
+
 def dedupe_locators(locators: list[Locator]) -> list[Locator]:
     seen: set[tuple[Any, ...]] = set()
     out: list[Locator] = []
     for loc in locators:
-        key = (
-            loc.kind, loc.selector, loc.path, loc.path_lang,
-            loc.attribute, loc.all, loc.index, loc.role, loc.name_contains,
-        )
+        key = locator_key(loc)
         if key not in seen:
             seen.add(key)
             out.append(loc)
+    return out
+
+
+def shared_locator_failures(
+    verified: dict[str, list[Candidate]], *, trace: BuildTrace | None = None
+) -> dict[str, str]:
+    """Fields whose winning locator is another field's winning locator.
+
+    `rows.py::_problems_with` has had this check for table columns since a Zara
+    build bound `material` and `percentage` to the same json_ld path and the
+    row looked perfectly fine. Scalars had no equivalent, and the same failure
+    arrived the same way: on a Zara product page the agent clicked the
+    "Composition, care & origin" accordion open, and the model then bound BOTH
+    `care` and `origin` to the accordion's own button --
+
+        {"kind": "ax_role", "role": "button",
+         "name_contains": "Composition, care & origin"}
+
+    -- so both fields collected the string "COMPOSITION, CARE & ORIGIN". Every
+    per-field check passed: the locator resolved, it read a non-empty string,
+    and the string cast cleanly to the declared type. Nothing that looks at one
+    field at a time can see the problem, because the problem is the *relationship*
+    between two of them.
+
+    Only the winning locator is compared. A chain's later candidates are
+    fallbacks that did not produce this value, and two fields are welcome to
+    share a fallback.
+
+    Both fields are returned, not one. When a model binds two declared fields to
+    a single element it has not decided between them -- it found one salient
+    thing and used it twice -- so there is no basis for calling either the right
+    one. Re-asking with the collision named lets it differentiate; failing that
+    they become asks, and an ask beats a confidently wrong value.
+    """
+
+    winners: dict[tuple[Any, ...], list[str]] = {}
+    for name, candidates in verified.items():
+        if not candidates:
+            continue
+        winners.setdefault(locator_key(candidates[0].locator), []).append(name)
+
+    out: dict[str, str] = {}
+    for names in winners.values():
+        if len(names) < 2:
+            continue
+        for name in names:
+            others = ", ".join(repr(n) for n in names if n != name)
+            reason = (
+                f"this read through the very same locator as {others}, so the two "
+                f"are one value reported twice rather than two fields -- most "
+                f"often the heading or control that labels a section, rather than "
+                f"the content inside it. Find the element that holds {name!r} "
+                f"specifically."
+            )
+            out[name] = reason
+            record(
+                trace, name, "propose", "rejected",
+                locator=verified[name][0].locator, reason=reason,
+            )
     return out
 
 
@@ -889,6 +997,11 @@ async def verify_locators(
         problem = scope_problem(scope, expects_many=expects_many)
         if problem is not None:
             last_error = rejected(loc, problem, raw=raw)
+            continue
+
+        circular = tautological_read(loc, raw)
+        if circular is not None:
+            last_error = rejected(loc, circular, raw=raw)
             continue
 
         # Confine it to the container its own matches share. Re-read through the
@@ -1344,6 +1457,10 @@ async def propose_and_verify(
     # hand still does not work, another guess will not help -- that goes to a
     # person, who can see the raw value and decide.
     retyped: set[str] = set()
+    # The spec each field was actually bound under, which is not always the one
+    # it came in with: `_repair_transform` rewrites it. Needed so a field put
+    # back for a retry is retried as itself.
+    bound_under: dict[str, FieldSpec] = {}
 
     for _attempt in range(max_retries + 1):
         if not remaining:
@@ -1395,10 +1512,53 @@ async def propose_and_verify(
                 next_failures[name] = reason or "no candidate resolved"
                 continue
             verified[name] = _to_candidates(spec, resolving, verified_on=verified_on)
+            bound_under[name] = spec
             del remaining[name]
+
+        # Two fields reading through ONE locator are one value reported twice.
+        # Checked here rather than per field, because that is the only place the
+        # whole batch is visible -- see `shared_locator_failures`. A collision
+        # unbinds both and puts them back for another round with the clash
+        # named; what does not converge becomes an ask, which is the right end
+        # for it.
+        for name, why in shared_locator_failures(verified, trace=trace).items():
+            del verified[name]
+            remaining[name] = bound_under.get(name, fields[name])
+            next_failures[name] = why
+
+        # DEBUG: why each field that did not bind did not bind, in the logs
+        # rather than only in the trace artifact. These are the strings fed back
+        # to the model verbatim, so they also show what the next round is being
+        # asked -- "read nothing" and "reads 27 values but this field is one
+        # value" send it in opposite directions.
+        if next_failures:
+            log.info(
+                "propose.unbound",
+                attempt=_attempt + 1,
+                failures={k: v[:160] for k, v in next_failures.items()},
+            )
+        if verified:
+            log.info(
+                "propose.bound",
+                attempt=_attempt + 1,
+                bound={
+                    name: chain[0].locator.to_dict()
+                    for name, chain in verified.items()
+                    if chain
+                },
+            )
+
         failures = next_failures
         if not failures:
             break
+
+    # Once more, because the loop above can exit without ever reaching the
+    # check: a batch whose every field was bound from the page's own JSON
+    # breaks at `if not remaining` before the first proposal round. There is no
+    # retry left here, so a collision simply unbinds -- and an unlocated field
+    # is reported as such, which is what puts it in front of a person.
+    for name in shared_locator_failures(verified, trace=trace):
+        del verified[name]
 
     if dom_fallbacks and verified:
         await _add_dom_fallbacks(

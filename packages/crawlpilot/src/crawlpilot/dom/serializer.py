@@ -25,6 +25,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+import structlog
+
 from crawlpilot.dom import render
 from crawlpilot.dom.clickable_elements import is_interactive
 from crawlpilot.dom.paint_order import PaintEntry, compute_occluded
@@ -36,6 +38,8 @@ from crawlpilot.spi.dom_tree import (
     iter_elements,
 )
 from crawlpilot.spi.geometry import BoundingBox
+
+log = structlog.get_logger(__name__)
 
 # Tags with no useful content for the agent -- pruned entirely.
 _DISABLED_TAGS = frozenset(
@@ -333,6 +337,24 @@ def _is_containment_exception(node: EnhancedDOMTreeNode) -> bool:
 
     if node.tag_name in _FORM_CONTROL_TAGS:
         return True
+    # A `<button>` or `<a>` is a real control and speaks for itself, exactly as
+    # `_FORM_CONTROL_TAGS` does -- it was simply missing from that set, which
+    # covers only `input`/`select`/`textarea`/`option`.
+    #
+    # The gap is not theoretical. Sites wrap an accordion trigger in a clickable
+    # container, the button then fills ~100% of its wrapper, and the dedup drops
+    # the button in favour of the wrapper. The button has no ref from that point
+    # on and NOTHING brings it back -- unlike the viewport gate, scrolling does
+    # not help, which is what makes it so hard to diagnose from the outside. A
+    # Zara build spent its last four steps on "the accordion button isn't
+    # minting a ref", scrolled to it as instructed, and still got nothing.
+    #
+    # Deduping the wrapper away instead is not an option here: this pass only
+    # ever marks the child, and the wrapper may be the thing that carries the
+    # handler. Keeping both costs one line in the render and leaves the model
+    # able to name the element it can actually see.
+    if node.tag_name in ("button", "a"):
+        return True
     if node.attributes.get("aria-label"):
         return True
     if node.attributes.get("role"):
@@ -481,6 +503,24 @@ def _assign_indices(root: SimplifiedNode, new_backend_ids: set[int]) -> DOMSelec
     """
 
     selector_map: DOMSelectorMap = {}
+    # DEBUG: why a control the model can SEE in the page text cannot be named.
+    # Four passes withhold a ref and from the outside all four look identical --
+    # the element is simply absent -- but only the viewport one is fixed by
+    # scrolling. An agent that cannot tell them apart re-queries instead, which
+    # can never work (`find_elements` returns text, never refs), and burns its
+    # whole step budget doing it.
+    dropped: dict[str, list[str]] = {}
+    for node in _iter_simplified(root):
+        if node.is_interactive:
+            why = (
+                "occluded" if node.ignored_by_paint_order
+                else "contained" if node.excluded_by_parent
+                else "view" if node.excluded_by_view
+                else ""
+            )
+            if why:
+                name = node.original.ax_name or node.original.tag_name
+                dropped.setdefault(why, []).append(str(name)[:40])
     for node in _iter_simplified(root):
         if (
             node.is_interactive
@@ -497,6 +537,12 @@ def _assign_indices(root: SimplifiedNode, new_backend_ids: set[int]) -> DOMSelec
             node.selector_index = index
             node.is_new = original.backend_node_id in new_backend_ids
             selector_map[index] = original
+    if dropped:
+        log.info(
+            "serializer.controls_without_a_ref",
+            minted=len(selector_map),
+            **{why: names[:15] for why, names in dropped.items()},
+        )
     return selector_map
 
 

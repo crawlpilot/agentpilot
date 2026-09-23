@@ -126,6 +126,50 @@ def _attribute_string(node: SimplifiedNode, include_attributes: tuple[str, ...])
     return (" " + " ".join(parts)) if parts else ""
 
 
+# How far into a control to look for the image that describes it, and how many
+# to report. A gallery thumbnail wraps its `<img>` two or three levels down; a
+# product card that contains a dozen is describing a listing, not itself.
+_MAX_IMAGE_DESCENDANTS = 60
+_MAX_IMAGE_CONTEXTS = 2
+
+
+def _child_image_context(node: SimplifiedNode) -> str:
+    """`image_alt=...` for the image a nameless control is built around.
+
+    Ported from browser-use's `_get_child_image_context`. The case is an image
+    gallery: every thumbnail is a button whose only human-readable description
+    is the `alt` of the `<img>` inside it. That `<img>` is not interactive and
+    has no children, so `_build_simplified` prunes it outright -- and the
+    attribute whitelist can only report `alt` on the element carrying it. The
+    description therefore reaches the model nowhere at all, and the control
+    renders as an anonymous `[eN]<button />`.
+
+    Measured on a Zara product page: eight gallery controls named "Side view of
+    a multicoloured bag with an asymmetric top" in the accessibility tree,
+    every one of them anonymous in the render.
+
+    Walks the ORIGINAL descendants for exactly that reason -- the simplified
+    tree no longer contains the image this is looking for.
+    """
+
+    parts: list[str] = []
+    seen = 0
+    stack = [node.original]
+    while stack and seen < _MAX_IMAGE_DESCENDANTS and len(parts) < _MAX_IMAGE_CONTEXTS:
+        current = stack.pop()
+        seen += 1
+        if current.tag_name == "img":
+            for attribute, label in (("alt", "image_alt"), ("title", "image_title")):
+                value = normalize_text(current.attributes.get(attribute, ""))
+                if value:
+                    if len(value) > _MAX_VALUE_LEN:
+                        value = value[:_MAX_VALUE_LEN] + "\u2026"
+                    parts.append(f"{label}={value}")
+                    break
+        stack.extend(reversed(list(current.children_and_shadow_roots)))
+    return "".join(f" {part}" for part in parts)
+
+
 def _element_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> str:
     original = node.original
     # `selector_index`, not `backend_node_id`: the two differ exactly when a
@@ -140,6 +184,18 @@ def _element_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> 
     ax_name = normalize_text(original.ax_name)
     name = f' "{ax_name}"' if ax_name else ""
     attrs = _attribute_string(node, include_attributes)
+    if not ax_name:
+        # An image button's only description lives on the `<img>` inside it,
+        # and that `<img>` is not itself a rendered line -- so without this the
+        # control shows as an anonymous `[e12]<button />`. Containment dedup
+        # then makes it worse: when a wrapper and its inner image box are both
+        # interactive, the inner one is dropped and the survivor is the one
+        # with the generic label ("Enlarge image") rather than the descriptive
+        # alt ("Side view of a multicoloured bag").
+        #
+        # Only when the element has no accessible name of its own: a control
+        # that already says what it is does not need its decoration described.
+        attrs += _child_image_context(node)
     if node.promoted is not None and node.promoted.checked is not None:
         attrs += f" checked={node.promoted.checked}"
     prefix = "*" if node.is_new else ""
@@ -204,16 +260,21 @@ def render_tree(
     body = "\n".join(lines)
     kept = len(lines)
     if max_length is not None and len(body) > max_length:
-        # NOT "scroll to see more". Nothing here filters by scroll position --
-        # the cut is by document order against a character budget -- so that
-        # advice sent the model into an unwinnable loop: it scrolled, the same
-        # prefix came back, and it scrolled again until the step budget ran out.
-        # Observed on a Zara product page, where the four accordion buttons the
-        # task needed sat past the cut and the model spent every step trying to
-        # bring them "into view" to earn a ref.
+        # Two different things keep an element out of a render, and the marker
+        # has to be honest about which one this is or it sends the model after
+        # the wrong remedy:
+        #
+        # - THIS cut is by document order against a character budget. Scrolling
+        #   does not move it, so "scroll to see the rest" is wrong here.
+        # - Separately, `is_visible` is viewport-gated (`dom_fusion_engine`
+        #   `_VIEWPORT_THRESHOLD_PX`), so an off-screen control earns no ref at
+        #   all and scrolling genuinely does fix THAT. The offscreen-controls
+        #   trailer in `serializer.py` is what reports it.
+        #
+        # So this says only what it knows: the list was cut here.
         marker = (
-            "\n… [truncated: more elements exist. Scrolling will NOT reveal them"
-            " -- find them by text or role instead] …"
+            "\n… [truncated: the element list was cut short here to fit. "
+            "Anything below is missing from this list only] …"
         )
         # The marker is part of the output, so on a very small budget it has to
         # give way rather than push the render past the cap its caller asked for.

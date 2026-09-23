@@ -558,11 +558,15 @@ def test_the_controls_survive_a_budget_that_the_page_text_would_have_eaten() -> 
     assert "truncated" not in filtered.llm_text
 
 
-def test_the_truncation_marker_does_not_tell_the_model_to_scroll() -> None:
-    """It used to, and nothing here filters by scroll position -- the cut is by
-    document order against a character budget. On a Zara product page the model
-    followed that advice for every step it had: scroll, get the identical
-    prefix back, scroll again. The advice has to match the mechanism."""
+def test_the_truncation_marker_only_claims_what_truncation_does() -> None:
+    """Two different things keep an element out of a render and they need
+    opposite remedies, so the marker must not speak for both.
+
+    This cut is by document order against a character budget -- scrolling does
+    not move it. But `is_visible` is separately viewport-gated, and scrolling
+    genuinely does fix that; the offscreen-controls trailer reports it. A marker
+    that promises scrolling works, or that it does not, is wrong half the time.
+    """
 
     body = _node("body", 1)
     for i in range(50):
@@ -570,7 +574,7 @@ def test_the_truncation_marker_does_not_tell_the_model_to_scroll() -> None:
 
     text = serialize(body, max_length=600).llm_text
     assert "truncated" in text
-    assert "NOT reveal" in text
+    assert "scroll" not in text.lower()
 
 
 def test_the_marker_gives_way_rather_than_bust_a_small_budget() -> None:
@@ -584,3 +588,93 @@ def test_the_marker_gives_way_rather_than_bust_a_small_budget() -> None:
         assert len(text) <= budget, f"budget {budget} overrun"
     # Once there is room to say it, it is said.
     assert "truncated" in serialize(body, max_length=120).llm_text
+
+
+def test_a_button_inside_a_clickable_wrapper_keeps_its_own_ref() -> None:
+    """A `<button>` is a real control and speaks for itself, exactly as the
+    form-control tags do -- it was simply missing from that set.
+
+    Sites wrap an accordion trigger in a clickable container; the button then
+    fills ~100% of its wrapper and the containment dedup drops it. Unlike the
+    viewport gate, NOTHING brings it back -- scrolling does not help -- which is
+    what made it so hard to see from outside. A Zara build spent its last four
+    steps on "the accordion button isn't minting a ref", scrolled to it exactly
+    as instructed, and still got nothing.
+    """
+
+    wrapper = _node("div", 1, attrs={"onclick": "toggle()"}, bounds=BoundingBox(0, 0, 300, 60))
+    _child(
+        wrapper,
+        _node(
+            "button", 2, ax_role="button", ax_name="Composition, care & origin",
+            bounds=BoundingBox(0, 0, 300, 60),
+        ),
+    )
+
+    result = serialize(wrapper)
+    assert 2 in result.selector_map, "the button must be nameable"
+    assert "Composition, care & origin" in result.llm_text
+
+
+def test_a_link_inside_a_clickable_wrapper_keeps_its_own_ref() -> None:
+    wrapper = _node("div", 1, attrs={"onclick": "go()"}, bounds=BoundingBox(0, 0, 200, 40))
+    _child(wrapper, _node("a", 2, ax_role="link", ax_name="Size guide", bounds=BoundingBox(0, 0, 200, 40)))
+
+    assert 2 in serialize(wrapper).selector_map
+
+
+def test_a_plain_span_inside_a_clickable_wrapper_is_still_deduped() -> None:
+    """The dedup still earns its keep: a bare interactive-by-role `<span>`
+    filling its clickable parent is one control reported twice."""
+
+    wrapper = _node("div", 1, attrs={"onclick": "go()"}, bounds=BoundingBox(0, 0, 200, 40))
+    _child(wrapper, _node("span", 2, ax_role="button", bounds=BoundingBox(0, 0, 200, 40)))
+
+    result = serialize(wrapper)
+    assert 1 in result.selector_map
+    assert 2 not in result.selector_map
+
+
+def test_a_nameless_image_control_is_described_by_its_image() -> None:
+    """An image button's only description lives on the `<img>` inside it, which
+    is not interactive and so renders no line of its own. Without this the
+    control reaches the model as an anonymous `<button />`.
+
+    Measured on a Zara product page: eight gallery controls named "Side view of
+    a multicoloured bag with an asymmetric top" in the accessibility tree, every
+    one of them rendering as `[eN]<button />`.
+    """
+
+    button = _node("button", 2, bounds=BoundingBox(0, 0, 80, 80))
+    _child(button, _node("img", 3, attrs={"alt": "Side view of a multicoloured bag"}))
+    body = _node("body", 1)
+    _child(body, button)
+
+    text = serialize(body).llm_text
+    assert "image_alt=Side view of a multicoloured bag" in text
+
+
+def test_a_control_that_already_says_what_it_is_is_left_alone() -> None:
+    """A named control does not need its decoration described -- that is noise
+    on every icon button on the page."""
+
+    button = _node("button", 2, ax_role="button", ax_name="Add to cart",
+                   bounds=BoundingBox(0, 0, 80, 80))
+    _child(button, _node("img", 3, attrs={"alt": "shopping bag icon"}))
+    body = _node("body", 1)
+    _child(body, button)
+
+    text = serialize(body).llm_text
+    assert "Add to cart" in text
+    assert "image_alt" not in text
+
+
+def test_the_image_description_is_capped() -> None:
+    button = _node("button", 2, bounds=BoundingBox(0, 0, 80, 80))
+    _child(button, _node("img", 3, attrs={"alt": "x" * 400}))
+    body = _node("body", 1)
+    _child(body, button)
+
+    line = serialize(body).llm_text
+    assert "…" in line
+    assert len(line) < 200

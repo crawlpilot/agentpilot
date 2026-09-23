@@ -31,6 +31,7 @@ Four things this does that v1 could not:
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -106,6 +107,18 @@ _MAX_NARRATED_STEPS = 40
 # it was before any limit existed.
 _MAX_FIELD_ATTEMPTS = 4
 
+# Operating one of these is the agent saying "show me something that was not
+# there before", and whatever it revealed has not been looked at yet -- so the
+# patience budget must start again for it. See `_look`'s counter.
+#
+# Deliberately narrower than `capture.REVEALING_OPS`, which includes `scroll`:
+# an agent scrolls on most steps, and treating that as progress would stop the
+# counter ever firing -- which is the loop `_MAX_FIELD_ATTEMPTS` exists to end.
+# These are rare, deliberate interactions with a control.
+_OPENING_OPS = frozenset({
+    "click", "double_click", "tap", "select_option", "check", "uncheck",
+})
+
 ProgressSink = Callable[[dict[str, Any]], Awaitable[None]]
 """Called after each exploration step with a snapshot of what the build is
 doing. Injected rather than imported so the module has no opinion about where
@@ -154,6 +167,34 @@ class OnboardOutcome:
     @property
     def complete(self) -> bool:
         return not self.unresolved
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "all",
+    "this", "that", "its", "it", "page", "product", "value", "text", "from",
+})
+
+
+def _keywords_in(spec: FieldSpec, haystack: str) -> str:
+    """Which words of a field's name/description appear in the text the model
+    will be shown -- a crude but decisive signal for triage.
+
+    The question every failed field raises first is "was it even there?", and
+    nothing in the trace answered it: a field that could not be located looks
+    identical whether the reveal never happened or the selector was simply
+    wrong. Those need opposite fixes.
+    """
+
+    words = {
+        w
+        for w in re.split(r"[^a-z0-9]+", f"{spec.name} {spec.description}".lower())
+        if len(w) > 2 and w not in _STOPWORDS
+    }
+    if not words:
+        return "-"
+    low = haystack.lower()
+    hit = sorted(w for w in words if w in low)
+    return f"{len(hit)}/{len(words)} {hit[:5]}"
 
 
 def silently_unbound(
@@ -441,6 +482,18 @@ class ExplorationState:
 
         self._path.append(step)
         self._pending_steps.append(step)
+        # DEBUG: the route is what replay re-runs to get back to the state a
+        # field was readable in, so a reveal click that never lands here means
+        # the recipe opens nothing and the field reads empty for ever -- while
+        # the build itself looked fine, because the agent HAD opened the panel.
+        # `stabilize_action_dict` returning None is the silent way that happens.
+        log.info(
+            "onboard.route_step",
+            op=step.op,
+            target=step.target.to_dict() if step.target else None,
+            label=step.label,
+            route_len=len(self._path),
+        )
 
     async def _reset_route_if_navigated(self) -> None:
         """Drop the route when the page underneath it changed.
@@ -691,14 +744,29 @@ class ExplorationState:
         # froze nothing never reaches `_freeze`.
         self._pending_steps = []
         acted = False
+        opened = False
         for action_dict in step_record.actions:
             step = capture.stabilize_action_dict(action_dict, reference)
             if step is not None:
                 self._record_step(step)
                 acted = True
+                opened = opened or step.op in _OPENING_OPS
+            else:
+                # DEBUG: the agent did something the route cannot express --
+                # most often a ref-targeted click whose element could not be
+                # given a stable selector. The panel opens for the build and
+                # the recipe has no way to open it again, which reads later as
+                # "the field is empty on the sample page" with nothing to say
+                # why. This is the only place that fact exists.
+                log.info(
+                    "onboard.action_not_stabilized",
+                    action=str(action_dict)[:300],
+                )
 
         try:
-            await self._look(step_record, snapshot=snapshot, clicked_ref=clicked_ref)
+            await self._look(
+                step_record, snapshot=snapshot, clicked_ref=clicked_ref, opened=opened
+            )
         finally:
             # After the reads, always. The batch that opens a dialog is very
             # often the batch that binds nothing -- which is exactly when this
@@ -708,9 +776,18 @@ class ExplorationState:
                 await self._close_any_dialog()
 
     async def _look(
-        self, step_record: AgentStepRecord, *, snapshot: Any, clicked_ref: str | None
+        self,
+        step_record: AgentStepRecord,
+        *,
+        snapshot: Any,
+        clicked_ref: str | None,
+        opened: bool = False,
     ) -> None:
-        """Propose, verify and freeze whatever this page state can satisfy."""
+        """Propose, verify and freeze whatever this page state can satisfy.
+
+        `opened` says this batch operated a control (see `_OPENING_OPS`), which
+        is the agent asserting the page now shows something it did not before.
+        """
 
         structured = await self._reader.structured_data()
         snapshot_text = serialize(snapshot).llm_text
@@ -732,6 +809,27 @@ class ExplorationState:
             for name, spec in self._unfound.items()
             if name not in self.presumed_absent
         }
+        # DEBUG: what this page state was actually asked to satisfy, and
+        # whether the words each field is described by are even present in the
+        # text the model will be shown. A field that fails here with its
+        # keywords MISSING is a page-state problem (the reveal did not happen,
+        # or it happened and this snapshot predates it); one that fails with
+        # them PRESENT is a selector problem. Those need opposite fixes and the
+        # trace could not previously tell them apart.
+        log.info(
+            "onboard.look",
+            step=step_record.number if hasattr(step_record, "number") else None,
+            clicked_ref=clicked_ref,
+            looking_for=sorted(looking_for),
+            presumed_absent=sorted(self.presumed_absent),
+            snapshot_chars=len(snapshot_text),
+            structured_keys=sorted(structured)[:12] if structured else [],
+            keywords_present={
+                name: _keywords_in(spec, snapshot_text)
+                for name, spec in looking_for.items()
+            },
+        )
+
         if not looking_for:
             await self._narrate(step_record, [])
             return
@@ -805,6 +903,27 @@ class ExplorationState:
                 verified, row_bindings, snapshot=snapshot, clicked_ref=clicked_ref,
                 option_tree=step_record.observed_tree,
             )
+        # DEBUG: the three-way gap that matters. `asked` is what this page state
+        # was told to find; `verified` is what the selector agent could resolve;
+        # `frozen` is what actually became a binding. A field in `asked` but not
+        # `verified` is a locator problem (see `trace` for each rejection); one
+        # verified but not frozen reached a value and still has no way to
+        # produce it -- a table whose rows would not iterate, most often -- and
+        # those two used to be indistinguishable from the outside.
+        log.info(
+            "onboard.look_result",
+            asked=sorted(looking_for),
+            verified=sorted(verified),
+            rows_bound=sorted(row_bindings),
+            frozen=sorted(frozen),
+            verified_not_frozen=sorted(set(verified) - frozen),
+            asked_not_verified=sorted(set(looking_for) - set(verified) - set(row_bindings)),
+            bound_to={
+                name: chain[0].locator.to_dict()
+                for name, chain in verified.items()
+                if chain
+            },
+        )
         for name in frozen:
             self._unfound.pop(name, None)
             self._failures.pop(name, None)
@@ -836,7 +955,18 @@ class ExplorationState:
         }
         unbound = resolved - frozen
 
-        progressed = bool(frozen)
+        # A batch that opened something counts as progress even if it bound
+        # nothing yet. The reveal and the read are two different steps -- the
+        # click lands, and only the NEXT observation carries what it exposed --
+        # so charging the opening step as a miss writes a field off for the one
+        # action most likely to find it.
+        #
+        # Measured on a Zara build: `care` and `origin` exhausted their four
+        # attempts on `extract` steps that returned nothing, were presumed
+        # absent at step 6, and the accordion holding both was clicked open at
+        # step 7. The very next observation carried "Do not wash ... Made in
+        # China" and nothing was looking for them any more.
+        progressed = bool(frozen) or opened
         for name in looking_for:
             if name in frozen:
                 self._misses.pop(name, None)
