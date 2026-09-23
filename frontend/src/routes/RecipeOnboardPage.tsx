@@ -34,6 +34,7 @@ export function RecipeOnboardPage() {
   const [description, setDescription] = useState('')
   const [schemaText, setSchemaText] = useState('')
   const [extraUrls, setExtraUrls] = useState<string[]>([])
+  const [reviewFirst, setReviewFirst] = useState(false)
   const [started, setStarted] = useState<{ recipeId: string; runId: string } | null>(null)
 
   // A schema is only usable once it parses, so the button reflects that
@@ -63,6 +64,7 @@ export function RecipeOnboardPage() {
         description: mode === 'describe' ? description.trim() : undefined,
         output_schema: mode === 'schema' ? (parsedSchema ?? undefined) : undefined,
         sample_urls: extraUrls.map((u) => u.trim()).filter(Boolean),
+        mode: reviewFirst ? 'assisted' : undefined,
       },
       {
         onSuccess: (resp) => setStarted({ recipeId: resp.recipe_id, runId: resp.run_id }),
@@ -175,6 +177,27 @@ export function RecipeOnboardPage() {
             )}
           </>
         )}
+      </div>
+
+      <div className="flex items-start gap-2 rounded-md border border-border p-3">
+        <input
+          id="review-first"
+          type="checkbox"
+          className="mt-0.5 size-3.5 shrink-0"
+          checked={reviewFirst}
+          onChange={(e) => setReviewFirst(e.target.checked)}
+        />
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="review-first" className="cursor-pointer">
+            Let me check the values before it saves
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            It normally only stops for fields it could not settle. Tick this and it stops even when
+            everything bound, so you see what each field actually read. Worth it on a page whose own
+            JSON carries a sponsored competitor under the same key names &mdash; every field
+            resolves, one of them is the wrong product, and nothing mechanical catches that.
+          </p>
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">

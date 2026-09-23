@@ -424,6 +424,13 @@ class ExplorationState:
         # open map has one (`to_object`), and it has to reach the recipe's
         # `fields`, which is where `_replay_repeat` reads it from.
         self.field_transforms: dict[str, list[Any]] = {}
+        # Field name -> its spec with columns the page cannot fill removed.
+        # `verify_rows` drops a column that came back empty in every row rather
+        # than rejecting the whole table for it, and the declared contract has
+        # to follow the binding: `validate_document` refuses a table column with
+        # no candidates, so narrowing one without the other trades an unbound
+        # field for an unsaveable document.
+        self.narrowed_specs: dict[str, FieldSpec] = {}
 
     @property
     def unfound_fields(self) -> dict[str, FieldSpec]:
@@ -973,6 +980,11 @@ class ExplorationState:
             # field spec, which is where `_replay_repeat` looks for it.
             if binding.field_transform:
                 self.field_transforms[table_name] = binding.field_transform
+            # Columns this page cannot fill, dropped from the contract as well
+            # as from the bindings -- see `narrowed_specs`.
+            if binding.narrowed_spec is not None:
+                self.narrowed_specs[table_name] = binding.narrowed_spec
+                self._all_fields[table_name] = binding.narrowed_spec
             log.info(
                 "onboard.table_bound_as_rows",
                 field=table_name, kind=binding.repeat.kind, rows=len(binding.rows),
@@ -1280,6 +1292,13 @@ async def onboard_recipe(
     # caller asked for -- an open map, collapsed by `to_object`. Applied here
     # rather than in `_freeze` because it belongs to the FIELD, and `_freeze`
     # only ever builds groups.
+    # A table narrowed to the columns this page actually carries. Applied
+    # before the transforms below so a narrowed spec does not overwrite one.
+    for name, narrowed in state.narrowed_specs.items():
+        if name in checked:
+            checked[name] = replace(
+                checked[name], type=narrowed.type, assertions=narrowed.assertions
+            )
     for name, pipeline in state.field_transforms.items():
         if name in checked:
             checked[name] = replace(checked[name], transform=pipeline)

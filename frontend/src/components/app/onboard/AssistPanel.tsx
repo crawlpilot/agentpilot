@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Frame, HelpCircle, SkipForward } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { Check, Frame, HelpCircle, SkipForward, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -11,8 +11,16 @@ import { useSessionsList } from '@/hooks/useSessionsList'
 import { useAssistHeartbeat, useSubmitAssist } from '@/hooks/useRecipes'
 import { useToast } from '@/components/ui/toast'
 import { StepRecorder } from './StepRecorder'
-import { detailPickToDraft, scopeFromPick } from '@/lib/recipe/fromPick'
+import {
+  detailPickToDraft,
+  readAttribute,
+  scopeFromPick,
+  setReadAttribute,
+  toPreviewFields,
+} from '@/lib/recipe/fromPick'
+import { READ_ATTRIBUTES, attributeHint } from '@/lib/recipe/attributes'
 import type { PreviewStep } from '@/lib/picker/preview'
+import type { Candidate, FieldSpec } from '@/lib/recipe/types'
 import type { PendingAsk, RecipeResolution } from '@/lib/api/types'
 
 /**
@@ -44,6 +52,14 @@ export function AssistPanel({
   // rather than the ceiling being the budget for doing the work.
   useAssistHeartbeat(recipeId, runId, asks.length > 0)
   const [answers, setAnswers] = useState<Record<string, RecipeResolution>>({})
+  // A pick is kept as the DRAFT the picker derived, not as a finished
+  // resolution, because the draft is what the attribute chooser rewrites and
+  // what carries the type and cleanup the picker worked out. Flattening it to
+  // locators at pick time is what silently dropped `url_resolve` from every
+  // hand-corrected URL field.
+  const [picks, setPicks] = useState<
+    Record<string, { candidates: Candidate[]; spec: FieldSpec; preview: string }>
+  >({})
   // What a scope pick actually selected, so the person can see they hit the
   // heading before they submit rather than after the run comes back with it.
   const [scoped, setScoped] = useState<
@@ -52,16 +68,27 @@ export function AssistPanel({
 
   // The run's own session is the one showing the stuck page. It is named after
   // the run, which is how it is found among whatever else is open.
+  //
+  // **No fallback to "whatever else is open."** There used to be one, and it
+  // injected the picker into an unrelated session: the buttons stayed enabled,
+  // the live view showed a different page, and a pick bound a selector from
+  // somewhere else entirely. A missing run session is a state to report, not
+  // to substitute for.
   const { data } = useSessionsList()
   const sessions = (data?.sessions ?? []).filter((s) => s.state === 'active')
   const runSession = sessions.find((s) => s.session_id === `recipe-run-${runId}`)
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const active = sessionId ?? runSession?.session_id ?? sessions[0]?.session_id ?? null
+  const active = sessionId ?? runSession?.session_id ?? null
 
   const [selected, setSelected] = useState<string>(asks[0]?.field ?? '')
   // The route recorded for each field, kept here rather than in the row so a
   // recording survives the row re-rendering under it.
   const [recorded, setRecorded] = useState<Record<string, PreviewStep[]>>({})
+  // Which field is recording, if any. The in-page recorder is a SINGLE object
+  // (`entry.ts` constructs one) and `start()` clears its buffer, so two rows
+  // recording at once means the second wipes the first and the first's poller
+  // then collects the second's steps.
+  const [recordingField, setRecordingField] = useState<string | null>(null)
   const picker = usePagePicker(active)
 
   /**
@@ -85,6 +112,16 @@ export function AssistPanel({
    */
   const resolutions = useMemo(() => {
     const out = { ...answers }
+    for (const [field, draft] of Object.entries(picks)) {
+      out[field] = {
+        field,
+        action: 'pick',
+        locators: draft.candidates.map((c) => c.locator as unknown as Record<string, unknown>),
+        // The type and cleanup the picker derived. `_bind` never wrote these,
+        // so a manually picked `<a href>` kept relative URLs for ever.
+        spec: draft.spec as unknown as Record<string, unknown>,
+      }
+    }
     for (const [field, steps] of Object.entries(recorded)) {
       if (!steps.length) continue
       const recording = steps as unknown as Array<Record<string, unknown>>
@@ -96,52 +133,119 @@ export function AssistPanel({
       }
     }
     return out
-  }, [answers, recorded])
+  }, [answers, picks, recorded])
 
   const answered = useMemo(() => Object.keys(resolutions).length, [resolutions])
 
+  /** What a candidate chain actually reads on the live page, as replay would. */
+  const readBack = useCallback(
+    async (candidates: Candidate[]): Promise<string> => {
+      try {
+        const [result] = await picker.preview(
+          toPreviewFields([{ name: 'probe', spec: { type: { kind: 'scalar' } }, candidates }]),
+        )
+        if (!result || result.value === null) return ''
+        return Array.isArray(result.value) ? result.value.join(', ') : result.value
+      } catch {
+        // A failed read-back costs the preview line, never the answer.
+        return ''
+      }
+    },
+    [picker],
+  )
+
   async function scopeFor(fieldName: string, shape: 'one' | 'values' | 'map' | 'rows') {
-    const payload = await picker.pick('detail')
-    if (!payload) return
-    const scope = scopeFromPick(payload)
-    if (scope.locators.length === 0) {
-      toast({ title: 'No usable selector for that region' })
-      return
+    try {
+      const payload = await picker.pick('detail')
+      if (!payload) return
+      const scope = scopeFromPick(payload)
+      if (scope.locators.length === 0) {
+        toast({ title: 'No usable selector for that region' })
+        return
+      }
+      const selector = (scope.locators[0] as { selector?: string }).selector ?? ''
+      const html = selector ? await picker.outerHtml(selector) : ''
+      setAnswers((prev) => ({
+        ...prev,
+        [fieldName]: {
+          field: fieldName,
+          action: 'scope',
+          locators: scope.locators as unknown as Array<Record<string, unknown>>,
+          shape,
+          html,
+        },
+      }))
+      setScoped((prev) => ({ ...prev, [fieldName]: { ...scope, selector } }))
+    } catch (err) {
+      // `usePagePicker.pick` rethrows when the injection fails, and the call
+      // sites discard the rejection (`void scopeFor(...)`). Unhandled, the
+      // button simply looked dead -- which is exactly how an expired session
+      // presented itself.
+      pickFailed(err)
     }
-    const selector = (scope.locators[0] as { selector?: string }).selector ?? ''
-    const html = selector ? await picker.outerHtml(selector) : ''
-    setAnswers((prev) => ({
-      ...prev,
-      [fieldName]: {
-        field: fieldName,
-        action: 'scope',
-        locators: scope.locators as unknown as Array<Record<string, unknown>>,
-        shape,
-        html,
-      },
-    }))
-    setScoped((prev) => ({ ...prev, [fieldName]: { ...scope, selector } }))
   }
 
   async function pickFor(fieldName: string) {
-    const payload = await picker.pick('detail')
-    if (!payload) return
-    const draft = detailPickToDraft(payload)
-    if (draft.candidates.length === 0) {
-      toast({ title: 'No usable selector for that element' })
-      return
+    try {
+      const payload = await picker.pick('detail')
+      if (!payload) return
+      const draft = detailPickToDraft(payload)
+      if (draft.candidates.length === 0) {
+        toast({ title: 'No usable selector for that element' })
+        return
+      }
+      const preview = (await readBack(draft.candidates)) || draft.preview || ''
+      setPicks((prev) => ({
+        ...prev,
+        [fieldName]: { candidates: draft.candidates, spec: draft.spec, preview },
+      }))
+    } catch (err) {
+      pickFailed(err)
     }
-    setAnswers((prev) => ({
-      ...prev,
-      [fieldName]: {
-        field: fieldName,
-        action: 'pick',
-        locators: draft.candidates.map((c) => c.locator as unknown as Record<string, unknown>),
-      },
-    }))
+  }
+
+  function pickFailed(err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
     toast({
-      title: `${fieldName}: ${draft.candidates.length} candidates`,
-      description: draft.preview ? `Reads "${draft.preview}"` : undefined,
+      title: 'Could not pick on the page',
+      description: /404|no session/i.test(message)
+        ? 'The build’s browser session is no longer reachable. Describe where the field is, or skip it.'
+        : message,
+      variant: 'destructive',
+    })
+  }
+
+  /** Re-read the field through a different attribute. */
+  async function changeAttribute(fieldName: string, attribute: string) {
+    const draft = picks[fieldName]
+    if (!draft) return
+    const candidates = setReadAttribute(draft.candidates, attribute)
+    const preview = await readBack(candidates)
+    setPicks((prev) => ({ ...prev, [fieldName]: { ...draft, candidates, preview } }))
+  }
+
+  const setSteps = useCallback((fieldName: string, steps: PreviewStep[]) => {
+    // Stable identity: `StepRecorder`'s polling effect depends on this, and an
+    // inline arrow here rebuilt its interval on every parent render -- which is
+    // every sessions poll and every heartbeat.
+    setRecorded((prev) => ({ ...prev, [fieldName]: steps }))
+  }, [])
+
+  function clear(fieldName: string) {
+    setAnswers((prev) => {
+      const next = { ...prev }
+      delete next[fieldName]
+      return next
+    })
+    setPicks((prev) => {
+      const next = { ...prev }
+      delete next[fieldName]
+      return next
+    })
+    setScoped((prev) => {
+      const next = { ...prev }
+      delete next[fieldName]
+      return next
     })
   }
 
@@ -190,6 +294,15 @@ export function AssistPanel({
         </div>
       </div>
 
+      {picker.error && (
+        // Set by the hook and, until now, rendered nowhere -- so an injection
+        // that failed left the panel looking idle.
+        <p className="flex items-center gap-1.5 rounded bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+          <TriangleAlert className="size-3.5 shrink-0" />
+          {picker.error}
+        </p>
+      )}
+
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_22rem] gap-3">
         <div className="min-h-0 overflow-hidden rounded-md border border-border">
           {active ? (
@@ -207,7 +320,7 @@ export function AssistPanel({
             <AskRow
               key={ask.field}
               ask={ask}
-              answer={answers[ask.field]}
+              answer={resolutions[ask.field]}
               isSelected={selected === ask.field}
               canPick={active !== null}
               pickerStatus={picker.status}
@@ -215,12 +328,20 @@ export function AssistPanel({
               onPick={() => void pickFor(ask.field)}
               onScope={(shape) => void scopeFor(ask.field, shape)}
               scoped={scoped[ask.field]}
+              picked={picks[ask.field]}
+              onAttribute={(value) => void changeAttribute(ask.field, value)}
               onCancelPick={picker.cancel}
               onRefinePick={picker.refine}
               picker={picker}
               steps={recorded[ask.field] ?? []}
-              onSteps={(steps) =>
-                setRecorded((prev) => ({ ...prev, [ask.field]: steps }))
+              onSteps={setSteps}
+              recordingField={recordingField}
+              onRecordingChange={setRecordingField}
+              onAccept={() =>
+                setAnswers((prev) => ({
+                  ...prev,
+                  [ask.field]: { field: ask.field, action: 'accept' },
+                }))
               }
               onDescribe={(hint) =>
                 setAnswers((prev) => ({
@@ -234,13 +355,7 @@ export function AssistPanel({
                   [ask.field]: { field: ask.field, action: 'skip' },
                 }))
               }
-              onClear={() =>
-                setAnswers((prev) => {
-                  const next = { ...prev }
-                  delete next[ask.field]
-                  return next
-                })
-              }
+              onClear={() => clear(ask.field)}
             />
           ))}
         </div>
@@ -263,8 +378,18 @@ const SHAPE_HELP = {
   rows: 'Repeating rows with the same columns.',
 } as const
 
-function truncate(text: string): string {
-  return text.length > 60 ? `${text.slice(0, 60)}…` : text
+/** Every action, so a `scope` or a `steps` answer is not labelled "described". */
+const ACTION_LABEL: Record<RecipeResolution['action'], string> = {
+  pick: 'picked',
+  scope: 'region picked',
+  steps: 'route recorded',
+  describe: 'described',
+  accept: 'kept',
+  skip: 'skipped',
+}
+
+function truncate(text: string, at = 60): string {
+  return text.length > at ? `${text.slice(0, at)}…` : text
 }
 
 function AskRow({
@@ -277,14 +402,19 @@ function AskRow({
   onPick,
   onScope,
   scoped,
+  picked,
+  onAttribute,
   onCancelPick,
   onRefinePick,
+  onAccept,
   onDescribe,
   onSkip,
   onClear,
   picker,
   steps,
   onSteps,
+  recordingField,
+  onRecordingChange,
 }: {
   ask: PendingAsk
   answer: RecipeResolution | undefined
@@ -295,14 +425,19 @@ function AskRow({
   onPick: () => void
   onScope: (shape: 'one' | 'values' | 'map' | 'rows') => void
   scoped: { selector: string; matched: number; preview: string } | undefined
+  picked: { candidates: Candidate[]; spec: FieldSpec; preview: string } | undefined
+  onAttribute: (value: string) => void
   onCancelPick: () => void
   onRefinePick: (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => void
+  onAccept: () => void
   onDescribe: (hint: string) => void
   onSkip: () => void
   onClear: () => void
   picker: ReturnType<typeof usePagePicker>
   steps: PreviewStep[]
-  onSteps: (steps: PreviewStep[]) => void
+  onSteps: (field: string, steps: PreviewStep[]) => void
+  recordingField: string | null
+  onRecordingChange: (field: string | null) => void
 }) {
   const [hint, setHint] = useState('')
 
@@ -312,6 +447,7 @@ function AskRow({
   // it never ran. Those need opposite fixes, and only the trace tells them
   // apart.
   const failedSteps = ask.step_trace.filter((s) => s.status === 'failed')
+  const attribute = picked ? (readAttribute(picked.candidates) ?? 'text') : 'text'
 
   return (
     <div
@@ -331,12 +467,23 @@ function AskRow({
         </Badge>
         {answer && (
           <Badge variant="success" className="ml-auto">
-            {answer.action === 'pick' ? 'picked' : answer.action === 'skip' ? 'skipped' : 'described'}
+            {ACTION_LABEL[answer.action]}
           </Badge>
         )}
       </div>
 
       <p className="text-xs text-muted-foreground">{ask.reason}</p>
+
+      {ask.kind === 'rejected' && ask.value && (
+        // The value the judgement is about. Without it this row asks somebody
+        // to overrule a verdict it never showed them -- and the judge is a
+        // model, so a description carrying "Imported from China" arrives here
+        // rejected and correct.
+        <div className="flex flex-col gap-1 rounded bg-muted/50 px-2 py-1">
+          <span className="text-[11px] text-muted-foreground">It read:</span>
+          <span className="text-[11px]">“{truncate(ask.value, 300)}”</span>
+        </div>
+      )}
 
       {ask.kind === 'absent' && (
         // A different question from the other two. It stopped looking on
@@ -370,11 +517,49 @@ function AskRow({
       )}
 
       {answer ? (
-        <Button size="sm" variant="ghost" className="self-start" onClick={onClear}>
-          Change
-        </Button>
+        <div className="flex flex-col gap-2">
+          {picked && (
+            // What the pick reads, and through which attribute. The classifier
+            // guesses the attribute from the element's kind, and its guess used
+            // to be final: there was nowhere in this flow to say that an `<a>`
+            // should be read as `href`.
+            <div className="flex flex-col gap-1 rounded bg-muted/50 px-2 py-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">Reads</span>
+                <Select value={attribute} onValueChange={onAttribute}>
+                  <SelectTrigger className="h-6 w-36 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {READ_ATTRIBUTES.map((a) => (
+                      <SelectItem key={a.value} value={a.value}>
+                        {a.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                {attributeHint(attribute)}
+              </span>
+              <span className="text-[11px]">
+                {picked.preview ? `→ “${truncate(picked.preview, 80)}”` : '→ reads nothing'}
+              </span>
+            </div>
+          )}
+          <Button size="sm" variant="ghost" className="self-start" onClick={onClear}>
+            Change
+          </Button>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
+          {ask.kind === 'rejected' && ask.value && (
+            <Button size="sm" variant="outline" className="self-start" onClick={onAccept}>
+              <Check className="size-3.5" />
+              Keep this value
+            </Button>
+          )}
+
           <PickerControls
             status={pickerStatus}
             label="Point at the value"
@@ -430,9 +615,12 @@ function AskRow({
           </div>
           <StepRecorder
             picker={picker}
+            field={ask.field}
             disabled={!canPick}
             steps={steps}
             onChange={onSteps}
+            recordingField={recordingField}
+            onRecordingChange={onRecordingChange}
           />
 
           <div className="flex items-center gap-1.5">
@@ -442,6 +630,9 @@ function AskRow({
               placeholder="or say where it is — 'inside the Details accordion'"
               value={hint}
               onChange={(e) => setHint(e.target.value)}
+              // Blur commits too: typing a hint and clicking Continue used to
+              // lose it, because only Enter recorded the answer.
+              onBlur={() => hint.trim() && onDescribe(hint.trim())}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && hint.trim()) onDescribe(hint.trim())
               }}

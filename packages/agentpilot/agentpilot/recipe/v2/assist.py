@@ -950,6 +950,33 @@ async def _resolves(reader: PageReader, locator: Locator) -> bool:
         return False
 
 
+def _respec(spec: Any, raw: dict[str, Any]) -> Any:
+    """The field's spec, with the type and cleanup the picker derived folded in.
+
+    Only the two keys the browser can actually know about, and only when it sent
+    them: the declared contract is the caller's, not the picker's, so an absent
+    key leaves what the contract said alone rather than resetting it to a
+    default.
+    """
+
+    from dataclasses import replace as _replace
+
+    from agentpilot.recipe.v2.schema import TypeSpec
+    from agentpilot.recipe.v2.transform import parse_transforms
+
+    if not raw or spec is None:
+        return spec
+    changes: dict[str, Any] = {}
+    if isinstance(raw.get("type"), dict):
+        changes["type"] = TypeSpec.from_dict(raw["type"])
+    if raw.get("transform"):
+        try:
+            changes["transform"] = parse_transforms(raw["transform"])
+        except Exception:  # noqa: BLE001 - a bad cleanup is not a bad answer
+            pass
+    return _replace(spec, **changes) if changes else spec
+
+
 def _shaped(spec: Any, shape: ScopeShape) -> Any:
     """The field's spec, retyped for what the person asked the region to yield.
 

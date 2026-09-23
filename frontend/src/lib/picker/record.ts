@@ -59,22 +59,40 @@ export class Recorder {
   private steps: PreviewStep[] = []
   private scrollTimer: ReturnType<typeof setTimeout> | null = null
   private running = false
+  private navigated = false
+  /**
+   * Whether the page changed under the recording.
+   *
+   * `navigate` is deliberately not recordable -- replay issues its own -- but
+   * nothing stopped somebody navigating mid-recording, after which every
+   * subsequent step targets a different document. The route then replays
+   * against the original page, the later selectors match nothing, and because
+   * every reveal step is `optional`/`on_error: continue` it fails in complete
+   * silence. Reported so the panel can say to start again rather than letting
+   * a broken route be saved.
+   */
+  get didNavigate(): boolean {
+    return this.navigated
+  }
 
   constructor() {
     this.onClick = this.onClick.bind(this)
     this.onChange = this.onChange.bind(this)
     this.onKeyDown = this.onKeyDown.bind(this)
     this.onScroll = this.onScroll.bind(this)
+    this.onUnload = this.onUnload.bind(this)
   }
 
   start(): void {
     if (this.running) return
     this.running = true
     this.steps = []
+    this.navigated = false
     document.addEventListener('click', this.onClick, true)
     document.addEventListener('change', this.onChange, true)
     document.addEventListener('keydown', this.onKeyDown, true)
     document.addEventListener('scroll', this.onScroll, { passive: true, capture: true })
+    window.addEventListener('beforeunload', this.onUnload)
   }
 
   stop(): PreviewStep[] {
@@ -83,6 +101,7 @@ export class Recorder {
       document.removeEventListener('change', this.onChange, true)
       document.removeEventListener('keydown', this.onKeyDown, true)
       document.removeEventListener('scroll', this.onScroll, true)
+      window.removeEventListener('beforeunload', this.onUnload)
       this.running = false
     }
     if (this.scrollTimer !== null) {
@@ -117,15 +136,24 @@ export class Recorder {
     const el = this.target(e)
     if (!el) return
     const selector = bestCss(el)
-    if (!selector) return
-    this.push({
-      op: 'click',
-      kind: 'css',
-      selector,
-      // Carried for the panel to label the row with, so a recording reads as
-      // "click Specifications" rather than as six anonymous selectors.
-      text: (el.innerText || el.textContent || '').trim().slice(0, 60),
-    })
+    // Carried for the panel to label the row with, so a recording reads as
+    // "click Specifications" rather than as six anonymous selectors.
+    const text = (el.innerText || el.textContent || '').trim().slice(0, 60)
+    if (!selector) {
+      // Recorded WITHOUT a selector rather than dropped.
+      //
+      // Dropping it was silent in the worst place: the person clicks, nothing
+      // appears in the list, and they have no way to know whether the recorder
+      // missed it or the click did not register. Worse, "Try these" rehearsed
+      // the client-side list while the server ran `parse_recorded_steps` over a
+      // shorter one, so a route could rehearse green and be stored with a hole
+      // where this click was. A step with no selector fails both the panel's
+      // `keepable` check and the server's dispatchability gate, so it is shown
+      // struck through and never saved.
+      this.push({ op: 'click', text })
+      return
+    }
+    this.push({ op: 'click', kind: 'css', selector, text })
   }
 
   private onChange(e: Event): void {
@@ -150,6 +178,10 @@ export class Recorder {
     // closing a dialog. The rest is typing, and `change` already has that.
     if (e.key !== 'Enter' && e.key !== 'Escape') return
     this.push({ op: 'press', text: e.key })
+  }
+
+  private onUnload(): void {
+    this.navigated = true
   }
 
   private onScroll(): void {

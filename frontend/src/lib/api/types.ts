@@ -766,6 +766,16 @@ export interface RecipeOnboardRequest {
   output_schema?: Record<string, unknown>
   /** More pages of the same kind. Two or more sharpen the derived `target.match`. */
   sample_urls?: string[]
+  /**
+   * `assisted` parks the build for review even when every field bound, so a
+   * person confirms the values before the recipe is saved.
+   *
+   * Worth asking for on a page whose own JSON carries a sponsored competitor
+   * under the same key names: every field resolves, one of them is the wrong
+   * product, and nothing mechanical catches it. The backend has implemented
+   * this since the assist loop shipped; this field is what makes it reachable.
+   */
+  mode?: 'auto' | 'assisted'
 }
 
 export interface RecipeOnboardResponse {
@@ -821,6 +831,14 @@ export interface RecipeResolution {
    * a `within` for whatever the model finds inside it.
    */
   locators?: Array<Record<string, unknown>>
+  /**
+   * `pick`: the type and cleanup the picker derived for what was clicked — a
+   * `FieldSpec` fragment. The browser knows what a locator cannot carry: that a
+   * link pick needs `url_resolve` or its URLs stay relative, that an array pick
+   * needs `filter_empty`. Dropping it bound a hand-corrected URL field
+   * correctly and still emitted relative hrefs for ever.
+   */
+  spec?: Record<string, unknown>
   /** `describe`: a hint fed to the selector agent, not used as a selector. */
   hint?: string
   /** `scope`: what the region should yield. A spec block is a `map`, not `one`. */

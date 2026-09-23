@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { Circle, PlayCircle, Square, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Circle, PlayCircle, Square, Trash2, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { useToast } from '@/components/ui/toast'
 import type { PreviewStep, StepOutcome } from '@/lib/picker/preview'
 import type { usePagePicker } from '@/hooks/usePagePicker'
 
@@ -30,57 +31,116 @@ const POLL_MS = 700
 
 export function StepRecorder({
   picker,
+  field,
   disabled,
   steps,
   onChange,
+  recordingField,
+  onRecordingChange,
 }: {
   picker: ReturnType<typeof usePagePicker>
+  field: string
   disabled: boolean
   steps: PreviewStep[]
-  onChange: (steps: PreviewStep[]) => void
+  onChange: (field: string, steps: PreviewStep[]) => void
+  /**
+   * Which field owns the in-page recorder right now, panel-wide.
+   *
+   * There is ONE `Recorder` in the page (`entry.ts` constructs it once) and
+   * `start()` clears its buffer, so a second row starting a recording wipes the
+   * first row's steps and then feeds its own into the first row's poller.
+   * Ownership has to be decided above the row.
+   */
+  recordingField: string | null
+  onRecordingChange: (field: string | null) => void
 }) {
-  const [recording, setRecording] = useState(false)
+  const { toast } = useToast()
+  const recording = recordingField === field
   const [outcomes, setOutcomes] = useState<StepOutcome[] | null>(null)
   const [trying, setTrying] = useState(false)
   // Read by the interval, which must see a stop that happened after it started.
   const live = useRef(false)
+  // The effect must not depend on either of these. `picker` is a fresh object
+  // from `usePagePicker` on every render, so depending on it tore the interval
+  // down and rebuilt it on every parent render -- and the parent re-renders on
+  // every sessions poll and every assist heartbeat, which stalled the live
+  // step list indefinitely.
+  const pickerRef = useRef(picker)
+  pickerRef.current = picker
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
 
   useEffect(() => {
     if (!recording) return
     live.current = true
     const timer = setInterval(() => {
       if (!live.current) return
-      void picker.takeRecording().then((got) => {
-        if (live.current && got.length) onChange(got)
-      })
+      void pickerRef.current
+        .takeRecording()
+        .then((got) => {
+          if (live.current && got.length) onChangeRef.current(field, got)
+        })
+        .catch(() => {
+          // A dropped poll is not worth a toast; `stop()` reports for real.
+        })
     }, POLL_MS)
     return () => {
       live.current = false
       clearInterval(timer)
     }
-  }, [recording, picker, onChange])
+  }, [recording, field])
 
-  async function start() {
+  const start = useCallback(async () => {
     setOutcomes(null)
-    onChange([])
-    await picker.startRecording()
-    setRecording(true)
-  }
+    onChange(field, [])
+    try {
+      await picker.startRecording()
+    } catch (err) {
+      // Same silence the picker had: `startRecording` rejects when the
+      // injection fails (an expired session 404s), and without this the button
+      // simply did nothing.
+      toast({
+        title: 'Could not start recording',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+      return
+    }
+    onRecordingChange(field)
+  }, [picker, field, onChange, onRecordingChange, toast])
 
-  async function stop() {
+  const stop = useCallback(async () => {
     live.current = false
-    setRecording(false)
-    onChange(await picker.stopRecording())
-  }
+    onRecordingChange(null)
+    try {
+      onChange(field, await picker.stopRecording())
+    } catch (err) {
+      toast({
+        title: 'Could not read the recording back',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    }
+  }, [picker, field, onChange, onRecordingChange, toast])
 
   async function tryThese() {
     setTrying(true)
     try {
-      setOutcomes(await picker.applySteps(steps))
+      // Only what the server will actually keep -- see `keepable`.
+      setOutcomes(await picker.applySteps(steps.filter(keepable)))
+    } catch (err) {
+      toast({
+        title: 'Could not replay the steps',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
     } finally {
       setTrying(false)
     }
   }
+
+  const dropped = steps.filter((s) => !keepable(s)).length
+  const busyElsewhere = recordingField !== null && !recording
 
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-border p-2">
@@ -109,7 +169,8 @@ export function StepRecorder({
             size="sm"
             variant="outline"
             className="h-6 px-2 text-[11px]"
-            disabled={disabled}
+            disabled={disabled || busyElsewhere}
+            title={busyElsewhere ? `Stop the recording on ${recordingField} first` : undefined}
             onClick={() => void start()}
           >
             <Circle className="size-3" />
@@ -131,44 +192,67 @@ export function StepRecorder({
         )}
       </div>
 
+      {dropped > 0 && (
+        // The rehearsal used to run the whole client-side list while the server
+        // silently discarded some of it (`parse_recorded_steps` drops unknown
+        // ops and undispatchable targets), so "Try these" could pass on a route
+        // that would be stored with holes in it.
+        <p className="flex items-start gap-1.5 rounded bg-warning/10 px-2 py-1 text-[11px] text-muted-foreground">
+          <TriangleAlert className="mt-0.5 size-3 shrink-0 text-warning" />
+          {dropped === 1 ? 'One action was' : `${dropped} actions were`} not recordable &mdash; no
+          stable selector for what was clicked. They are shown struck through and will not be
+          saved.
+        </p>
+      )}
+
       {steps.length > 0 && (
         <ol className="flex flex-col gap-0.5">
-          {steps.map((step, i) => (
-            <li key={i} className="flex items-center gap-1.5 text-[11px]">
-              <span className="w-4 shrink-0 text-right text-muted-foreground">{i + 1}</span>
-              <Badge variant="outline" className="shrink-0 px-1 py-0 font-mono text-[10px]">
-                {step.op}
-              </Badge>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                {step.text || step.selector || '—'}
-              </span>
-              {outcomes?.[i] && (
+          {steps.map((step, i) => {
+            const kept = keepable(step)
+            return (
+              <li key={i} className="flex items-center gap-1.5 text-[11px]">
+                <span className="w-4 shrink-0 text-right text-muted-foreground">{i + 1}</span>
                 <Badge
-                  variant={
-                    outcomes[i].status === 'ok'
-                      ? 'success'
-                      : outcomes[i].status === 'failed'
-                        ? 'destructive'
-                        : 'warning'
-                  }
-                  className="shrink-0 px-1 py-0 text-[10px]"
+                  variant="outline"
+                  className={`shrink-0 px-1 py-0 font-mono text-[10px] ${kept ? '' : 'opacity-50'}`}
                 >
-                  {outcomes[i].status}
+                  {step.op}
                 </Badge>
-              )}
-              {!recording && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="size-5 shrink-0 p-0"
-                  title="Drop this step"
-                  onClick={() => onChange(steps.filter((_, j) => j !== i))}
+                <span
+                  className={`min-w-0 flex-1 truncate text-muted-foreground ${
+                    kept ? '' : 'line-through opacity-60'
+                  }`}
                 >
-                  <Trash2 className="size-3" />
-                </Button>
-              )}
-            </li>
-          ))}
+                  {step.text || step.selector || '—'}
+                </span>
+                {outcomes?.[i] && (
+                  <Badge
+                    variant={
+                      outcomes[i].status === 'ok'
+                        ? 'success'
+                        : outcomes[i].status === 'failed'
+                          ? 'destructive'
+                          : 'warning'
+                    }
+                    className="shrink-0 px-1 py-0 text-[10px]"
+                  >
+                    {outcomes[i].status}
+                  </Badge>
+                )}
+                {!recording && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="size-5 shrink-0 p-0"
+                    title="Drop this step"
+                    onClick={() => onChange(field, steps.filter((_, j) => j !== i))}
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                )}
+              </li>
+            )
+          })}
         </ol>
       )}
 
@@ -180,4 +264,29 @@ export function StepRecorder({
       )}
     </div>
   )
+}
+
+/**
+ * Ops the server will keep, mirroring `assist.py::_RECORDABLE_OPS`.
+ *
+ * A step the recorder could not give a stable CSS selector arrives with none
+ * (`record.ts` marks it rather than dropping it silently, so the person can see
+ * that their click was not captured). Everything else needs a target except
+ * `press` and a page-level `scroll`, which is the same rule
+ * `parse_recorded_steps` applies.
+ */
+const RECORDABLE_OPS = new Set([
+  'click',
+  'fill',
+  'select_option',
+  'press',
+  'scroll',
+  'scroll_into_view',
+  'hover',
+])
+
+function keepable(step: PreviewStep): boolean {
+  if (!RECORDABLE_OPS.has(step.op)) return false
+  if (step.selector) return true
+  return step.op === 'press' || step.op === 'scroll'
 }

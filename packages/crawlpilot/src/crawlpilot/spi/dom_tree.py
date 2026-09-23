@@ -83,6 +83,26 @@ class SnapshotView:
     resolved by the driver from the live viewport size."""
     max_nodes: int | None = None
     """Cap on how many interactive elements are offered, in document order."""
+    visible_text_only: bool = False
+    """Render only text a person could actually read on the page.
+
+    Off by default, and it must stay that way: the recipe builder's whole
+    premise is that a `text` locator "reads textContent and DOES see
+    collapsed/hidden content" (`selector_agent.py`), so a field behind a shut
+    accordion is findable without clicking it. The judge corroborates values
+    against this same text. Hiding it there would break both.
+
+    For an *agent* observation the calculus inverts. Nothing it reads is
+    collected; it is deciding what to click, and a control it cannot see is a
+    control it cannot click. Meanwhile the hidden half of a commerce page --
+    every collapsed panel, every SEO paragraph, every offscreen carousel slide
+    -- is most of the text, and it was crowding the interactive elements out of
+    a length-capped render entirely.
+
+    Mirrors browser-use's rule in `DOMTreeSerializer.serialize_tree`: visible,
+    not painted over, and longer than one character.
+    """
+
     depth: int | None = None
     """Maximum indentation depth to render.
 
@@ -104,6 +124,12 @@ class SnapshotView:
             or self.viewport is not None
             or self.max_nodes is not None
         )
+
+    @property
+    def filters_text(self) -> bool:
+        """Whether text nodes are being narrowed as well as element ones."""
+
+        return self.visible_text_only
 
 
 class NodeType(IntEnum):

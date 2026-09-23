@@ -1,7 +1,7 @@
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { CheckCircle2, Hand, Loader2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useRecipeRun } from '@/hooks/useRecipes'
+import { useRecipeRun, useRequestAssist } from '@/hooks/useRecipes'
 import { AssistPanel } from './AssistPanel'
 import { BuildProgress } from './BuildProgress'
 import { CheckProgress } from './CheckProgress'
@@ -165,10 +165,17 @@ export function OnboardProgress({
     // what matters is the page it is driving. Once it is checking, the page is
     // no longer the interesting thing -- the recipe and what the reviewer makes
     // of it are.
-    return progress.phase === 'verifying' ? (
-      <CheckProgress progress={progress} />
-    ) : (
-      <BuildProgress runId={runId} progress={progress} />
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <RequestAssistBar recipeId={recipeId} runId={runId} />
+        <div className="min-h-0 flex-1">
+          {progress.phase === 'verifying' ? (
+            <CheckProgress progress={progress} />
+          ) : (
+            <BuildProgress runId={runId} progress={progress} />
+          )}
+        </div>
+      </div>
     )
   }
 
@@ -241,6 +248,44 @@ function RunEvidence({
         })}
       </div>
     </details>
+  )
+}
+
+/**
+ * "Stop when you get to the end and let me look."
+ *
+ * `requestAssist` and `useRequestAssist` have been wired since the assist loop
+ * shipped and were called by nothing -- so the only way a build ever stopped
+ * for a person was for it to fail to settle a field by itself. This is the
+ * other half: watching it bind something that looks wrong and being able to say
+ * so while the session is still open.
+ *
+ * It sets a flag the worker re-reads *while the build is running*
+ * (`_assist_wanted`), so it parks at the end of this build rather than
+ * interrupting mid-step and losing the page state the ask depends on.
+ */
+function RequestAssistBar({ recipeId, runId }: { recipeId: string; runId: string }) {
+  const request = useRequestAssist(recipeId, runId)
+  const asked = request.isSuccess
+
+  return (
+    <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+      <span className="text-xs text-muted-foreground">
+        {asked
+          ? 'It will stop and show you every field before saving.'
+          : 'It only stops for fields it cannot settle.'}
+      </span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="ml-auto h-7 text-xs"
+        disabled={asked || request.isPending}
+        onClick={() => request.mutate()}
+      >
+        <Hand className="size-3.5" />
+        {asked ? 'Will stop for you' : request.isPending ? 'Asking…' : 'Stop and let me check'}
+      </Button>
+    </div>
   )
 }
 

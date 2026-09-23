@@ -240,7 +240,9 @@ def _iter_simplified(root: SimplifiedNode):
         stack.extend(node.children)
 
 
-def _apply_paint_order(root: SimplifiedNode, full: EnhancedDOMTreeNode) -> None:
+def _apply_paint_order(
+    root: SimplifiedNode, full: EnhancedDOMTreeNode, *, test_text: bool = False
+) -> None:
     """Mark interactive nodes hidden behind something opaque painted later.
 
     Covers are gathered from `full`, the *original* tree, not from the
@@ -290,15 +292,24 @@ def _apply_paint_order(root: SimplifiedNode, full: EnhancedDOMTreeNode) -> None:
             seen.add(original.backend_node_id)
             entries.append(entry)
 
-    for node in _iter_simplified(root):
+    # Text is swept only when something will read the answer -- `_hide_unreadable_text`
+    # is the sole consumer, and a page has far more text nodes than interactive
+    # ones, so testing them unconditionally would cost every caller for a flag
+    # most of them do not set.
+    def wanted(node: SimplifiedNode) -> bool:
         if node.is_interactive:
+            return True
+        return test_text and node.original.node_type == NodeType.TEXT_NODE
+
+    for node in _iter_simplified(root):
+        if wanted(node):
             add(node.original, interactive=True)
     for element in iter_elements(full):
         add(element, interactive=False)
 
     occluded = compute_occluded(entries)
     for node in _iter_simplified(root):
-        if node.is_interactive and node.original.backend_node_id in occluded:
+        if wanted(node) and node.original.backend_node_id in occluded:
             node.ignored_by_paint_order = True
 
 
@@ -365,6 +376,9 @@ def _apply_view(root: SimplifiedNode, view: SnapshotView) -> None:
     all three.
     """
 
+    if view.visible_text_only:
+        _hide_unreadable_text(root)
+
     if not view.filters_offered_set:
         return
 
@@ -382,6 +396,37 @@ def _apply_view(root: SimplifiedNode, view: SnapshotView) -> None:
             node.excluded_by_view = True
             continue
         offered += 1
+
+
+def _hide_unreadable_text(root: SimplifiedNode) -> None:
+    """Mark text nodes a person could not read, for `visible_text_only`.
+
+    Three rules, all of them browser-use's (`DOMTreeSerializer.serialize_tree`),
+    and each carries most of its weight on a different kind of page:
+
+    - **Not visible.** A commerce page keeps its collapsed accordions, its
+      offscreen carousel slides and its SEO copy in the DOM. On a product page
+      that is the majority of the text by volume, and none of it is something an
+      agent can click.
+    - **Painted over.** Text under an open modal or a cookie wall reads exactly
+      like text the agent can act on, and acting on it does nothing.
+    - **One character.** Separators, bullets and stray whitespace glyphs, one
+      render line each.
+
+    `is_visible` is tri-state: `None` means the fusion could not say, and the
+    honest reading of "unknown" is to keep the text. Only a definite `False`
+    hides it.
+    """
+
+    for node in _iter_document_order(root):
+        if node.original.node_type != NodeType.TEXT_NODE:
+            continue
+        if (
+            node.original.is_visible is False
+            or node.ignored_by_paint_order
+            or len(render.normalize_text(node.original.node_value)) <= 1
+        ):
+            node.excluded_by_view = True
 
 
 def _in_view(node: SimplifiedNode, view: SnapshotView) -> bool:
@@ -472,7 +517,7 @@ def serialize(
         return SerializedDOM(selector_map={}, llm_text="(empty page)")
 
     view = view or SnapshotView()
-    _apply_paint_order(simplified, root)
+    _apply_paint_order(simplified, root, test_text=view.visible_text_only)
     _apply_containment(simplified)
     # After both, deliberately: occlusion and containment reason about the whole
     # page, and a node the view hides is still allowed to hide others.

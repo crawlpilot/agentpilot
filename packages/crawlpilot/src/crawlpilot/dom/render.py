@@ -187,7 +187,11 @@ def render_tree(
                 line_indices.append(node.selector_index)
             child_level = level + 1
         else:
-            text = node.text_content()
+            # `excluded_by_view` on a text node is `visible_text_only` saying a
+            # person could not read this -- collapsed, painted over, or a single
+            # stray glyph. The node stays in the tree (it is still an ancestor
+            # and still contributes structure); it just contributes no line.
+            text = "" if node.excluded_by_view else node.text_content()
             if text:
                 if not too_deep:
                     lines.append(f"{indent}{text}")
@@ -200,7 +204,19 @@ def render_tree(
     body = "\n".join(lines)
     kept = len(lines)
     if max_length is not None and len(body) > max_length:
-        marker = "\n… [truncated: more elements below, scroll or narrow the task] …"
+        # NOT "scroll to see more". Nothing here filters by scroll position --
+        # the cut is by document order against a character budget -- so that
+        # advice sent the model into an unwinnable loop: it scrolled, the same
+        # prefix came back, and it scrolled again until the step budget ran out.
+        # Observed on a Zara product page, where the four accordion buttons the
+        # task needed sat past the cut and the model spent every step trying to
+        # bring them "into view" to earn a ref.
+        marker = (
+            "\n… [truncated: this page has more elements than fit here. "
+            "Scrolling will NOT reveal them -- the cut is by page order, not by "
+            "what is on screen. Use a find/search action to address an element "
+            "by its text or role instead.] …"
+        )
         budget = max(0, max_length - len(marker))
         body = body[:budget] + marker
         # A line is "shown" only if it survived whole -- a ref cut mid-token is

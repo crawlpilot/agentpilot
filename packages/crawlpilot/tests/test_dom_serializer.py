@@ -442,3 +442,117 @@ def test_depth_counts_rendered_lines_not_dom_nesting() -> None:
     _child(parent, _node("button", 90, ax_name="Buried", bounds=BoundingBox(0, 0, 40, 20)))
 
     assert "[e90]" in serialize(body, view=SnapshotView(depth=0)).llm_text
+
+
+# ------------------------------------------------------- visible_text_only
+#
+# The size of an agent observation was decided by a head-first character cap,
+# and on a commerce product page that cap ran out inside the nav. The controls
+# the task needed -- four accordion buttons, last in document order -- were
+# never rendered, so `rendered_indices` excluded them, so the loop REJECTED
+# every ref the model chose for them. Its own reasoning ("scroll them into view
+# to get refs") could not help: nothing here filters by scroll position, so the
+# same prefix came back every step until the budget ran out.
+#
+# The fix is to stop rendering what the agent cannot act on in the first place,
+# which is browser-use's rule: a text node is rendered only if it is visible,
+# not painted over, and longer than one character.
+
+
+def test_hidden_text_is_still_rendered_by_default() -> None:
+    """The recipe builder depends on this and must not be disturbed: a `text`
+    locator is specified to read textContent INCLUDING collapsed content, so a
+    field behind a shut accordion is findable without clicking it, and the judge
+    corroborates values against this same render."""
+
+    body = _node("body", 1)
+    panel = _child(body, _node("div", 2, visible=False))
+    _child(panel, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="100% viscose", visible=False))
+
+    assert "100% viscose" in serialize(body).llm_text
+
+
+def test_visible_text_only_drops_collapsed_content() -> None:
+    body = _node("body", 1)
+    panel = _child(body, _node("div", 2, visible=False))
+    _child(panel, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="100% viscose", visible=False))
+    _child(body, _node("#text", 4, node_type=NodeType.TEXT_NODE, value="Add to cart"))
+
+    text = serialize(body, view=SnapshotView(visible_text_only=True)).llm_text
+    assert "100% viscose" not in text
+    assert "Add to cart" in text
+
+
+def test_visible_text_only_keeps_text_whose_visibility_is_unknown() -> None:
+    """`is_visible` is tri-state and `None` means the fusion could not say. The
+    honest reading of "unknown" is to keep the text -- dropping it would make
+    the flag lose real content on any page the layout snapshot did not cover."""
+
+    body = _node("body", 1)
+    unknown = _node("#text", 2, node_type=NodeType.TEXT_NODE, value="probably readable")
+    unknown.is_visible = None
+    _child(body, unknown)
+
+    assert "probably readable" in serialize(
+        body, view=SnapshotView(visible_text_only=True)
+    ).llm_text
+
+
+def test_visible_text_only_drops_single_character_text() -> None:
+    """Separators and stray glyphs, one render line each."""
+
+    body = _node("body", 1)
+    _child(body, _node("#text", 2, node_type=NodeType.TEXT_NODE, value="·"))
+    _child(body, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="Checkout"))
+
+    text = serialize(body, view=SnapshotView(visible_text_only=True)).llm_text
+    assert "·" not in text
+    assert "Checkout" in text
+
+
+def test_visible_text_only_never_costs_a_ref() -> None:
+    """Text filtering must not change which elements are addressable -- only how
+    much text surrounds them."""
+
+    body = _node("body", 1)
+    hidden = _child(body, _node("div", 2, visible=False))
+    _child(hidden, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="hidden blurb", visible=False))
+    _child(body, _node("button", 4, ax_role="button", ax_name="Composition, care & origin"))
+
+    plain = serialize(body)
+    filtered = serialize(body, view=SnapshotView(visible_text_only=True))
+    assert set(filtered.selector_map) == set(plain.selector_map)
+    assert "Composition, care & origin" in filtered.llm_text
+
+
+def test_the_controls_survive_a_budget_that_the_page_text_would_have_eaten() -> None:
+    """The Zara failure, in miniature. Bulk hidden text first, the control the
+    task needs last, and a budget smaller than the two together.
+
+    Without the filter the cap is spent before the button renders, so it earns
+    no place in `rendered_indices` -- and the agent loop validates the model's
+    chosen ref against exactly that set, so the button becomes unclickable
+    rather than merely unmentioned.
+    """
+
+    body = _node("body", 1)
+    for i in range(60):
+        blurb = _child(body, _node("div", 100 + i, visible=False))
+        _child(
+            blurb,
+            _node(
+                "#text", 1000 + i, node_type=NodeType.TEXT_NODE,
+                value=f"Shipping and returns boilerplate paragraph {i}. " * 6,
+                visible=False,
+            ),
+        )
+    _child(body, _node("button", 9, ax_role="button", ax_name="Composition, care & origin"))
+
+    budget = 4_000
+    plain = serialize(body, max_length=budget)
+    filtered = serialize(body, max_length=budget, view=SnapshotView(visible_text_only=True))
+
+    assert 9 not in plain.rendered_indices, "the control is lost to the cap today"
+    assert "truncated" in plain.llm_text
+    assert 9 in filtered.rendered_indices
+    assert "truncated" not in filtered.llm_text

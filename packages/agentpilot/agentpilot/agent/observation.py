@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from crawlpilot.dom.diff import DomDiff, diff_snapshots, iter_interactive, render_change_block
 from crawlpilot.dom.serializer import serialize
-from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode
+from crawlpilot.spi.dom_tree import DOMSelectorMap, EnhancedDOMTreeNode, SnapshotView
 
 
 @dataclass
@@ -44,7 +44,18 @@ def build_observation(
     elements marked, and prepend the change block."""
 
     diff = diff_snapshots(previous, current)
-    serialized = serialize(current, new_backend_ids=diff.new_backend_ids, max_length=max_length)
+    serialized = serialize(
+        current,
+        new_backend_ids=diff.new_backend_ids,
+        max_length=max_length,
+        # An agent observation is a list of things to click, not a body of text
+        # to read. Everything hidden on a commerce page -- collapsed panels,
+        # offscreen carousel slides, SEO copy -- is unreachable to it and was
+        # the bulk of the render, crowding the controls it needed out of the
+        # length budget entirely. The recipe builder deliberately does NOT set
+        # this: its `text` locators are specified to see collapsed content.
+        view=SnapshotView(visible_text_only=True),
+    )
 
     change_block = render_change_block(diff)
     if change_block:

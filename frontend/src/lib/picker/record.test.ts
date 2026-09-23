@@ -10,6 +10,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Recorder } from './record'
 
+// Spied on rather than replaced: every other test wants the real generator, and
+// only the no-stable-selector case needs to force its answer.
+vi.mock('./vendor/content/services/dom/domUtils', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('./vendor/content/services/dom/domUtils')
+  >()
+  return { ...actual, generateRobustSelectors: vi.fn(actual.generateRobustSelectors) }
+})
+
 function html(markup: string) {
   document.body.innerHTML = markup
 }
@@ -161,5 +170,63 @@ describe('Recorder', () => {
 
     recorder.start()
     expect(recorder.take()).toEqual([])
+  })
+
+  it('marks a click it could not give a selector, rather than dropping it', async () => {
+    // Dropping it was silent in the worst possible place: the person clicks,
+    // nothing appears in the list, and there is no way to tell a missed
+    // recording from a click that never registered. Worse, "Try these"
+    // rehearsed the client-side list while `parse_recorded_steps` stored a
+    // shorter one -- so a route could rehearse green and be saved with a hole
+    // in it. A step with no selector fails the panel's `keepable` check and the
+    // server's dispatchability gate, so it is shown and never saved.
+    //
+    // `bestCss` rejects XPath outright, because `dispatchability_error` refuses
+    // an xpath action target -- so an element whose only robust address is an
+    // XPath is exactly the case that produced no selector.
+    const { generateRobustSelectors } = await import(
+      './vendor/content/services/dom/domUtils'
+    )
+    const only = vi
+      .mocked(generateRobustSelectors)
+      .mockReturnValue([{ selector: '//button[1]', strategy: 'XPath' }] as never)
+
+    html('<button id="target">Specifications</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    document.getElementById('target')!.click()
+    const steps = recorder.take()
+    only.mockRestore()
+
+    expect(steps).toHaveLength(1)
+    expect(steps[0].op).toBe('click')
+    expect(steps[0].selector).toBeUndefined()
+    // The label survives, so the panel can say WHICH click was not captured.
+    expect(steps[0].text).toBe('Specifications')
+  })
+
+  it('reports a navigation that happened under the recording', () => {
+    // `navigate` is not recordable on purpose -- replay issues its own -- but
+    // every step after a navigation targets a different document, and because
+    // reveal steps are all `optional`/`on_error: continue` the resulting route
+    // fails in complete silence.
+    html('<button id="a">A</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    expect(recorder.didNavigate).toBe(false)
+
+    window.dispatchEvent(new Event('beforeunload'))
+
+    expect(recorder.didNavigate).toBe(true)
+  })
+
+  it('stops watching for navigation once stopped', () => {
+    const recorder = new Recorder()
+    recorder.start()
+    recorder.stop()
+
+    window.dispatchEvent(new Event('beforeunload'))
+
+    expect(recorder.didNavigate).toBe(false)
   })
 })

@@ -138,6 +138,64 @@ def test_an_unknown_action_is_dropped() -> None:
     assert got == {}
 
 
+def test_an_accept_needs_nothing_but_the_field() -> None:
+    """Overruling the judge. The binding is already on the recipe and is what
+    produced the value the person just read, so there is nothing to carry."""
+
+    got = parse_resolutions([{"field": "price", "action": "accept"}], _asks())
+    assert got["price"].action == "accept"
+
+
+def test_a_pick_carries_the_type_and_cleanup_the_picker_derived() -> None:
+    """The browser knows what the locator cannot: that a link pick needs
+    `url_resolve` or its URLs stay relative for ever. `_bind` never wrote it,
+    and the panel never sent it."""
+
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "pick",
+            "locators": [{"kind": "css", "selector": "a.more", "attribute": "href"}],
+            "spec": {"type": {"kind": "scalar", "value_type": "url"},
+                     "transform": [{"op": "url_resolve"}]},
+        }],
+        _asks(),
+    )
+    assert got["price"].spec["type"]["value_type"] == "url"
+    assert got["price"].spec["transform"] == [{"op": "url_resolve"}]
+
+
+def test_a_pick_without_a_spec_is_still_a_pick() -> None:
+    got = parse_resolutions(
+        [{"field": "price", "action": "pick",
+          "locators": [{"kind": "css", "selector": ".p"}]}],
+        _asks(),
+    )
+    assert got["price"].spec == {}
+
+
+def test_a_rejected_ask_carries_the_value_it_is_about() -> None:
+    """The panel asks somebody to overrule the judge, which is unanswerable
+    without showing them what it read."""
+
+    asks = build_asks(
+        {}, {"description": "carries import boilerplate"},
+        collected={"description": "100% cotton. Imported from China."},
+    )
+    assert asks[0].value == "100% cotton. Imported from China."
+    assert PendingAsk.from_dict(asks[0].to_dict()).value == asks[0].value
+
+
+def test_only_a_rejected_ask_carries_a_value() -> None:
+    """`unresolved` and `absent` are about a field that read nothing at all --
+    a value there would be a different field's, or a lie."""
+
+    asks = build_asks(
+        {"price": "never found"}, {}, absent={"warranty": "not on this page"},
+        collected={"price": "£20", "warranty": "x"},
+    )
+    assert all(a.value == "" for a in asks)
+
+
 def test_a_malformed_locator_does_not_lose_the_good_ones() -> None:
     got = parse_resolutions(
         [{"field": "price", "action": "pick", "locators": [
@@ -601,3 +659,122 @@ def test_a_recording_survives_the_park_and_resume_round_trip() -> None:
     assert back[2].args == {"key": "Escape"}
     assert back[0].target is not None and back[0].target.selector == "#specs"
     assert all(s.optional and s.on_error == "continue" for s in back)
+
+
+# --- applying a pick ---------------------------------------------------------
+
+
+def _pick_recipe() -> Recipe:
+    return Recipe(
+        recipe_id="r", tenant="t", name="n", version=1, target=TargetSpec(),
+        fields={"more": FieldSpec(name="more", type=TypeSpec(kind="scalar"))},
+        field_groups=[
+            FieldGroup(
+                group_id="g0", field_names=["more"],
+                bindings={"more": [Candidate(locator=Locator(kind="css", selector=".old"))]},
+            )
+        ],
+    )
+
+
+@pytest.fixture
+def picked(monkeypatch):
+    """`verify_locators` records the spec it was handed and accepts the pick."""
+
+    from agentpilot.recipe.v2 import assist as assist_mod
+    from agentpilot.recipe.v2.resolve import CandidateAttempt
+
+    seen: dict[str, Any] = {}
+
+    class _Reader:
+        def __init__(self, **kwargs): ...
+        async def read(self, locator): return "x"
+
+    async def fake_verify(locators, *, verify, spec, ctx):
+        seen["spec"] = spec
+        return [CandidateAttempt(index=0, locator=locators[0], outcome="won")], None
+
+    monkeypatch.setattr(assist_mod, "PageReader", _Reader)
+    monkeypatch.setattr(assist_mod, "verify_locators", fake_verify)
+    monkeypatch.setattr(assist_mod, "rank_candidates", lambda locs: [
+        Candidate(locator=loc) for loc in locs
+    ])
+    return seen
+
+
+async def _apply(recipe, raw):
+    from agentpilot.recipe.v2.assist import apply_resolutions
+
+    return await apply_resolutions(
+        recipe,
+        parse_resolutions(raw, [PendingAsk(field="more", kind="unresolved", reason="x")]),
+        url="https://x.test/p", session=None, registry=None, driver=None, llm_config=None,
+    )
+
+
+async def test_a_picks_cleanup_reaches_the_field_before_it_is_verified(picked) -> None:
+    """`verify_locators` transforms and THEN decides, so a cleanup applied after
+    verification would have been judged against the value it exists to clean."""
+
+    recipe, unsettled = await _apply(
+        _pick_recipe(),
+        [{
+            "field": "more", "action": "pick",
+            "locators": [{"kind": "css", "selector": "a.more", "attribute": "href"}],
+            "spec": {"type": {"kind": "scalar", "value_type": "url"},
+                     "transform": [{"op": "url_resolve"}]},
+        }],
+    )
+
+    assert unsettled == {}
+    # The spec handed to the verifier already carries the cleanup.
+    assert picked["spec"].type.value_type == "url"
+    assert [t.op for t in picked["spec"].transform] == ["url_resolve"]
+    # And it is on the saved recipe, which is what replay reads.
+    assert recipe.fields["more"].type.value_type == "url"
+    assert [t.op for t in recipe.fields["more"].transform] == ["url_resolve"]
+    assert recipe.field_groups[0].bindings["more"][0].locator.selector == "a.more"
+
+
+async def test_a_pick_without_a_spec_leaves_the_declared_contract_alone(picked) -> None:
+    """The contract is the caller's. An absent key means "unchanged", not
+    "reset to the default"."""
+
+    recipe, unsettled = await _apply(
+        _pick_recipe(),
+        [{"field": "more", "action": "pick",
+          "locators": [{"kind": "css", "selector": ".new"}]}],
+    )
+
+    assert unsettled == {}
+    assert recipe.fields["more"].type.value_type == "string"
+    assert recipe.fields["more"].transform == []
+
+
+async def test_a_pick_at_a_field_the_recipe_no_longer_has_says_so(picked) -> None:
+    """`spec=None` used to go straight into `verify_locators`, which then
+    degrades to raw-only checking -- so a pick at a renamed or table field bound
+    silently and wrongly. The routed-pick path always guarded this."""
+
+    recipe = _pick_recipe()
+    recipe.fields = {}
+
+    _out, unsettled = await _apply(
+        recipe,
+        [{"field": "more", "action": "pick",
+          "locators": [{"kind": "css", "selector": ".new"}]}],
+    )
+
+    assert unsettled == {"more": "that field is not in this recipe any more"}
+    assert "spec" not in picked, "it must not reach the verifier at all"
+
+
+async def test_accepting_a_value_changes_nothing_and_settles_the_field(picked) -> None:
+    recipe, unsettled = await _apply(
+        _pick_recipe(), [{"field": "more", "action": "accept"}]
+    )
+
+    assert unsettled == {}
+    # The binding that produced the value is exactly what it was.
+    assert recipe.field_groups[0].bindings["more"][0].locator.selector == ".old"
+    assert "more" in recipe.fields

@@ -658,3 +658,122 @@ def test_columns_reading_different_paths_are_fine() -> None:
          "value": Locator(kind="json_ld", path="value")},
     )
     assert problems == []
+
+
+# --- columns the page does not have ------------------------------------------
+#
+# Straight from a real Zara build's own trace. `images` was asked for as
+# `{url, alt_text, position}`; the page's JSON-LD `[0].image` carries only URLs.
+# `url` resolved in all 9 rows and the other two in none, and the partial-fill
+# check then rejected the WHOLE proposal -- sixteen times in a row, the same
+# rows locator each time. The field ended up unbound and the build died in
+# `validate_document`:
+#
+#   field_groups.group-2-4242d7.images.alt_text: column "alt_text" has no
+#   candidates bound; ... images.position: column "position" has no candidates
+#
+# The columns were never on the page. `contract.py` derives them from what the
+# caller ASKED for, so no locator could ever have filled them.
+
+IMAGES = FieldSpec(
+    name="images",
+    description="every product image",
+    type=TypeSpec(
+        kind="table",
+        columns={
+            "url": TypeSpec(kind="scalar", value_type="url"),
+            "alt_text": TypeSpec(kind="scalar", value_type="string"),
+            "position": TypeSpec(kind="scalar", value_type="integer"),
+        },
+    ),
+)
+
+# What `[0].image` actually yields: a URL per row, and nothing for the two
+# columns the caller invented.
+IMAGE_ROWS = [
+    {"url": f"https://static.zara.net/photos/{i}.jpg", "alt_text": None, "position": None}
+    for i in range(9)
+]
+
+
+async def _verify_images(reader, columns):
+    return await verify_rows(
+        IMAGES,
+        "json",
+        Locator(kind="json_ld", path="[0].image"),
+        columns,
+        reader=reader,  # type: ignore[arg-type]
+        page_url="https://www.zara.com/in/en/p08004856.html",
+    )
+
+
+def _image_cols():
+    return {
+        "url": Locator(kind="json_ld", path="url"),
+        "alt_text": Locator(kind="json_ld", path="alt_text"),
+        "position": Locator(kind="json_ld", path="position"),
+    }
+
+
+async def test_a_column_the_page_cannot_fill_does_not_sink_the_ones_it_can() -> None:
+    binding, reason = await _verify_images(_Reader(json=IMAGE_ROWS), _image_cols())
+
+    assert reason is None
+    assert binding is not None
+    assert set(binding.bindings) == {"url"}
+    assert len(binding.rows) == 9
+
+
+async def test_the_dropped_columns_leave_the_declared_contract_too() -> None:
+    """Dropping a column from the bindings alone would trade an unbound field
+    for an unsaveable document: `validate_document` refuses a table column with
+    no candidates bound, which is the error the real build died with."""
+
+    binding, _reason = await _verify_images(_Reader(json=IMAGE_ROWS), _image_cols())
+
+    assert binding is not None and binding.narrowed_spec is not None
+    assert set(binding.narrowed_spec.type.columns) == {"url"}
+
+
+async def test_a_table_no_column_fills_is_still_rejected() -> None:
+    """Salvaging is for a table that partly worked. One where nothing resolved
+    is a wrong answer, and saying so is what gets a better one proposed."""
+
+    nothing = [{"url": None, "alt_text": None, "position": None} for _ in range(9)]
+    binding, reason = await _verify_images(_Reader(json=nothing), _image_cols())
+
+    assert binding is None
+    assert reason and "empty" in reason
+
+
+async def test_a_partly_filled_column_is_still_a_bad_selector() -> None:
+    """Empty in EVERY row means the page has no such datum. Empty in most rows
+    means it was resolved against the wrong thing -- still worth rejecting, so
+    the model is asked for a better one."""
+
+    patchy = [
+        {"url": f"https://x.test/{i}.jpg", "alt_text": "shot" if i < 2 else None, "position": 1}
+        for i in range(9)
+    ]
+    binding, reason = await _verify_images(_Reader(json=patchy), _image_cols())
+
+    assert binding is None
+    assert reason and "alt_text" in reason
+
+
+async def test_an_open_map_keeps_its_own_columns() -> None:
+    """`MAP_COLUMNS` are this module's name/value pair, not something the caller
+    declared -- narrowing them would describe a map that is not a map."""
+
+    spec = FieldSpec(name="origin", type=TypeSpec(kind="object"))
+    rows = [{"name": "Made in", "value": None}, {"name": "Imported by", "value": None}]
+    binding, reason = await verify_rows(
+        spec, "dom_rows", Locator(kind="css", selector="li"),
+        _cols(name=".k", value=".v"),
+        reader=_Reader(rows=rows),  # type: ignore[arg-type]
+        page_url="https://x.test/p",
+    )
+
+    # `value` is empty everywhere, so this is not salvageable as a map.
+    assert binding is None
+    assert reason and "value" in reason

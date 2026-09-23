@@ -218,6 +218,15 @@ class RowBinding:
     specification block is rows underneath and a `{name: value}` map to the
     caller, and this is the one step between them."""
 
+    narrowed_spec: FieldSpec | None = None
+    """The field's spec with unfillable columns removed, when any were.
+
+    The binding and the declared contract have to move together:
+    `validate_document` refuses a table column with no candidates bound, so
+    dropping a column from the bindings alone trades an unbound field for an
+    unsaveable document. `None` means nothing was dropped and the caller's spec
+    stands."""
+
     @property
     def sample(self) -> list[dict[str, Any]]:
         return self.rows[:3]
@@ -313,6 +322,37 @@ async def _read_rows(
             for name, loc in columns.items()
         })
     return out
+
+
+def _without_columns(spec: FieldSpec, dropped: set[str]) -> FieldSpec:
+    """The field, minus columns the page cannot fill.
+
+    `verify_rows` already excludes an open map from dropping at all; the guard
+    is repeated here so this stays correct if it is ever called from elsewhere.
+    """
+
+    if is_open_map(spec) or not spec.type.columns:
+        return spec
+    kept = {k: v for k, v in spec.type.columns.items() if k not in dropped}
+    return replace(spec, type=replace(spec.type, columns=kept))
+
+
+def empty_columns(rows: list[dict[str, Any]], columns: dict[str, Locator]) -> set[str]:
+    """Columns that came back blank in EVERY row.
+
+    Distinct from the partial-fill check in `_problems_with`, and the difference
+    decides whether a table is salvageable. A column empty in most rows but not
+    all was resolved against something -- it is a bad selector, and the model can
+    be asked for a better one. A column empty in every single row usually means
+    the page does not carry that datum at all: `contract.py` derives the column
+    list from what the caller ASKED for, so a request for product images as
+    `{url, alt_text, position}` against a page whose JSON-LD holds only URLs
+    produces two columns nothing on the page could ever fill.
+    """
+
+    return {
+        name for name in columns if all(_blank(row.get(name)) for row in rows)
+    }
 
 
 def _problems_with(rows: list[dict[str, Any]], columns: dict[str, Locator]) -> list[str]:
@@ -463,6 +503,34 @@ async def verify_rows(
     if raw_rows is None:
         return None, "the rows locator did not resolve to a list of rows"
 
+    # A column the page cannot fill must not sink the ones it can.
+    #
+    # Measured on a Zara product page: `images` was asked for as
+    # `{url, alt_text, position}`, the JSON-LD carries only URLs, and the
+    # partial-fill check then rejected the whole proposal -- throwing away a
+    # `url` column that resolved in every one of the 9 rows. Sixteen attempts
+    # later the field was still unbound, and the build died in
+    # `validate_document` with "column 'alt_text' has no candidates bound".
+    #
+    # Dropped rather than tolerated: the column leaves the binding AND the
+    # declared spec, because a table field whose column has no candidates is
+    # exactly what `validate_document` refuses.
+    dropped = empty_columns(raw_rows, columns)
+    # An open map is never salvageable this way. Its columns are `MAP_COLUMNS`
+    # -- this module's own name/value pair, not anything the caller declared --
+    # and `to_object` collapses the two together, so a map missing either half
+    # is not a narrower map, it is nothing. A specifications block whose values
+    # all read empty is a bad selector, and saying so is what gets a better one.
+    dropped = set() if is_open_map(spec) else dropped
+    narrowed = bool(dropped) and len(dropped) < len(columns)
+    if narrowed:
+        log.info("rows.dropping_unfillable_columns", field=spec.name, columns=sorted(dropped))
+        columns = {name: loc for name, loc in columns.items() if name not in dropped}
+        raw_rows = [
+            {k: v for k, v in row.items() if k not in dropped} for row in raw_rows
+        ]
+        spec = _without_columns(spec, dropped)
+
     problems = _problems_with(raw_rows, columns)
     if problems:
         return None, "; ".join(problems)
@@ -502,7 +570,11 @@ async def verify_rows(
         else []
     )
     return RowBinding(
-        repeat=repeat, bindings=bindings, rows=cleaned, field_transform=field_transform
+        repeat=repeat,
+        bindings=bindings,
+        rows=cleaned,
+        field_transform=field_transform,
+        narrowed_spec=spec if narrowed else None,
     ), None
 
 

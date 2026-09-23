@@ -12,7 +12,7 @@
  */
 
 /** Bumped when the injected contract changes, so a stale page re-installs. */
-export const PICKER_VERSION = 2
+export const PICKER_VERSION = 3
 
 /** The global the IIFE installs itself on inside the remote page. */
 export const PICKER_GLOBAL = '__cpPicker'

@@ -44,3 +44,38 @@ def test_delta_observation_leads_with_change_block_and_marks_new() -> None:
     assert "*[e11]" in obs.text  # inline new marker in the serialized tree
     assert set(obs.selector_map) == {10, 11}
     assert obs.diff.new_backend_ids == {11}
+
+
+def test_the_observation_leaves_out_text_the_agent_cannot_act_on() -> None:
+    """An agent observation is a list of things to click, not a body of text to
+    read, and on a commerce page the hidden half -- collapsed panels, offscreen
+    carousel slides, SEO copy -- is most of the text by volume. It was crowding
+    the controls out of a length-capped render entirely.
+
+    `serialize` still renders hidden text by default; only this caller opts out.
+    The recipe builder must keep seeing it, because a `text` locator is
+    specified to read collapsed content and its judge corroborates against the
+    same render.
+    """
+
+    body = _body(("Composition, care & origin", 10))
+    panel = EnhancedDOMTreeNode(
+        node_id=20, backend_node_id=20, node_type=NodeType.ELEMENT_NODE,
+        node_name="DIV", is_visible=False,
+    )
+    blurb = EnhancedDOMTreeNode(
+        node_id=21, backend_node_id=21, node_type=NodeType.TEXT_NODE,
+        node_name="#text", node_value="100% viscose. Imported from China.",
+        is_visible=False,
+    )
+    blurb.parent_node = panel
+    panel.children_nodes.append(blurb)
+    panel.parent_node = body
+    body.children_nodes.append(panel)
+
+    obs = build_observation(body)
+
+    assert "100% viscose" not in obs.text
+    # The control itself is untouched -- and still addressable.
+    assert "[e10]" in obs.text
+    assert "e10" in obs.visible_refs
