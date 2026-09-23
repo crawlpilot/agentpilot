@@ -556,3 +556,31 @@ def test_the_controls_survive_a_budget_that_the_page_text_would_have_eaten() -> 
     assert "truncated" in plain.llm_text
     assert 9 in filtered.rendered_indices
     assert "truncated" not in filtered.llm_text
+
+
+def test_the_truncation_marker_does_not_tell_the_model_to_scroll() -> None:
+    """It used to, and nothing here filters by scroll position -- the cut is by
+    document order against a character budget. On a Zara product page the model
+    followed that advice for every step it had: scroll, get the identical
+    prefix back, scroll again. The advice has to match the mechanism."""
+
+    body = _node("body", 1)
+    for i in range(50):
+        _child(body, _node("button", 100 + i, ax_name=f"Item {i}", bounds=BoundingBox(0, i, 80, 1)))
+
+    text = serialize(body, max_length=600).llm_text
+    assert "truncated" in text
+    assert "NOT reveal" in text
+
+
+def test_the_marker_gives_way_rather_than_bust_a_small_budget() -> None:
+    body = _node("body", 1)
+    for i in range(50):
+        _child(body, _node("button", 100 + i, ax_name=f"Item {i}", bounds=BoundingBox(0, i, 80, 1)))
+
+    for budget in (10, 40, 120, 600):
+        text = serialize(body, max_length=budget).llm_text
+        # `max_length` means what it says, even below the marker's own length.
+        assert len(text) <= budget, f"budget {budget} overrun"
+    # Once there is room to say it, it is said.
+    assert "truncated" in serialize(body, max_length=120).llm_text

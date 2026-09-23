@@ -212,13 +212,17 @@ def render_tree(
         # task needed sat past the cut and the model spent every step trying to
         # bring them "into view" to earn a ref.
         marker = (
-            "\n… [truncated: this page has more elements than fit here. "
-            "Scrolling will NOT reveal them -- the cut is by page order, not by "
-            "what is on screen. Use a find/search action to address an element "
-            "by its text or role instead.] …"
+            "\n… [truncated: more elements exist. Scrolling will NOT reveal them"
+            " -- find them by text or role instead] …"
         )
+        # The marker is part of the output, so on a very small budget it has to
+        # give way rather than push the render past the cap its caller asked for.
+        if len(marker) > max_length:
+            marker = "\n… [truncated] …"
         budget = max(0, max_length - len(marker))
-        body = body[:budget] + marker
+        # Clamped, so `max_length` means what it says even when the budget is
+        # too small to hold the marker itself.
+        body = (body[:budget] + marker)[:max_length]
         # A line is "shown" only if it survived whole -- a ref cut mid-token is
         # not something the model can copy.
         kept, consumed = 0, 0
