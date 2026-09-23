@@ -127,7 +127,12 @@ class Fingerprint:
             "--window-position=0,0",
             "--mute-audio",
             "--disable-client-side-phishing-detection",
-            "--disable-default-apps",
+            # NOT `--disable-default-apps`. Scrapling classes it with
+            # `--enable-automation` and `--disable-extensions` as a flag that
+            # marks the browser as driven (`engines/constants.py::HARMFUL_ARGS`)
+            # -- a stock Chrome has its default apps, and saying otherwise is a
+            # difference with no upside. It was here for tidiness, which is not
+            # worth a signal.
             "--metrics-recording-only",
             "--safebrowsing-disable-auto-update",
         ]

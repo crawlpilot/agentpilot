@@ -569,11 +569,16 @@ def serialize(
     # page, and a node the view hides is still allowed to hide others.
     _apply_view(simplified, view)
     selector_map = _assign_indices(simplified, new_backend_ids or set())
+    # A selector has to be written against structure, and the default whitelist
+    # deliberately omits `class`. See `SnapshotView.for_authoring`.
+    if view.for_authoring and include_attributes is render.DEFAULT_INCLUDE_ATTRIBUTES:
+        include_attributes = render.AUTHORING_INCLUDE_ATTRIBUTES
     rendered = render.render_tree(
         simplified,
         include_attributes=include_attributes,
         max_length=max_length,
         depth=view.depth,
+        for_authoring=view.for_authoring,
     )
     return SerializedDOM(
         selector_map=selector_map,

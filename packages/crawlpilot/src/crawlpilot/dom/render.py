@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from crawlpilot.spi.dom_tree import NodeType
+
 if TYPE_CHECKING:
     from crawlpilot.dom.serializer import SimplifiedNode
 
@@ -251,6 +253,7 @@ def render_tree(
     include_attributes: tuple[str, ...] = DEFAULT_INCLUDE_ATTRIBUTES,
     max_length: int | None = None,
     depth: int | None = None,
+    for_authoring: bool = False,
 ) -> RenderedTree:
     """Render the simplified tree to indented text. Indexed (interactive) nodes
     render as `[ref]<...>`; kept non-interactive nodes contribute their text.
@@ -291,6 +294,16 @@ def render_tree(
                     lines.append(f"{indent}{text}")
                     line_indices.append(None)
                 child_level = level + 1
+            elif for_authoring:
+                # The handle the text underneath is going to need. Without it
+                # the whole page is unattributed text and a selector can only
+                # be guessed at -- see `SnapshotView.for_authoring`.
+                structural = _authoring_line(node, include_attributes)
+                if structural is not None:
+                    if not too_deep:
+                        lines.append(f"{indent}{structural}")
+                        line_indices.append(None)
+                    child_level = level + 1
         for child in node.children:
             walk(child, child_level)
 

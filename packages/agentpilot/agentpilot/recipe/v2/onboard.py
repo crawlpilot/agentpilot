@@ -67,6 +67,7 @@ from agentpilot.recipe.v2.schema import (
 )
 from agentpilot.recipe.v2.selector_agent import propose_and_verify
 from crawlpilot.dom.serializer import serialize
+from crawlpilot.spi.dom_tree import SnapshotView
 from crawlpilot.session.interactive import InteractiveSession
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi.driver import BrowserDriver
@@ -790,7 +791,9 @@ class ExplorationState:
         """
 
         structured = await self._reader.structured_data()
-        snapshot_text = serialize(snapshot).llm_text
+        # The structure a SELECTOR is written against, not the click-target
+        # list. See `SnapshotView.for_authoring`.
+        snapshot_text = serialize(snapshot, view=SnapshotView(for_authoring=True)).llm_text
 
         # Exactly what the selector prompts were shown of the page's JSON, kept
         # once. When a build writes a path that resolves to nothing -- or writes

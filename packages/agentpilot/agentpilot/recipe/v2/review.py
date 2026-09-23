@@ -43,6 +43,7 @@ from agentpilot.recipe.v2.schema import (
 )
 from agentpilot.recipe.v2.selector_agent import propose_and_verify
 from crawlpilot.dom.serializer import serialize
+from crawlpilot.spi.dom_tree import SnapshotView
 from crawlpilot.session.interactive import InteractiveSession
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi.driver import BrowserDriver
@@ -269,7 +270,7 @@ async def repair_fields(
             continue
         verified = await propose_and_verify(
             targets,
-            snapshot_text=serialize(snapshot).llm_text,
+            snapshot_text=serialize(snapshot, view=SnapshotView(for_authoring=True)).llm_text,
             structured_data=await reader.structured_data(),
             llm_config=llm_config,
             verify=reader.read,

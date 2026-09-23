@@ -678,3 +678,73 @@ def test_the_image_description_is_capped() -> None:
     line = serialize(body).llm_text
     assert "…" in line
     assert len(line) < 200
+
+
+# ------------------------------------------------------- authoring view
+#
+# The default render is built for an agent that CLICKS: interactive elements get
+# a `[ref]` line and everything else contributes a bare line of text. A Zara
+# product page serialized that way is one `[e169]<div id=app-root />` followed by
+# nine thousand characters of unattributed text -- `class=` appears zero times in
+# the whole document.
+#
+# The selector agent is asked, from that, to propose CSS. It has no id, no class,
+# no tag and no nesting to name, so every proposal is a guess and "no proposed
+# candidate resolved to a value" is the only possible outcome for anything not
+# already in the page's JSON-LD.
+
+
+def _care_panel() -> EnhancedDOMTreeNode:
+    body = _node("body", 1)
+    panel = _child(body, _node("div", 2, attrs={"class": "product-detail-care"}))
+    _child(panel, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="Do not wash"))
+    return body
+
+
+def test_the_default_render_shows_no_structure() -> None:
+    """Asserted so the authoring view's reason for existing stays visible."""
+
+    text = serialize(_care_panel()).llm_text
+    assert "Do not wash" in text
+    assert "class" not in text
+
+
+def test_the_authoring_view_gives_the_text_a_handle() -> None:
+    text = serialize(_care_panel(), view=SnapshotView(for_authoring=True)).llm_text
+    assert "class=product-detail-care" in text
+    assert "Do not wash" in text
+
+
+def test_an_unaddressable_wrapper_earns_no_line() -> None:
+    """An element carrying nothing selectable cannot be pointed at, so a line
+    for it costs the budget and buys the model nothing."""
+
+    body = _node("body", 1)
+    panel = _child(body, _node("div", 2))
+    _child(panel, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="Do not wash"))
+
+    text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
+    assert "<div" not in text
+    assert "Do not wash" in text
+
+
+def test_only_elements_that_directly_hold_text_are_rendered() -> None:
+    """A wrapper whose text all lives three levels down is not where a selector
+    should point, and rendering every ancestor buries the page in scaffolding."""
+
+    body = _node("body", 1)
+    outer = _child(body, _node("section", 2, attrs={"class": "outer"}))
+    inner = _child(outer, _node("p", 3, attrs={"class": "inner"}))
+    _child(inner, _node("#text", 4, node_type=NodeType.TEXT_NODE, value="Made in China"))
+
+    text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
+    assert "class=inner" in text
+    assert "class=outer" not in text
+
+
+def test_the_authoring_view_is_off_for_the_agent_loop() -> None:
+    """The agent is choosing what to press; class names are noise there, which
+    is why browser-use leaves `class` out of the default whitelist."""
+
+    text = serialize(_care_panel(), view=SnapshotView(visible_text_only=True)).llm_text
+    assert "class" not in text
