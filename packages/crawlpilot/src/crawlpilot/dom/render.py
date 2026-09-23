@@ -57,6 +57,44 @@ DEFAULT_INCLUDE_ATTRIBUTES: tuple[str, ...] = (
 _MAX_VALUE_LEN = 80
 _REDACTED = "<redacted>"
 
+# What a selector can actually be written against, added on top of
+# `DEFAULT_INCLUDE_ATTRIBUTES` when `SnapshotView.for_authoring` is set.
+# `class` is excluded from the default set (browser-use comments it out) because
+# it is noise to an agent deciding what to click -- and it is the single most
+# useful thing to an agent deciding what to select.
+AUTHORING_INCLUDE_ATTRIBUTES: tuple[str, ...] = DEFAULT_INCLUDE_ATTRIBUTES + (
+    "class",
+    "itemprop",
+    "data-qa-qualifier",
+)
+
+# Attributes that make an element nameable. An element carrying none of them
+# cannot be selected except by position, so rendering it would cost a line and
+# buy the model nothing.
+_ADDRESSABLE = ("id", "class", "itemprop", "data-testid", "data-qa-qualifier")
+
+
+def _authoring_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> str | None:
+    """A structural line for a non-interactive element that holds text.
+
+    Only elements that DIRECTLY contain text: a wrapper whose text all lives
+    three levels down is not where a selector should point, and rendering every
+    ancestor would bury the page in scaffolding.
+    """
+
+    original = node.original
+    if original.node_type != NodeType.ELEMENT_NODE:
+        return None
+    if not any(original.attributes.get(a) for a in _ADDRESSABLE):
+        return None
+    holds_text = any(
+        child.original.node_type == NodeType.TEXT_NODE and child.text_content()
+        for child in node.children
+    )
+    if not holds_text:
+        return None
+    return f"<{original.tag_name}{_attribute_string(node, include_attributes)}>"
+
 _ZERO_WIDTH = str.maketrans(
     "",
     "",

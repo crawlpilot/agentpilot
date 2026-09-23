@@ -83,6 +83,28 @@ class SnapshotView:
     resolved by the driver from the live viewport size."""
     max_nodes: int | None = None
     """Cap on how many interactive elements are offered, in document order."""
+    for_authoring: bool = False
+    """Render the structure a SELECTOR has to be written against.
+
+    The default render is built for an agent that clicks: every interactive
+    element gets a `[ref]` line, and everything else in the page contributes a
+    bare line of text. That is exactly right for choosing what to press, and
+    useless for choosing what to *select* -- a Zara product page serializes to
+    one `[e169]<div id=app-root />` followed by nine thousand characters of
+    unattributed text, with `class=` appearing zero times in the whole
+    document.
+
+    The selector agent is asked, from that, to propose CSS. It has no id, no
+    class, no tag and no nesting to name, so every proposal is a guess and
+    "no proposed candidate resolved to a value" is the only possible outcome
+    for anything not already in the page's JSON-LD. The one DOM field that ever
+    succeeded on that page did it with an XPath matching on literal text --
+    the only strategy the render leaves available.
+
+    With this set, an element that directly contains text and carries something
+    addressable renders as its own line, so the text underneath has a handle.
+    """
+
     visible_text_only: bool = False
     """Render only text a person could actually read on the page.
 

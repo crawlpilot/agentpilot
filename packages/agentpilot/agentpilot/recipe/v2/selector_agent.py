@@ -600,7 +600,7 @@ def rank_candidates(locators: list[Locator], *, verified_on: int = 1) -> list[Ca
     return sorted(candidates, key=lambda c: c.priority)
 
 
-def tautological_read(loc: Locator, raw: Any) -> str | None:
+def tautological_read(loc: Locator, raw: Any, field_name: str = "") -> str | None:
     """Why this locator's value is its own search term, or None if it is not.
 
     A locator that finds an element BY its text and then reads that same text
@@ -627,15 +627,57 @@ def tautological_read(loc: Locator, raw: Any) -> str | None:
     needle = (loc.name_contains or loc.text or "").strip()
     if not needle or not isinstance(raw, str):
         return None
-    if " ".join(raw.split()).casefold() != " ".join(needle.split()).casefold():
-        return None
+    value = " ".join(raw.split())
     matcher = "name_contains" if loc.name_contains else "text"
-    return (
-        f"this reads back exactly the {matcher} it searched for ({needle!r}), so "
-        f"it is the label of the element you matched rather than anything on the "
-        f"page -- for a section heading or an accordion trigger, the value lives "
-        f"in the content it reveals, not in the control itself"
-    )
+
+    if value.casefold() == " ".join(needle.split()).casefold():
+        return (
+            f"this reads back exactly the {matcher} it searched for ({needle!r}), so "
+            f"it is the label of the element you matched rather than anything on the "
+            f"page -- for a section heading or an accordion trigger, the value lives "
+            f"in the content it reveals, not in the control itself"
+        )
+
+    # The same mistake, one step cleverer. Told that an exact round-trip is
+    # refused, the model shortens the needle until it is not one: it asked for
+    # `name_contains="Composition, care"` and for `name_contains="origin"`, both
+    # of which match the same accordion button and both of which read back
+    # "COMPOSITION, CARE & ORIGIN". Neither is an exact echo, and both are the
+    # button's label.
+    #
+    # What gives it away is that the value NAMES the field instead of answering
+    # it. A control captioned "care" is the way to the care instructions, never
+    # the instructions themselves -- that is what a caption is. Length is the
+    # guard that keeps this from touching real prose: a description that happens
+    # to contain the word "description" is a paragraph, not a caption.
+    if len(value) <= _MAX_CAPTION_CHARS and _names_the_field(field_name, value):
+        return (
+            f"this reads {value!r}, which is a caption NAMING {field_name!r} rather "
+            f"than a value for it -- you matched the control that leads to the "
+            f"content, not the content. Open it and read what it reveals, or point "
+            f"at the text inside the revealed panel"
+        )
+    return None
+
+
+# A caption is short. Past this a string is prose, and prose that mentions the
+# field's own name is a paragraph about it rather than a label for it.
+_MAX_CAPTION_CHARS = 80
+
+
+def _names_the_field(field_name: str, value: str) -> bool:
+    """Whether `value` reads as a caption for a field called `field_name`.
+
+    Word-boundary matching on purpose: `origin` must match "Composition, care &
+    origin" but not "original price", and `care` must match "CARE" but not
+    "careful".
+    """
+
+    words = {w for w in re.split(r"[^a-z0-9]+", field_name.casefold()) if len(w) > 2}
+    if not words:
+        return False
+    present = set(re.split(r"[^a-z0-9]+", value.casefold()))
+    return bool(words & present)
 
 
 def locator_key(loc: Locator) -> tuple[Any, ...]:
@@ -999,7 +1041,7 @@ async def verify_locators(
             last_error = rejected(loc, problem, raw=raw)
             continue
 
-        circular = tautological_read(loc, raw)
+        circular = tautological_read(loc, raw, name)
         if circular is not None:
             last_error = rejected(loc, circular, raw=raw)
             continue

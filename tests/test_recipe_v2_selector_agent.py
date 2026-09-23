@@ -1431,3 +1431,66 @@ async def test_the_accordion_label_does_not_bind_the_field(monkeypatch) -> None:
 
     assert got["care"][0].locator.selector == ".care-body"
     assert "searched for" in stub.prompts[1]
+
+
+# --- the same mistake, one step cleverer -------------------------------------
+#
+# Told that an exact round-trip is refused, the model shortened the needle until
+# it was not one. From the run's own trace, all three fields on one button:
+#
+#   care:   {'role':'button','name_contains':'Composition, care'}
+#   origin: {'role':'button','name_contains':'origin'}
+#
+# Both read back "COMPOSITION, CARE & ORIGIN". Neither is an exact echo, and
+# both are the button's caption. What gives it away is that the value NAMES the
+# field rather than answering it.
+
+
+def test_a_shortened_needle_does_not_escape_the_check() -> None:
+    loc = Locator(kind="ax_role", role="button", name_contains="Composition, care")
+    why = tautological_read(loc, "COMPOSITION, CARE & ORIGIN", "care")
+
+    assert why is not None
+    assert "caption" in why
+
+
+def test_a_single_word_needle_does_not_escape_either() -> None:
+    loc = Locator(kind="ax_role", role="button", name_contains="origin")
+    assert tautological_read(loc, "COMPOSITION, CARE & ORIGIN", "origin") is not None
+
+
+def test_a_caption_is_matched_on_word_boundaries() -> None:
+    """`origin` must match "Composition, care & origin" but not "original
+    price"; `care` must match "CARE" but not "careful"."""
+
+    loc = Locator(kind="ax_role", role="button", name_contains="orig")
+    assert tautological_read(loc, "Original price", "origin") is None
+    assert tautological_read(loc, "Careful handling", "care") is None
+
+
+def test_prose_that_mentions_the_field_name_is_not_a_caption() -> None:
+    """A description containing the word "description" is a paragraph about the
+    product, not a label for it. Length is what separates the two."""
+
+    long_text = (
+        "Full description: printed shoulder bag with an asymmetric top and a "
+        "shoulder strap in a mix of materials, interior pocket and tie fastening."
+    )
+    loc = Locator(kind="text", text="Full description")
+    assert tautological_read(loc, long_text, "description") is None
+
+
+def test_a_real_value_from_a_matched_control_still_binds() -> None:
+    """The check must not refuse every control. A button captioned with an
+    actual value -- not with the field's name -- is a legitimate read."""
+
+    loc = Locator(kind="ax_role", role="button", name_contains="Multicol")
+    assert tautological_read(loc, "Multicoloured", "color") is None
+
+
+def test_the_revealed_content_binds_normally() -> None:
+    """Once the panel is open, the text inside it says nothing about the field's
+    name and is accepted."""
+
+    loc = Locator(kind="css", selector=".care-panel")
+    assert tautological_read(loc, "Do not wash. Do not bleach.", "care") is None
