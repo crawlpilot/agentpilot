@@ -41,8 +41,9 @@ class ScrapeResource:
 
         `options` are `ScrapeOptions` fields -- `only_main_content`,
         `timeout_ms`, `wait_for_ms`, `screenshot`, `block_images`, `locale`,
-        `session_name` and the rest. Passed through rather than enumerated, so a
-        field added to the server's schema is usable here immediately.
+        `session_name`, `relevance_query`, `citations` and the rest. Passed
+        through rather than enumerated, so a field added to the server's schema
+        is usable here immediately.
 
         No `tenant` argument, deliberately: every `/v1` route overwrites it from
         the authenticated key, and offering one would imply a caller could act

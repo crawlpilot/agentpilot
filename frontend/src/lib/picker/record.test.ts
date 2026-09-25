@@ -223,6 +223,113 @@ describe('Recorder', () => {
     expect(recorder.didNavigate).toBe(true)
   })
 
+  it('tells a dismissal apart from a reveal', () => {
+    // The distinction the intents exist for. `assist.py` replays a dismissal
+    // as `optional` -- a banner that did not appear is not a failed run -- and
+    // that is exactly the wrong treatment for the click that opens the section
+    // the field lives in, which then fails in silence.
+    html(`
+      <div id="cookie"><button id="accept">Accept all</button></div>
+      <button id="x" aria-label="Close dialog">✕</button>
+      <button id="specs">Specifications</button>
+      <button id="go">Continue</button>
+    `)
+    const recorder = new Recorder()
+    recorder.start()
+
+    document.getElementById('accept')!.click()
+    document.getElementById('x')!.click()
+    document.getElementById('specs')!.click()
+    // Text alone is not enough: a page's own "Continue" is a reveal, and only
+    // reads as a dismissal when there is something around it to dismiss.
+    document.getElementById('go')!.click()
+
+    expect(recorder.stop().map((s) => s.intent)).toEqual([
+      'dismiss',
+      'dismiss',
+      'reveal',
+      'reveal',
+    ])
+  })
+
+  it('keeps the buffer across a pause, where start clears it', () => {
+    // What makes selection an interaction *within* a route rather than a
+    // separate answer beside it. The picker swallows the clicks it draws over,
+    // so the recorder has to stop listening -- but `start()` clears the
+    // buffer, so pausing had to become its own thing.
+    html('<button id="a">A</button><button id="b">B</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    document.getElementById('a')!.click()
+
+    recorder.pause()
+    expect(recorder.take()).toHaveLength(1)
+    expect(recorder.isPaused).toBe(true)
+    // Still the panel's session, so a second field cannot claim the one
+    // in-page recorder and wipe it.
+    expect(recorder.isRecording).toBe(true)
+
+    // Nothing reaches the buffer while the picker owns the page.
+    document.getElementById('b')!.click()
+    expect(recorder.take()).toHaveLength(1)
+
+    recorder.resume()
+    document.getElementById('b')!.click()
+    expect(recorder.take()).toHaveLength(2)
+  })
+
+  it('folds a pick into the route in the order it was made', () => {
+    html('<button id="a">A</button><button id="b">B</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    document.getElementById('a')!.click()
+
+    recorder.pause()
+    recorder.pushSelect({
+      itemSelector: 'table.specs',
+      previewValue: 'Weight: 2.4kg',
+      action: 'extract',
+    } as never)
+    recorder.resume()
+    document.getElementById('b')!.click()
+
+    const steps = recorder.stop()
+    expect(steps.map((s) => s.intent)).toEqual(['reveal', 'select', 'reveal'])
+    expect(steps[1].selector).toBe('table.specs')
+    expect(steps[1].text).toBe('Weight: 2.4kg')
+  })
+
+  it('records a pick made in click mode as a reveal, not a binding', () => {
+    // The extension's other half -- `ElementDefinition.action` -- and until
+    // now unreachable from this panel: `pick()` has always defaulted `detail`
+    // to `extract`. Pointing at a close button should schedule a click on it,
+    // not read its text into the field.
+    const recorder = new Recorder()
+    recorder.start()
+    recorder.pause()
+    recorder.pushSelect({ itemSelector: '#close', action: 'click' } as never)
+
+    const steps = recorder.stop()
+    expect(steps).toHaveLength(1)
+    expect(steps[0].op).toBe('click')
+    expect(steps[0].intent).toBe('reveal')
+    expect(steps[0].pick).toBeUndefined()
+  })
+
+  it('reports the cap rather than truncating in silence', () => {
+    // The person carries on working the page, nothing more is recorded, and
+    // the route they submit stops halfway through with no indication where.
+    html('<button id="a">A</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    expect(recorder.isFull).toBe(false)
+
+    for (let i = 0; i < 70; i++) document.getElementById('a')!.click()
+
+    expect(recorder.isFull).toBe(true)
+    expect(recorder.take()).toHaveLength(60)
+  })
+
   it('stops watching for navigation once stopped', () => {
     const recorder = new Recorder()
     recorder.start()
