@@ -1,4 +1,5 @@
 import { clickElementRobust } from './vendor/content/services/dom/domUtils'
+import type { StepIntent } from './protocol'
 
 /**
  * Run the recipe's bindings against the live page and report what comes back.
@@ -288,6 +289,21 @@ export interface PreviewStep {
   kind?: 'css' | 'xpath'
   text?: string
   ms?: number
+  /**
+   * What this entry is for. Absent means `reveal` -- which is what every step
+   * recorded before intents existed was in practice. See `StepIntent`.
+   */
+  intent?: StepIntent
+  /** Author-supplied row label, when the recorded text was not descriptive. */
+  label?: string
+  /**
+   * The pick this entry carries. Present only on `intent: 'select'`.
+   *
+   * Typed `unknown` rather than `PickPayload` so this module stays usable by
+   * the studio without dragging the picker's payload shape into it; the two
+   * consumers that care (`StepRecorder`, `fromPick`) narrow it themselves.
+   */
+  pick?: unknown
 }
 
 export interface StepOutcome {
@@ -311,6 +327,9 @@ export interface StepOutcome {
  * The alternative was to leave reveal steps unapplied and let every field
  * behind an accordion preview as `empty`, which teaches the author nothing.
  */
+/** How long a `wait_for_selector` with no explicit `ms` waits before giving up. */
+const WAIT_FOR_SELECTOR_MS = 3000
+
 export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
   const out: StepOutcome[] = []
@@ -343,6 +362,30 @@ export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
         }
         await sleep(300)
         out.push({ op: step.op, status: 'ok' })
+        continue
+      }
+
+      if (step.op === 'wait_for_selector') {
+        // Poll, rather than resolving once against whatever is there right now.
+        // A settle step exists precisely because the thing it names is not
+        // present yet -- checking for it immediately and reporting `skipped`
+        // would make the one step whose job is to wait the one that never does.
+        if (!step.selector) {
+          out.push({ op: step.op, status: 'skipped', detail: 'no target' })
+          continue
+        }
+        const isXPath = step.kind === 'xpath'
+        const until = Date.now() + Math.min(step.ms || WAIT_FOR_SELECTOR_MS, 5000)
+        let found = pickOne(step.selector, isXPath)
+        while (!found && Date.now() < until) {
+          await sleep(100)
+          found = pickOne(step.selector, isXPath)
+        }
+        out.push(
+          found
+            ? { op: step.op, status: 'ok' }
+            : { op: step.op, status: 'skipped', detail: 'never appeared' },
+        )
         continue
       }
 
@@ -398,8 +441,6 @@ export async function runSteps(steps: PreviewStep[]): Promise<StepOutcome[]> {
         select.dispatchEvent(new Event('input', { bubbles: true }))
         select.dispatchEvent(new Event('change', { bubbles: true }))
         await sleep(300)
-      } else if (step.op === 'wait_for_selector') {
-        // Already resolved above, so it is present.
       } else {
         out.push({ op: step.op, status: 'skipped', detail: 'not simulated' })
         continue

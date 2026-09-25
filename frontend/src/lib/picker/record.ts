@@ -26,6 +26,7 @@
  */
 import { generateRobustSelectors } from './vendor/content/services/dom/domUtils'
 import type { PreviewStep } from './preview'
+import type { PickPayload } from './protocol'
 
 /**
  * A scroll fires continuously. One step per event would bury the clicks that
@@ -37,8 +38,49 @@ const SCROLL_QUIET_MS = 400
 /** A recording nobody ends must not grow without limit. */
 const MAX_STEPS = 60
 
+/**
+ * How long to wait before asking what a click revealed.
+ *
+ * An accordion that animates is open in the DOM long before it has finished
+ * moving, so this only has to outlast the handler, not the transition. Long
+ * enough for a React state update and a paint; short enough that the settle
+ * step lands before the person's next click.
+ */
+const REVEAL_PROBE_MS = 350
+
 /** Elements belonging to the picker's own overlay, never the page's content. */
 const OURS = '[data-testid^="element-picker"], .crawlpilot-test-highlight'
+
+/** Things that are open, and so can be *newly* open after a click. */
+const OPENABLE = '[role="dialog"], [role="alertdialog"], dialog[open], details[open]'
+
+/**
+ * Controls whose job is to make something go away.
+ *
+ * Matched on the attributes a close button actually carries, never on class
+ * names alone -- on a React page those are generated, and `.close` matching
+ * something that merely happens to be called that would mislabel a reveal as a
+ * dismissal, which is the one direction that loses data (a dismissal replays
+ * `optional`, so a mislabelled reveal fails in silence).
+ */
+const DISMISS_ATTR = [
+  '[aria-label*="close" i]',
+  '[aria-label*="dismiss" i]',
+  '[aria-label*="reject" i]',
+  '[data-dismiss]',
+  '[data-testid*="close" i]',
+  '[class*="cookie" i] button',
+  '[id*="cookie" i] button',
+  '[class*="consent" i] button',
+  '[id*="consent" i] button',
+].join(',')
+
+/** The words on a dismissal, once something dismissable is known to be around. */
+const DISMISS_TEXT =
+  /^(close|dismiss|accept|accept all|accept cookies|allow all|got it|ok|okay|no thanks|decline|reject|reject all|continue)$/i
+
+/** A bare close glyph. Never anything but a dismissal, whatever contains it. */
+const DISMISS_GLYPH = /^[×✕✖⨯x]$/i
 
 function bestCss(el: HTMLElement): string | null {
   const results = generateRobustSelectors(el)
@@ -55,10 +97,40 @@ function bestCss(el: HTMLElement): string | null {
   return css ? css.selector : null
 }
 
+/** `closest` against a long selector list, without letting one typo end a recording. */
+function closest(el: HTMLElement, selector: string): Element | null {
+  try {
+    return el.closest(selector)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether this click was getting something out of the way.
+ *
+ * The distinction is the whole point of intents: `assist.py` replays a
+ * dismissal as `optional` -- a cookie banner that did not appear this time is
+ * not a failed run -- and that is exactly the wrong treatment for the click
+ * that opens the section the field lives in.
+ */
+export function classifyClick(el: HTMLElement): 'reveal' | 'dismiss' {
+  const text = (el.innerText || el.textContent || '').trim()
+  if (DISMISS_GLYPH.test(text)) return 'dismiss'
+  if (closest(el, DISMISS_ATTR)) return 'dismiss'
+  // Text alone is not enough. A page's own "Continue" is a reveal; it only
+  // reads as a dismissal when there is something around it to dismiss.
+  if (DISMISS_TEXT.test(text) && closest(el, OPENABLE)) return 'dismiss'
+  return 'reveal'
+}
+
 export class Recorder {
   private steps: PreviewStep[] = []
   private scrollTimer: ReturnType<typeof setTimeout> | null = null
+  /** Listeners are attached. False while paused for a pick. */
   private running = false
+  /** A session exists and its buffer is meaningful. See `isRecording`. */
+  private open = false
   private navigated = false
   /**
    * Whether the page changed under the recording.
@@ -85,9 +157,43 @@ export class Recorder {
 
   start(): void {
     if (this.running) return
-    this.running = true
     this.steps = []
     this.navigated = false
+    this.open = true
+    this.listen()
+  }
+
+  /**
+   * Stop observing, but keep everything recorded so far.
+   *
+   * What makes selection an interaction *within* a route rather than a
+   * separate answer beside it. The picker swallows events and this must not
+   * see the clicks it swallows, but `start()` clears the buffer, so pausing
+   * had to become its own thing -- see `pickInRecording` in `entry.ts`.
+   *
+   * Navigation stays watched while paused. A page that reloads under a pick is
+   * just as fatal to the route as one that reloads under a click.
+   */
+  pause(): void {
+    if (!this.running) return
+    this.unlisten()
+  }
+
+  /** Pick up where `pause` left off, buffer intact. */
+  resume(): void {
+    if (this.running || !this.open) return
+    this.listen()
+  }
+
+  stop(): PreviewStep[] {
+    this.unlisten()
+    this.open = false
+    window.removeEventListener('beforeunload', this.onUnload)
+    return this.take()
+  }
+
+  private listen(): void {
+    this.running = true
     document.addEventListener('click', this.onClick, true)
     document.addEventListener('change', this.onChange, true)
     document.addEventListener('keydown', this.onKeyDown, true)
@@ -95,20 +201,16 @@ export class Recorder {
     window.addEventListener('beforeunload', this.onUnload)
   }
 
-  stop(): PreviewStep[] {
-    if (this.running) {
-      document.removeEventListener('click', this.onClick, true)
-      document.removeEventListener('change', this.onChange, true)
-      document.removeEventListener('keydown', this.onKeyDown, true)
-      document.removeEventListener('scroll', this.onScroll, true)
-      window.removeEventListener('beforeunload', this.onUnload)
-      this.running = false
-    }
+  private unlisten(): void {
+    document.removeEventListener('click', this.onClick, true)
+    document.removeEventListener('change', this.onChange, true)
+    document.removeEventListener('keydown', this.onKeyDown, true)
+    document.removeEventListener('scroll', this.onScroll, true)
+    this.running = false
     if (this.scrollTimer !== null) {
       clearTimeout(this.scrollTimer)
       this.scrollTimer = null
     }
-    return this.take()
   }
 
   /** What has been recorded so far, without ending the recording. */
@@ -116,8 +218,61 @@ export class Recorder {
     return [...this.steps]
   }
 
+  /**
+   * Whether a recording session is open -- listening OR paused for a pick.
+   *
+   * Deliberately not `running`: a paused recorder still owns its buffer and is
+   * still the session the panel is in the middle of, and treating a pause as
+   * "not recording" is what would let a second field claim the one in-page
+   * `Recorder` and wipe it. See `StepRecorder`'s `recordingField`.
+   */
   get isRecording(): boolean {
-    return this.running
+    return this.open
+  }
+
+  /** Open, but not currently observing -- a pick is in flight. */
+  get isPaused(): boolean {
+    return this.open && !this.running
+  }
+
+  /**
+   * Whether the cap has been reached and events are being discarded.
+   *
+   * Silent truncation is the worst shape this failure can take: the person
+   * carries on working the page, nothing more is recorded, and the route they
+   * submit stops halfway through with no indication of where.
+   */
+  get isFull(): boolean {
+    return this.steps.length >= MAX_STEPS
+  }
+
+  /**
+   * Fold a finished pick into the route, in the order it was made.
+   *
+   * An `extract` pick becomes the `select` entry the binding is read from; a
+   * `click` pick becomes an ordinary reveal targeting that element. That is
+   * the extension's two interactions -- `ElementDefinition.action` -- with the
+   * ordering a recording adds on top.
+   */
+  pushSelect(payload: PickPayload): void {
+    const selector = payload.itemSelector || payload.containerSelector || ''
+    const text = (payload.previewValue || payload.value || '').trim().slice(0, 60)
+    if (payload.action === 'click') {
+      this.push({
+        op: 'click',
+        intent: 'reveal',
+        ...(selector ? { kind: 'css' as const, selector } : {}),
+        text,
+      })
+      return
+    }
+    this.push({
+      op: 'select',
+      intent: 'select',
+      ...(selector ? { kind: 'css' as const, selector } : {}),
+      text,
+      pick: payload,
+    })
   }
 
   private push(step: PreviewStep): void {
@@ -139,6 +294,11 @@ export class Recorder {
     // Carried for the panel to label the row with, so a recording reads as
     // "click Specifications" rather than as six anonymous selectors.
     const text = (el.innerText || el.textContent || '').trim().slice(0, 60)
+    const intent = classifyClick(el)
+    // Snapshotted here, in the capture phase, because the whole question is
+    // what is open *after* the page handles this click that was not open
+    // before it. A moment later is too late.
+    const before = intent === 'reveal' ? new Set(document.querySelectorAll(OPENABLE)) : null
     if (!selector) {
       // Recorded WITHOUT a selector rather than dropped.
       //
@@ -150,10 +310,64 @@ export class Recorder {
       // where this click was. A step with no selector fails both the panel's
       // `keepable` check and the server's dispatchability gate, so it is shown
       // struck through and never saved.
-      this.push({ op: 'click', text })
+      const step: PreviewStep = { op: 'click', intent, text }
+      this.push(step)
+      if (before) this.armSettle(before, step)
       return
     }
-    this.push({ op: 'click', kind: 'css', selector, text })
+    const step: PreviewStep = { op: 'click', intent, kind: 'css', selector, text }
+    this.push(step)
+    if (before) this.armSettle(before, step)
+  }
+
+  /**
+   * Ask, shortly after a reveal click, what it actually revealed -- and record
+   * a wait for it.
+   *
+   * Without this a route clicks the accordion open and reads the field in the
+   * same breath. That works when a person does it, because they were never
+   * going to beat the animation, and fails on replay, which is. The step is
+   * the difference between a route that works and one that works only on the
+   * machine it was recorded on.
+   *
+   * Inserted after the fact rather than reserved up front. A placeholder would
+   * be visible to `take()` -- which the panel polls every 700ms -- so a step
+   * that may yet turn out not to exist would flicker into the list and out of
+   * it. `anchor` is held by identity, not index, because anything at all may
+   * have been recorded in between.
+   */
+  private armSettle(before: Set<Element>, anchor: PreviewStep): void {
+    setTimeout(() => {
+      // Stopped, or the anchor never made it in past the cap. Either way there
+      // is no route for this to belong to.
+      if (!this.open || this.isFull) return
+      const at = this.steps.indexOf(anchor)
+      if (at === -1) return
+
+      let opened: HTMLElement | null = null
+      for (const el of document.querySelectorAll(OPENABLE)) {
+        if (!before.has(el) && el instanceof HTMLElement) {
+          opened = el
+          break
+        }
+      }
+      // Nothing this knows how to see opened. The click may still have
+      // revealed something -- an accordion that is just a div losing a class
+      // -- but guessing a target would be worse than recording no wait at all:
+      // a `wait_for_selector` on the wrong element burns its timeout on every
+      // single run and then continues anyway.
+      if (!opened) return
+      const selector = bestCss(opened)
+      if (!selector) return
+
+      this.steps.splice(at + 1, 0, {
+        op: 'wait_for_selector',
+        intent: 'settle',
+        kind: 'css',
+        selector,
+        text: (opened.innerText || '').trim().slice(0, 40),
+      })
+    }, REVEAL_PROBE_MS)
   }
 
   private onChange(e: Event): void {
@@ -162,14 +376,14 @@ export class Recorder {
     const selector = bestCss(el)
     if (!selector) return
     if (el instanceof HTMLSelectElement) {
-      this.push({ op: 'select_option', kind: 'css', selector, text: el.value })
+      this.push({ op: 'select_option', intent: 'reveal', kind: 'css', selector, text: el.value })
       return
     }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       // `change`, not `input`: one step carrying the final value is what a
       // recipe replays. Recording each keystroke would produce a step list
       // nobody can read and a replay that types the same field twelve times.
-      this.push({ op: 'fill', kind: 'css', selector, text: el.value })
+      this.push({ op: 'fill', intent: 'reveal', kind: 'css', selector, text: el.value })
     }
   }
 
@@ -177,7 +391,9 @@ export class Recorder {
     // Enter and Escape are the two that *do* things -- submitting a search,
     // closing a dialog. The rest is typing, and `change` already has that.
     if (e.key !== 'Enter' && e.key !== 'Escape') return
-    this.push({ op: 'press', text: e.key })
+    // And they are the two intents, in the same order: Enter submits, which
+    // the field depends on; Escape closes, which it does not.
+    this.push({ op: 'press', intent: e.key === 'Escape' ? 'dismiss' : 'reveal', text: e.key })
   }
 
   private onUnload(): void {
@@ -191,7 +407,7 @@ export class Recorder {
       const last = this.steps[this.steps.length - 1]
       // Two scrolls in a row are one scroll with a pause in it.
       if (last && last.op === 'scroll') return
-      this.push({ op: 'scroll' })
+      this.push({ op: 'scroll', intent: 'incidental' })
     }, SCROLL_QUIET_MS)
   }
 }

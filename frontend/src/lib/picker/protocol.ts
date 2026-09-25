@@ -12,7 +12,7 @@
  */
 
 /** Bumped when the injected contract changes, so a stale page re-installs. */
-export const PICKER_VERSION = 3
+export const PICKER_VERSION = 4
 
 /** The global the IIFE installs itself on inside the remote page. */
 export const PICKER_GLOBAL = '__cpPicker'
@@ -23,6 +23,31 @@ export const PICKER_GLOBAL = '__cpPicker'
  * `single` -- pick one control (the next/load-more button); no extraction.
  */
 export type PickerMode = 'list' | 'detail' | 'single'
+
+/**
+ * What one entry of a recorded route is *for*.
+ *
+ * The extension had half of this already: `ElementDefinition.action` tags each
+ * entry of one ordered list as `'extract'` or `'click'`, and
+ * `ElementProcessor.performAction` switches on it. A recording adds ordering
+ * and two more cases, because a route is not only a set of elements -- some of
+ * its clicks are load-bearing and some are housekeeping, and replay must treat
+ * them differently:
+ *
+ * - `reveal`     -- opens the accordion, submits the search. The field is not
+ *                   there without it, so a miss must be attributable.
+ * - `dismiss`    -- a cookie banner, a modal's ×. May legitimately be absent on
+ *                   a given run, so it replays `optional`.
+ * - `settle`     -- a wait for what a reveal revealed. See `Recorder.probeReveal`.
+ * - `select`     -- the pick. Carries the payload the binding is read from, and
+ *                   is the only intent that is not replayed as a step.
+ * - `incidental` -- scrolling and strays. Kept so the list reads like what the
+ *                   person did; safe to drop.
+ *
+ * Absent means `reveal`, which is what every step recorded before intents
+ * existed was in practice.
+ */
+export type StepIntent = 'reveal' | 'dismiss' | 'settle' | 'select' | 'incidental'
 
 /** What the picker parks on `window.__cpPickResult`, collected by `take()`. */
 export type PickMessage =
@@ -175,6 +200,33 @@ export interface PickerApi {
   stopRecording(): unknown[]
   takeRecording(): unknown[]
   isRecording(): boolean
+  /**
+   * Pick an element *during* a recording, and fold it into the route in order.
+   *
+   * The second interaction, and the one the panel had no way to express: a
+   * route could say how to get to a field or which element it was, never both
+   * in sequence. Pauses the recorder (the picker swallows the clicks it draws
+   * over, and those are not the person's), runs an ordinary `detail` pick, and
+   * pushes the result as a `select` entry before resuming.
+   *
+   * `action: 'click'` is the extension's other half -- the picked element
+   * becomes a reveal step rather than a binding. Reachable only from here;
+   * `pick()` has always defaulted `detail` to `'extract'`.
+   */
+  pickInRecording(action?: 'extract' | 'click'): void
+  /** Open but not observing -- a pick is in flight. */
+  isRecordingPaused(): boolean
+  /**
+   * Whether the page changed under the recording.
+   *
+   * Every step after a navigation targets a different document, and because
+   * reveal steps replay `on_error: continue` the route then fails in total
+   * silence. `Recorder` has tracked this since it was written; until now
+   * nothing could ask.
+   */
+  didNavigate(): boolean
+  /** Whether the step cap has been hit and events are being discarded. */
+  recordingFull(): boolean
   showHighlights(elements: HighlightField[]): void
   clearHighlights(): void
   testSelector(selector: string): number
