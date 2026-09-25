@@ -121,7 +121,10 @@ describe('Recorder', () => {
 
     // The useful fact is "they scrolled here and stopped", which is only
     // knowable once they have. Twenty steps would bury the clicks that matter.
-    expect(recorder.stop()).toEqual([{ op: 'scroll' }])
+    // `incidental` because that is what scrolling to look at something is --
+    // it reads like what the person did, and dropping it costs the route
+    // nothing.
+    expect(recorder.stop()).toEqual([{ op: 'scroll', intent: 'incidental' }])
     vi.useRealTimers()
   })
 

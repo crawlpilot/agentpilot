@@ -304,6 +304,15 @@ export interface PreviewStep {
    * consumers that care (`StepRecorder`, `fromPick`) narrow it themselves.
    */
   pick?: unknown
+  /**
+   * Which attribute a `select` entry reads — `text`, `href`, `src`, …
+   *
+   * The picker's classifier guesses one, and the guess is right most of the
+   * time and unfixable when it is not. Carried on the step so the route holds
+   * the whole answer: the way to the value, the element, and what to read off
+   * it. Applied through `setReadAttribute` when the route is converted.
+   */
+  attribute?: string
 }
 
 export interface StepOutcome {

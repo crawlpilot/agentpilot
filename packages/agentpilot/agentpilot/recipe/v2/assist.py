@@ -53,7 +53,30 @@ ScopeShape = Literal["one", "values", "map", "rows"]
 # op is discovered.
 _RECORDABLE_OPS = frozenset({
     "click", "fill", "select_option", "press", "scroll", "scroll_into_view", "hover",
+    # A recorded reveal that animates is open in the DOM long before it has
+    # finished moving. The person never noticed, because they were never going
+    # to beat the animation; replay is, so the route needs somewhere to say
+    # "wait for what that click opened". See `Recorder.armSettle`.
+    "wait", "wait_for_selector",
 })
+
+_INTENTS = frozenset({"reveal", "dismiss", "settle", "select", "incidental"})
+
+#: The marker a route carries at the point the value is read. Not an op the
+#: driver knows -- `split_route` consumes it and it never becomes a `Step`.
+_SELECT_OP = "select"
+
+
+def _intent_of(item: dict[str, Any]) -> str:
+    """The declared intent, or `reveal`.
+
+    Absent means `reveal` because that is what every step recorded before
+    intents existed was in practice, and a stored route re-parsed after a park
+    must come back meaning the same thing it meant going in.
+    """
+
+    intent = str(item.get("intent") or "")
+    return intent if intent in _INTENTS else "reveal"
 
 
 @dataclass(frozen=True)
@@ -207,9 +230,17 @@ def parse_recorded_steps(raw: list[Any]) -> list[Step]:
       forever, because the driver resolves selectors with `querySelector` and
       has no notion of the nth match.
 
-    Everything is `optional` with `on_error: continue`, matching every reveal
-    step this system emits: a cookie banner that did not appear this time is not
-    a failed run, and a recording is mostly reveals.
+    **What a step is for decides how it fails.** Every recorded step used to be
+    `optional`, on the reasoning that a recording is mostly reveals and a cookie
+    banner that did not appear this time is not a failed run. That is right
+    about the banner and wrong about everything else: a reveal click is the
+    reason the field is on the page at all, and marking it optional made a
+    reveal that stopped working indistinguishable from one that was never
+    needed -- it is skipped, the field comes back empty, and `step_trace` has
+    nothing to attribute it to. So a `dismiss` keeps that treatment and a
+    `reveal` does not. Neither *fails* the run (`on_error` stays `continue`,
+    because a route is a best effort and a half-revealed page can still yield
+    most of its fields), but only one of them is silent about it.
     """
 
     from agentpilot.recipe.v2.capture import dispatchability_error

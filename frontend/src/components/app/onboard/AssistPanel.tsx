@@ -20,6 +20,8 @@ import {
 } from '@/lib/recipe/fromPick'
 import { READ_ATTRIBUTES, attributeHint } from '@/lib/recipe/attributes'
 import type { PreviewStep } from '@/lib/picker/preview'
+import type { PickPayload } from '@/lib/picker/protocol'
+import type { FieldDraft } from '@/lib/recipe/fromPick'
 import type { Candidate, FieldSpec } from '@/lib/recipe/types'
 import type { PendingAsk, RecipeResolution } from '@/lib/api/types'
 
@@ -126,7 +128,21 @@ export function AssistPanel({
       if (!steps.length) continue
       const recording = steps as unknown as Array<Record<string, unknown>>
       const answer = out[field]
-      if (!answer) {
+      // A route that contains a `select` already names the element, so it is a
+      // `pick` whose steps happen to describe how to reach it -- not a bare
+      // `steps` answer the model has to search all over again. The step stays
+      // in the array as the marker the server splits the route on, so it knows
+      // which of these run before the binding and which run after it.
+      const chosen = !answer ? selectInRoute(steps) : null
+      if (chosen) {
+        out[field] = {
+          field,
+          action: 'pick',
+          locators: chosen.candidates.map((c) => c.locator as unknown as Record<string, unknown>),
+          spec: chosen.spec as unknown as Record<string, unknown>,
+          steps: recording,
+        }
+      } else if (!answer) {
         out[field] = { field, action: 'steps', steps: recording }
       } else if (answer.action === 'pick' || answer.action === 'scope') {
         out[field] = { ...answer, steps: recording }
@@ -377,6 +393,32 @@ const SHAPE_HELP = {
   map: 'Labelled pairs whose keys come from the page — a specifications block.',
   rows: 'Repeating rows with the same columns.',
 } as const
+
+/**
+ * The binding a route carries, if the person picked one while recording.
+ *
+ * The conversion is exactly the one the standalone pick button does --
+ * `detailPickToDraft` -- so a value chosen mid-route gets the same derived type
+ * and cleanup as one chosen on its own, rather than a second, poorer path to
+ * the same thing. The attribute override the row offers is applied here,
+ * because it is the last point at which the candidate chain still exists.
+ *
+ * The LAST select wins. A person who picks, looks at the preview and picks
+ * again has corrected themselves, and the earlier row is visibly still in the
+ * list for them to delete if they meant something else by it.
+ */
+function selectInRoute(steps: PreviewStep[]): FieldDraft | null {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i]
+    if (step.intent !== 'select' || !step.pick) continue
+    const draft = detailPickToDraft(step.pick as PickPayload)
+    if (draft.candidates.length === 0) return null
+    return step.attribute
+      ? { ...draft, candidates: setReadAttribute(draft.candidates, step.attribute) }
+      : draft
+  }
+  return null
+}
 
 /** Every action, so a `scope` or a `steps` answer is not labelled "described". */
 const ACTION_LABEL: Record<RecipeResolution['action'], string> = {

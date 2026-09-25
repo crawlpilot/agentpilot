@@ -103,6 +103,44 @@ const POLL_TIMEOUT_MS = 5 * 60 * 1000
 export type PickerStatus = 'idle' | 'installing' | 'picking'
 
 /**
+ * Everything about a recording, read in one round trip.
+ *
+ * Four separate `execute_js` calls would be four HTTP requests every 700ms for
+ * as long as somebody is recording, to answer four questions about the same
+ * object. The composite expression costs one.
+ */
+export interface RecordingState {
+  steps: PreviewStep[]
+  /** A pick is in flight; the page is not being observed right now. */
+  paused: boolean
+  /**
+   * The page changed under the recording, so every step after that point
+   * targets a different document. The route has to be made again.
+   */
+  navigated: boolean
+  /** The step cap was reached and events are being discarded. */
+  full: boolean
+}
+
+/** One expression, so a poll is one request. Property order is evaluation order. */
+const RECORDING_STATE = (call: string) =>
+  `(function(){var p=window.${PICKER_GLOBAL};return {` +
+  `steps:p.${call},` +
+  `paused:p.isRecordingPaused(),` +
+  `navigated:p.didNavigate(),` +
+  `full:p.recordingFull()};})()`
+
+function asRecordingState(out: unknown): RecordingState {
+  const o = (out ?? {}) as Partial<Record<keyof RecordingState, unknown>>
+  return {
+    steps: Array.isArray(o.steps) ? (o.steps as PreviewStep[]) : [],
+    paused: o.paused === true,
+    navigated: o.navigated === true,
+    full: o.full === true,
+  }
+}
+
+/**
  * Install if absent or outdated, then evaluate `expression`.
  *
  * Sent as one script so a pick costs one round trip rather than two, and so
@@ -143,9 +181,16 @@ export interface UsePagePicker {
   selection: () => Promise<{ tag: string; text: string; pinned: boolean } | null>
   /** Watch what the user does to the page; resolves with the recorded steps. */
   startRecording: () => Promise<void>
-  stopRecording: () => Promise<PreviewStep[]>
-  /** What has been recorded so far, without ending the recording. */
-  takeRecording: () => Promise<PreviewStep[]>
+  stopRecording: () => Promise<RecordingState>
+  /** Where the recording is up to, without ending it. */
+  pollRecording: () => Promise<RecordingState>
+  /**
+   * Pick an element without ending the recording, folding it in as a `select`.
+   *
+   * Fire-and-forget, unlike `pick`: the result goes into the route rather than
+   * coming back here, and the panel sees it arrive through `pollRecording`.
+   */
+  pickInRecording: (action: 'extract' | 'click') => Promise<void>
   /** Flash a selector's matches in the page; resolves with the match count. */
   testSelector: (selector: string) => Promise<number>
   /** A region's markup, for handing the model something to search inside. */
@@ -222,22 +267,31 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     await run(`window.${PICKER_GLOBAL}.startRecording()`)
   }, [run])
 
-  const stopRecording = useCallback(async (): Promise<PreviewStep[]> => {
-    const out = await run(`window.${PICKER_GLOBAL}.stopRecording()`)
-    return Array.isArray(out) ? (out as PreviewStep[]) : []
+  const stopRecording = useCallback(async (): Promise<RecordingState> => {
+    return asRecordingState(await run(RECORDING_STATE('stopRecording()')))
   }, [run])
 
-  const takeRecording = useCallback(async (): Promise<PreviewStep[]> => {
+  const pollRecording = useCallback(async (): Promise<RecordingState> => {
     // Polled while recording so the panel can show the steps arriving. A
     // navigation mid-recording tears the page down and the listeners with it,
     // so a throw here is expected rather than exceptional.
     try {
-      const out = await run(`window.${PICKER_GLOBAL}.takeRecording()`)
-      return Array.isArray(out) ? (out as PreviewStep[]) : []
+      return asRecordingState(await run(RECORDING_STATE('takeRecording()')))
     } catch {
-      return []
+      return { steps: [], paused: false, navigated: false, full: false }
     }
   }, [run])
+
+  const pickInRecording = useCallback(
+    async (action: 'extract' | 'click') => {
+      // No poll loop here, unlike `pick`. The result is pushed into the route
+      // in the page, and `pollRecording` is already watching for it -- racing
+      // a second collector against that one would be two ways for the same
+      // selection to arrive.
+      await run(`window.${PICKER_GLOBAL}.pickInRecording(${JSON.stringify(action)})`)
+    },
+    [run],
+  )
 
   const testSelector = useCallback(
     async (selector: string): Promise<number> => {
@@ -367,6 +421,6 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
   return {
     status, error, pick, cancel, refine, selection, testSelector, outerHtml,
     preview, previewRows, applySteps, showHighlights,
-    startRecording, stopRecording, takeRecording,
+    startRecording, stopRecording, pollRecording, pickInRecording,
   }
 }
