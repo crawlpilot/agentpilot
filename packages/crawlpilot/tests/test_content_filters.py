@@ -305,7 +305,11 @@ def test_entities_format_returns_json() -> None:
 def test_fit_markdown_falls_back_rather_than_returning_empty() -> None:
     # Every block here is a bare link, so the density pass scores the page to
     # nothing. The caller still gets the page.
-    nav_only = '<html><body><div class="menu"><a href="/a">A</a><a href="/b">B</a></div></body></html>'
+    nav_only = (
+        '<html><body><div class="menu">'
+        '<a href="/a">A</a><a href="/b">B</a>'
+        "</div></body></html>"
+    )
     assert "A" in extract(nav_only, format="fit_markdown")
 
 
@@ -313,7 +317,11 @@ def test_citations_reach_the_extractor_for_both_markdown_formats() -> None:
     for fmt in ("markdown", "fit_markdown"):
         out = extract(SEMANTIC_HTML, format=fmt, citations=True, base_url="https://e.com")
         assert "## References" not in out  # no links in the main content at all
-    with_link = '<html><body><article><p>See <a href="/docs">docs</a> for the full policy text.</p></article></body></html>'
+    with_link = (
+        "<html><body><article><p>"
+        'See <a href="/docs">docs</a> for the full policy text.'
+        "</p></article></body></html>"
+    )
     out = extract(with_link, format="markdown", citations=True, base_url="https://e.com")
     assert "[docs][1]" in out
     assert "[1]: https://e.com/docs" in out

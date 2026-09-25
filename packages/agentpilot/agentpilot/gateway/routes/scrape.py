@@ -102,6 +102,8 @@ async def scrape(
         only_main_content=req.only_main_content,
         include_tags=tuple(req.include_tags) or None,
         exclude_tags=tuple(req.exclude_tags) or None,
+        relevance_query=req.relevance_query,
+        citations=req.citations,
         timeout_ms=req.timeout_ms,
         wait_for_ms=req.wait_for_ms,
         actions=tuple(
@@ -144,9 +146,11 @@ async def scrape(
             document_id=document.document_id,
             url=document.url,
             markdown=document.markdown,
+            fit_markdown=document.fit_markdown,
             text=document.text,
             html=document.html,
             structured_data=document.structured_data,
+            entities=document.entities,
             links=list(document.links),
             screenshot=base64.b64encode(screenshot_bytes).decode("ascii")
             if screenshot_bytes

@@ -46,7 +46,8 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     # Requires real phone-number shape -- a leading `+`, or bracketed/separated
     # groups -- rather than any long digit run.
     "phone": re.compile(
-        r"(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])\d{2,4}[ .-]?\d{2,4}(?:[ .-]?\d{2,4})?"
+        r"(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])"
+        r"\d{2,4}[ .-]?\d{2,4}(?:[ .-]?\d{2,4})?"
     ),
     # The final class excludes sentence punctuation, so "see https://e.com/x."
     # yields the URL and not the full stop.

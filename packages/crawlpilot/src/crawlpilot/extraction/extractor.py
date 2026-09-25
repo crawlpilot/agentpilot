@@ -118,14 +118,14 @@ def _fallback_chain(
     more likely to be mis-scored than to be entirely chrome.
     """
 
+    chain: list[tuple[ExtractFormat, bool]] = [(format, main_content)]
     if format == "fit_markdown":
-        chain: list[tuple[ExtractFormat, bool]] = [("fit_markdown", main_content)]
         chain.append(("markdown", main_content))
-        if main_content:
-            chain.append(("fit_markdown", False))
+    if main_content:
+        chain.append((format, False))
+        if format == "fit_markdown":
             chain.append(("markdown", False))
-        return chain
-    return [(format, main_content)] + ([(format, False)] if main_content else [])
+    return chain
 
 
 def _render(

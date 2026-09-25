@@ -73,6 +73,8 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
             only_main_content=req.scrape_options.only_main_content,
             include_tags=tuple(req.scrape_options.include_tags) or None,
             exclude_tags=tuple(req.scrape_options.exclude_tags) or None,
+            relevance_query=req.scrape_options.relevance_query,
+            citations=req.scrape_options.citations,
             timeout_ms=req.scrape_options.timeout_ms,
             wait_for_ms=req.scrape_options.wait_for_ms,
             screenshot=req.scrape_options.screenshot,
@@ -93,9 +95,11 @@ def _document_out(document: Document) -> DocumentOut:
         document_id=document.document_id,
         url=document.url,
         markdown=document.markdown,
+        fit_markdown=document.fit_markdown,
         text=document.text,
         html=document.html,
         structured_data=document.structured_data,
+        entities=document.entities,
         links=list(document.links),
         # Not persisted inline for job-backed results -- see
         # spi.scrape.Document.screenshot_artifact_id's docstring.

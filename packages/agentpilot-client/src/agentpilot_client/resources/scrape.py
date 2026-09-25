@@ -100,9 +100,11 @@ def document_from_wire(payload: dict[str, Any]) -> Document:
         document_id=payload.get("document_id", ""),
         url=payload.get("url", ""),
         markdown=payload.get("markdown"),
+        fit_markdown=payload.get("fit_markdown"),
         text=payload.get("text"),
         html=payload.get("html"),
         structured_data=payload.get("structured_data"),
+        entities=payload.get("entities"),
         links=tuple(payload.get("links") or ()),
         screenshot_artifact_id=payload.get("screenshot"),
         metadata=(

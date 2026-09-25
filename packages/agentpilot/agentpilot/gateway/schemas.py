@@ -146,12 +146,25 @@ class ScrapeRequest(BaseModel):
     """Same not-yet-routed field as `SessionOpenRequest.tier` -- every scrape
     takes the same full-Patchright path today regardless of this value; see
     that model's field for the reasoning."""
-    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
-        default=["markdown"]
-    )
+    formats: list[
+        Literal["markdown", "text", "html", "structured_data", "fit_markdown", "entities"]
+    ] = Field(default=["markdown"])
+    """`"fit_markdown"` is the filtered markdown -- density-pruned, and
+    BM25-ranked against `relevance_query` when one is given. `"entities"` is the
+    deterministic regex sweep (emails, phones, prices, dates, identifiers). Both
+    are additive: ask for `["markdown", "fit_markdown"]` to get the full page
+    and the filtered one side by side."""
     only_main_content: bool = True
     include_tags: list[str] = Field(default_factory=list)
     exclude_tags: list[str] = Field(default_factory=list)
+    relevance_query: str | None = None
+    """Ranking query for `"fit_markdown"`: blocks that do not rank against it
+    are dropped. Ignored unless `"fit_markdown"` is among `formats`, and never
+    applied to `"markdown"` -- which always means the whole main content."""
+    citations: bool = False
+    """Rewrite inline links in the markdown formats as numbered references with
+    a trailing `## References` block, collapsing repeated links onto one entry.
+    Cuts the token cost of a link-dense page substantially."""
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     actions: list[ActionIn] = Field(default_factory=list)
@@ -211,9 +224,17 @@ class DocumentOut(BaseModel):
     document_id: str
     url: str
     markdown: str | None = None
+    fit_markdown: str | None = None
+    """Set when `"fit_markdown"` was among the requested formats -- see
+    `crawlpilot.spi.scrape.Document.fit_markdown` for why it is a separate
+    field rather than a narrowed `markdown`."""
     text: str | None = None
     html: str | None = None
     structured_data: dict[str, Any] | None = None
+    entities: dict[str, list[str]] | None = None
+    """Set when `"entities"` was among the requested formats: regex-extracted
+    emails, phones, prices, dates and identifiers, each deduplicated and in
+    first-appearance order."""
     links: list[str] = Field(default_factory=list)
     screenshot: str | None = None
     """Base64-encoded PNG, same encoding `ActionResultOut.screenshots` uses.
@@ -286,12 +307,25 @@ class ScrapeOptionsIn(BaseModel):
     docstring for where that boundary is drawn and why."""
 
     model_config = ConfigDict(extra="forbid")
-    formats: list[Literal["markdown", "text", "html", "structured_data"]] = Field(
-        default=["markdown"]
-    )
+    formats: list[
+        Literal["markdown", "text", "html", "structured_data", "fit_markdown", "entities"]
+    ] = Field(default=["markdown"])
+    """`"fit_markdown"` is the filtered markdown -- density-pruned, and
+    BM25-ranked against `relevance_query` when one is given. `"entities"` is the
+    deterministic regex sweep (emails, phones, prices, dates, identifiers). Both
+    are additive: ask for `["markdown", "fit_markdown"]` to get the full page
+    and the filtered one side by side."""
     only_main_content: bool = True
     include_tags: list[str] = Field(default_factory=list)
     exclude_tags: list[str] = Field(default_factory=list)
+    relevance_query: str | None = None
+    """Ranking query for `"fit_markdown"`: blocks that do not rank against it
+    are dropped. Ignored unless `"fit_markdown"` is among `formats`, and never
+    applied to `"markdown"` -- which always means the whole main content."""
+    citations: bool = False
+    """Rewrite inline links in the markdown formats as numbered references with
+    a trailing `## References` block, collapsing repeated links onto one entry.
+    Cuts the token cost of a link-dense page substantially."""
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     screenshot: bool = False

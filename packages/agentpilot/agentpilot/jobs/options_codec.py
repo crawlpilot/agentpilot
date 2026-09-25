@@ -30,6 +30,8 @@ def dump_scrape_options(options: ScrapeOptions) -> dict[str, Any]:
         "only_main_content": options.only_main_content,
         "include_tags": list(options.include_tags) if options.include_tags else None,
         "exclude_tags": list(options.exclude_tags) if options.exclude_tags else None,
+        "relevance_query": options.relevance_query,
+        "citations": options.citations,
         "timeout_ms": options.timeout_ms,
         "wait_for_ms": options.wait_for_ms,
         "screenshot": options.screenshot,
@@ -53,6 +55,8 @@ def load_scrape_options(data: dict[str, Any] | None) -> ScrapeOptions:
         only_main_content=data.get("only_main_content", True),
         include_tags=tuple(include_tags) if include_tags else None,
         exclude_tags=tuple(exclude_tags) if exclude_tags else None,
+        relevance_query=data.get("relevance_query"),
+        citations=data.get("citations", False),
         timeout_ms=data.get("timeout_ms", 30_000),
         wait_for_ms=data.get("wait_for_ms"),
         actions=(),  # see module docstring

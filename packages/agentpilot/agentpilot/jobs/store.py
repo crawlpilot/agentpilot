@@ -116,9 +116,11 @@ def _document_from_row(row: dict[str, Any]) -> Document:
         document_id=row["document_id"],
         url=row["url"],
         markdown=row["markdown"],
+        fit_markdown=row["fit_markdown"],
         text=row["text"],
         html=row["html"],
         structured_data=row["structured_data"],
+        entities=row["entities"],
         raw_html=row["raw_html"],
         links=tuple(row["links"] or ()),
         screenshot_artifact_id=row["screenshot_artifact_id"],
@@ -136,8 +138,8 @@ _JOB_COLUMNS = (
 )
 
 _DOCUMENT_COLUMNS = (
-    "document_id, url, status_code, title, markdown, text, html, raw_html, links, "
-    "screenshot_artifact_id, tier_used, node_id, duration_ms, error, structured_data, "
+    "document_id, url, status_code, title, markdown, fit_markdown, text, html, raw_html, links, "
+    "screenshot_artifact_id, tier_used, node_id, duration_ms, error, structured_data, entities, "
     "extract, extract_error, extract_warning"
 )
 
@@ -472,6 +474,7 @@ class PostgresJobStore:
                         meta.status_code if meta else None,
                         meta.title if meta else None,
                         document.markdown,
+                        document.fit_markdown,
                         document.text,
                         document.html,
                         document.raw_html,
@@ -482,6 +485,7 @@ class PostgresJobStore:
                         meta.duration_ms if meta else None,
                         document.error,
                         Jsonb(document.structured_data) if document.structured_data else None,
+                        Jsonb(document.entities) if document.entities else None,
                         Jsonb(document.extract) if document.extract else None,
                         document.extract_error,
                         document.extract_warning,

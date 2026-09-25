@@ -180,12 +180,11 @@ def _bm25(blocks: list[HtmlElement], query_terms: list[str]) -> dict[HtmlElement
         for term in set(tokens):
             document_frequency[term] = document_frequency.get(term, 0) + 1
 
-    idf = {
-        term: math.log(
-            1 + (total - document_frequency.get(term, 0) + 0.5) / (document_frequency.get(term, 0) + 0.5)
-        )
-        for term in set(query_terms)
-    }
+    def inverse_document_frequency(term: str) -> float:
+        n = document_frequency.get(term, 0)
+        return math.log(1 + (total - n + 0.5) / (n + 0.5))
+
+    idf = {term: inverse_document_frequency(term) for term in set(query_terms)}
 
     scores: dict[HtmlElement, float] = {}
     for block, tokens, length in zip(blocks, tokenized, lengths, strict=True):
