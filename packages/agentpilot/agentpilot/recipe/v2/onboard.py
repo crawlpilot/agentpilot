@@ -108,6 +108,30 @@ _MAX_NARRATED_STEPS = 40
 # it was before any limit existed.
 _MAX_FIELD_ATTEMPTS = 4
 
+# The same budget for a field the page shows evidence of.
+#
+# `_MAX_FIELD_ATTEMPTS` exists to stop the build re-proposing a value the page
+# does not have. It cannot tell that apart from a value the agent has not
+# reached yet, and on a page whose sections open on click those look identical
+# for the first several steps.
+#
+# Measured on an Ulta product page. The agent's own goals at steps 5 and 6 were
+# "Verify How To Use and Ingredients sections are present/expanded" and "Scroll
+# down to locate How To Use and Ingredients accordions". The counter hit four at
+# step 6 and wrote off `ingredients`, `how_to_use` and `origin` -- one step
+# before it got there. `looking_for` emptied, the build stopped asking, and the
+# agent finished reporting "all fields located". All three were behind
+# click-to-expand sections that were on the page the whole time.
+#
+# Still bounded: evidence buys more rope, not unlimited rope, because a field
+# whose words appear in the site chrome would otherwise be proposed on every
+# step for the life of the run.
+_MAX_FIELD_ATTEMPTS_WITH_EVIDENCE = 10
+
+# What fraction of a field's own vocabulary has to be on the page before
+# "it may simply not be on this page" is refused as an explanation.
+_EVIDENCE_RATIO = 0.5
+
 # Operating one of these is the agent saying "show me something that was not
 # there before", and whatever it revealed has not been looked at yet -- so the
 # patience budget must start again for it. See `_look`'s counter.
@@ -116,6 +140,12 @@ _MAX_FIELD_ATTEMPTS = 4
 # an agent scrolls on most steps, and treating that as progress would stop the
 # counter ever firing -- which is the loop `_MAX_FIELD_ATTEMPTS` exists to end.
 # These are rare, deliberate interactions with a control.
+# How many batches a dialog may stay open while the build still wants something
+# that might be inside it. Bounded so a genuinely obstructing overlay is still
+# cleared -- the agent gets a couple more observations, never an open-ended
+# stall.
+_MAX_DIALOG_DEFERRALS = 3
+
 _OPENING_OPS = frozenset({
     "click", "double_click", "tap", "select_option", "check", "uncheck",
 })
@@ -196,14 +226,12 @@ _STOPWORDS = frozenset({
 })
 
 
-def _keywords_in(spec: FieldSpec, haystack: str) -> str:
-    """Which words of a field's name/description appear in the text the model
-    will be shown -- a crude but decisive signal for triage.
+def _keyword_hits(spec: FieldSpec, haystack: str) -> tuple[int, int]:
+    """How many of a field's own words appear in the text, and how many it has.
 
-    The question every failed field raises first is "was it even there?", and
-    nothing in the trace answered it: a field that could not be located looks
-    identical whether the reveal never happened or the selector was simply
-    wrong. Those need opposite fixes.
+    Crude on purpose. It cannot tell you a field IS locatable, but a field whose
+    own vocabulary is all over the page is not one the page lacks -- and that is
+    the only claim it is used to refuse.
     """
 
     words = {
@@ -212,10 +240,30 @@ def _keywords_in(spec: FieldSpec, haystack: str) -> str:
         if len(w) > 2 and w not in _STOPWORDS
     }
     if not words:
+        return 0, 0
+    low = haystack.lower()
+    return sum(1 for w in words if w in low), len(words)
+
+
+def _keywords_in(spec: FieldSpec, haystack: str) -> str:
+    """The same signal, formatted for the log.
+
+    The question every failed field raises first is "was it even there?", and
+    nothing in the trace answered it: a field that could not be located looks
+    identical whether the reveal never happened or the selector was simply
+    wrong. Those need opposite fixes.
+    """
+
+    hits, total = _keyword_hits(spec, haystack)
+    if not total:
         return "-"
     low = haystack.lower()
-    hit = sorted(w for w in words if w in low)
-    return f"{len(hit)}/{len(words)} {hit[:5]}"
+    words = sorted(
+        w
+        for w in re.split(r"[^a-z0-9]+", f"{spec.name} {spec.description}".lower())
+        if len(w) > 2 and w not in _STOPWORDS and w in low
+    )
+    return f"{hits}/{total} {words[:5]}"
 
 
 def _same_document(before: str, after: str) -> bool:
@@ -474,6 +522,11 @@ class ExplorationState:
         # Consecutive misses per field, and what that count is allowed to
         # conclude. See `_MAX_FIELD_ATTEMPTS`.
         self._misses: dict[str, int] = {}
+        # Consecutive batches a dialog dismissal has been held back, and
+        # whether the batch just processed bound anything. See
+        # `_close_any_dialog`.
+        self._dialog_deferred = 0
+        self._froze_this_batch = False
         self.presumed_absent: set[str] = set()
         # The page each group was frozen on. Two groups can only share a page
         # load if nothing navigated between them.
@@ -845,6 +898,10 @@ class ExplorationState:
         is the agent asserting the page now shows something it did not before.
         """
 
+        # Reset per batch: `_look` can return early (nothing left to look for),
+        # and a stale value would tell `_close_any_dialog` this batch read the
+        # dialog when it never looked.
+        self._froze_this_batch = False
         structured = await self._reader.structured_data()
         # The structure a SELECTOR is written against, not the click-target
         # list. See `SnapshotView.for_authoring`.
@@ -987,6 +1044,10 @@ class ExplorationState:
                 if chain
             },
         )
+        # Read by `_close_any_dialog`, which runs after this in the same batch:
+        # a dialog that yielded something has been read, one that yielded
+        # nothing has not.
+        self._froze_this_batch = bool(frozen)
         for name in frozen:
             self._unfound.pop(name, None)
             self._failures.pop(name, None)
@@ -1041,7 +1102,20 @@ class ExplorationState:
                 continue
             missed = self._misses.get(name, 0) + 1
             self._misses[name] = missed
-            if missed >= _MAX_FIELD_ATTEMPTS:
+            # A field whose own words are on the page is not one the page
+            # lacks, whatever the counter says -- see
+            # `_MAX_FIELD_ATTEMPTS_WITH_EVIDENCE`.
+            hits, total = _keyword_hits(looking_for[name], snapshot_text)
+            evident = bool(total) and hits / total >= _EVIDENCE_RATIO
+            ceiling = (
+                _MAX_FIELD_ATTEMPTS_WITH_EVIDENCE if evident else _MAX_FIELD_ATTEMPTS
+            )
+            if evident and missed == _MAX_FIELD_ATTEMPTS:
+                log.info(
+                    "onboard.absence_refused_words_on_page",
+                    field=name, attempts=missed, keywords=f"{hits}/{total}",
+                )
+            if missed >= ceiling:
                 self.presumed_absent.add(name)
                 if name not in unbound:
                     self._failures[name] = (
@@ -1272,8 +1346,40 @@ class ExplorationState:
         overlay = await self._reader.overlay()
         step = capture.dismiss_step_for(overlay)
         if step is None:
+            self._dialog_deferred = 0
             return
 
+        # "Closed once the fields inside it have been read" -- which is what
+        # this was always for, and the case it missed is a dialog that has not
+        # been read yet.
+        #
+        # A batch that bound something got what it opened the dialog for, and
+        # closing is right. A batch that bound NOTHING while fields are still
+        # outstanding has not read it: `_look` runs once per batch with
+        # `max_retries=1`, so a field inside got exactly two proposals ever, and
+        # if the first went on a correctable mistake -- an alternation, a
+        # caption -- the second was the last before the content left the DOM.
+        # Measured twice on the same Zara page: click, two attempts, close, and
+        # every later attempt unwinnable because `care` was no longer rendered.
+        #
+        # Bounded, so the protection survives: an overlay genuinely in the way
+        # costs at most `_MAX_DIALOG_DEFERRALS` further observations rather than
+        # the rest of the run.
+        if (
+            not self._froze_this_batch
+            and self._unfound
+            and self._dialog_deferred < _MAX_DIALOG_DEFERRALS
+        ):
+            self._dialog_deferred += 1
+            log.info(
+                "onboard.dialog_kept_open",
+                still_wanted=sorted(self._unfound),
+                deferred=self._dialog_deferred,
+                locked=overlay.get("locked"),
+            )
+            return
+
+        self._dialog_deferred = 0
         self._path.append(step)
         log.info(
             "onboard.dialog_left_open",

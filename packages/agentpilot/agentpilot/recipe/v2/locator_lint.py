@@ -101,6 +101,44 @@ def xpath_escape_reason(selector: str, *, scoped: bool) -> str | None:
     return None
 
 
+# Playwright/Puppeteer selector extensions. They look like CSS, they are
+# documented all over the web as CSS, and `querySelector` rejects every one.
+_ENGINE_ONLY_RE = re.compile(
+    r":(?:has-text|text|text-is|text-matches|visible|light|nth-match|above|below"
+    r"|right-of|left-of|near|react|vue)\b"
+    r"|>>"
+)
+
+
+def engine_only_selector_reason(selector: str) -> str | None:
+    """Why this CSS cannot run, or None.
+
+    The driver resolves selectors with `document.querySelector`, which
+    implements CSS and nothing else. Playwright's extensions -- `:has-text()`
+    above all -- are the commonest thing a model reaches for when it wants to
+    find an element by its words, because most of the examples it has read are
+    Playwright examples.
+
+    Caught here rather than left to the DOM because of what the alternative
+    looks like from the model's side: an unhandled `SyntaxError` comes back as
+    `css locator raised: invalid selector: "..."`, which says the string was
+    malformed and not that the IDEA was fine and the dialect wrong. It then
+    spends another attempt on a variant of the same thing. Naming the working
+    form turns a wasted round into a useful one.
+    """
+
+    found = _ENGINE_ONLY_RE.search(selector)
+    if found is None:
+        return None
+    return (
+        f"`{found.group(0)}` is Playwright selector syntax, not CSS, and the page "
+        f"is queried with `document.querySelector` -- it cannot run. To find an "
+        f"element by its text use an xpath instead, e.g. "
+        f"`//div[contains(translate(., '{_UPPER}', '{_LOWER}'), 'wanted text')]`. "
+        f"To find one by structure, `:has()` IS real CSS and works"
+    )
+
+
 def partial_case_fold_reason(selector: str) -> str | None:
     """Whether a `translate()` in this expression folds only part of the alphabet.
 

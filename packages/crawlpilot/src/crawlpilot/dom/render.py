@@ -67,35 +67,67 @@ _REDACTED = "<redacted>"
 AUTHORING_INCLUDE_ATTRIBUTES: tuple[str, ...] = DEFAULT_INCLUDE_ATTRIBUTES + (
     "class",
     "itemprop",
+    "data-test",
     "data-qa-qualifier",
 )
 
 # Attributes that make an element nameable. An element carrying none of them
 # cannot be selected except by position, so rendering it would cost a line and
 # buy the model nothing.
-_ADDRESSABLE = ("id", "class", "itemprop", "data-testid", "data-qa-qualifier")
+_ADDRESSABLE = (
+    "id", "class", "itemprop", "data-testid", "data-test", "data-qa-qualifier",
+)
+
+
+def _subtree_has_text(node: SimplifiedNode) -> bool:
+    if node.original.node_type == NodeType.TEXT_NODE and node.text_content():
+        return True
+    return any(_subtree_has_text(child) for child in node.children)
+
+
+def _is_addressable(node: SimplifiedNode) -> bool:
+    original = node.original
+    return original.node_type == NodeType.ELEMENT_NODE and any(
+        original.attributes.get(a) for a in _ADDRESSABLE
+    )
 
 
 def _authoring_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> str | None:
-    """A structural line for a non-interactive element that holds text.
+    """A structural line for the nearest addressable ancestor of some text.
 
-    Only elements that DIRECTLY contain text: a wrapper whose text all lives
-    three levels down is not where a selector should point, and rendering every
-    ancestor would bury the page in scaffolding.
+    "Directly contains a text node" was too strict, and it excluded exactly the
+    handle a selector needs. Measured on an Ulta product page:
+
+        <div class="Markdown" data-test="markdown">   <- addressable, no text child
+          <h4>Benefits</h4>                           <- holds text, no class
+          <ul><li>POS-ACNE CARE ...</li></ul>         <- holds text, no class
+
+    The `.Markdown` div is the only thing on that branch a selector can name,
+    and its children are all elements, so it never rendered. The `<li>` and
+    `<p>` that do hold the text carry no class, so they never rendered either.
+    The model was shown the words with no addressable ancestor anywhere -- the
+    very situation the authoring view exists to prevent.
+
+    So: render an addressable element that has text somewhere beneath it, unless
+    a nearer addressable element also has that text. That is one line per
+    branch, at the depth a selector should actually point, and it still refuses
+    to emit the chain of wrappers above it.
     """
 
-    original = node.original
-    if original.node_type != NodeType.ELEMENT_NODE:
+    if not _is_addressable(node) or not _subtree_has_text(node):
         return None
-    if not any(original.attributes.get(a) for a in _ADDRESSABLE):
+    if any(
+        _is_addressable(d) and _subtree_has_text(d) for d in _descendants(node)
+    ):
         return None
-    holds_text = any(
-        child.original.node_type == NodeType.TEXT_NODE and child.text_content()
-        for child in node.children
-    )
-    if not holds_text:
-        return None
-    return f"<{original.tag_name}{_attribute_string(node, include_attributes)}>"
+    return f"<{node.original.tag_name}{_attribute_string(node, include_attributes)}>"
+
+
+def _descendants(node: SimplifiedNode):
+    for child in node.children:
+        yield child
+        yield from _descendants(child)
+
 
 _ZERO_WIDTH = str.maketrans(
     "",

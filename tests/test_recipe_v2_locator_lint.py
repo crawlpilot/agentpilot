@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from agentpilot.recipe.v2.locator_lint import (
+    engine_only_selector_reason,
     partial_case_fold_reason,
     relativize_xpath,
     scoped_xpath,
@@ -115,3 +116,39 @@ def test_the_case_fold_is_advice_not_a_refusal() -> None:
     good_axis = ".//*[contains(translate(., 'CARE', 'care'), 'care')]"
     assert xpath_escape_reason(good_axis, scoped=False) is None
     assert partial_case_fold_reason(good_axis) is not None
+
+
+# --- selector syntax the page cannot run -------------------------------------
+
+
+def test_playwright_text_pseudo_classes_are_named_as_such() -> None:
+    """`:has-text()` is the commonest thing a model reaches for when it wants an
+    element by its words, because most examples it has read are Playwright
+    examples. The page is queried with `document.querySelector`, which throws.
+
+    Left to the DOM the failure comes back as `invalid selector: "..."` -- which
+    says the string was malformed, not that the idea was fine and the dialect
+    wrong -- and the next attempt is a variant of the same thing. Observed on a
+    Zara build spending an attempt on
+    `.product-detail-actions__action-button:has-text('Composition, care & origin')`.
+    """
+
+    why = engine_only_selector_reason(
+        ".product-detail-actions__action-button:has-text('Composition, care & origin')"
+    )
+    assert why is not None
+    assert ":has-text" in why
+    assert "xpath" in why
+
+
+def test_the_other_engine_extensions_are_caught_too() -> None:
+    for selector in ('div:text("CARE")', ".a >> .b", ".panel:visible", ".x:nth-match(.y, 2)"):
+        assert engine_only_selector_reason(selector) is not None, selector
+
+
+def test_real_css_is_left_alone() -> None:
+    """`:has()` is CSS and widely supported -- refusing it would cost the one
+    structural relationship the prompt actively recommends."""
+
+    for selector in (".product-detail-care__list li", "li:has(> .care-icon)", ".a:not(.b)"):
+        assert engine_only_selector_reason(selector) is None, selector

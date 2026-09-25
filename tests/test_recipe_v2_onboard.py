@@ -17,6 +17,9 @@ from agentpilot.agent.state import AgentStepRecord
 from agentpilot.recipe.v2 import onboard as onboard_mod
 from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator
 from agentpilot.recipe.v2.onboard import (
+    _MAX_DIALOG_DEFERRALS,
+    _MAX_FIELD_ATTEMPTS,
+    _MAX_FIELD_ATTEMPTS_WITH_EVIDENCE,
     ExplorationState,
     OnboardOutcome,
     derive_target,
@@ -1150,3 +1153,126 @@ async def test_a_field_bound_twice_is_reported_as_a_repeat(monkeypatch) -> None:
     state._unfound.update(SCALARS)
     await state.on_step(_step([]))
     assert seen[-1]["steps"][-1].get("rebound"), "a re-bind was reported as fresh progress"
+
+
+async def test_a_dialog_that_yielded_nothing_is_kept_open(patched) -> None:
+    """The case the dismissal missed. "Closed once the fields inside it have
+    been read" is right; a dialog that bound NOTHING has not been read.
+
+    `_look` runs once per batch with `max_retries=1`, so a field inside the
+    dialog gets two proposals, ever. Spend the first on a correctable mistake --
+    an alternation, a caption -- and the second is the last before the content
+    leaves the DOM. Measured twice on the same Zara page: click, two attempts,
+    close, and every later attempt unwinnable because `care` was no longer
+    rendered anywhere.
+    """
+
+    reader = _Reader()
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    def answer(unfound):
+        reader.dialog = {"open": True, "locked": True, "close": "#close", "label": "Close"}
+        return {}  # the dialog is open and nothing bound out of it yet
+
+    patched.answer = answer
+    await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert dispatched == [], "the dialog must not be closed before it is read"
+    assert state._dialog_deferred == 1
+
+
+async def test_a_dialog_is_not_deferred_for_ever(patched) -> None:
+    """Bounded, so an overlay genuinely in the way costs a couple more
+    observations rather than the rest of the run."""
+
+    reader = _Reader()
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    def answer(unfound):
+        reader.dialog = {"open": True, "locked": True, "close": "#close", "label": "Close"}
+        return {}
+
+    patched.answer = answer
+    for _ in range(_MAX_DIALOG_DEFERRALS + 1):
+        await state.on_step(_step([{"type": "ClickAction", "ref": "e5"}]))
+
+    assert dispatched, "a dialog nothing ever reads must still be cleared"
+
+
+async def test_a_field_whose_words_are_on_the_page_is_not_called_absent(patched) -> None:
+    """`_MAX_FIELD_ATTEMPTS` exists to stop the build re-proposing a value the
+    page does not have, and it cannot tell that apart from a value the agent has
+    not reached yet. On a page whose sections open on click the two look
+    identical for the first several steps.
+
+    Measured on an Ulta product page. The agent's own goals at steps 5 and 6
+    were "Verify How To Use and Ingredients sections are present/expanded" and
+    "Scroll down to locate How To Use and Ingredients accordions". The counter
+    hit four at step 6 and wrote off `ingredients`, `how_to_use` and `origin`
+    one step before it got there -- all three behind click-to-expand sections
+    that were on the page the whole time, with their own words in the text.
+    """
+
+    state = ExplorationState(
+        fields={"details": FieldSpec(name="details", description="Product details section")},
+        reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {}
+
+    for _ in range(_MAX_FIELD_ATTEMPTS + 1):
+        await state.on_step(_step([{"type": "ScrollAction", "direction": "down"}]))
+
+    assert "details" not in state.presumed_absent
+    assert "details" in state.unfound_fields
+
+
+async def test_evidence_buys_more_rope_not_unlimited_rope(patched) -> None:
+    """A field whose words appear in the site chrome would otherwise be
+    proposed on every step for the life of the run."""
+
+    state = ExplorationState(
+        fields={"details": FieldSpec(name="details", description="Product details section")},
+        reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {}
+
+    for _ in range(_MAX_FIELD_ATTEMPTS_WITH_EVIDENCE + 1):
+        await state.on_step(_step([{"type": "ScrollAction", "direction": "down"}]))
+
+    assert "details" in state.presumed_absent
+
+
+async def test_a_field_the_page_says_nothing_about_still_gives_up_early(patched) -> None:
+    """The budget this counter was written for is unchanged: a value the page
+    genuinely lacks must stop costing model calls after four tries."""
+
+    state = ExplorationState(
+        fields={
+            "warranty_period": FieldSpec(
+                name="warranty_period", description="Warranty duration guarantee"
+            )
+        },
+        reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+    patched.answer = lambda unfound: {}
+
+    for _ in range(_MAX_FIELD_ATTEMPTS + 1):
+        await state.on_step(_step([{"type": "ScrollAction", "direction": "down"}]))
+
+    assert "warranty_period" in state.presumed_absent

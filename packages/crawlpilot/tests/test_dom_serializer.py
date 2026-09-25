@@ -748,3 +748,44 @@ def test_the_authoring_view_is_off_for_the_agent_loop() -> None:
 
     text = serialize(_care_panel(), view=SnapshotView(visible_text_only=True)).llm_text
     assert "class" not in text
+
+
+def test_the_nearest_addressable_ancestor_of_text_is_rendered() -> None:
+    """"Directly contains a text node" was too strict and excluded exactly the
+    handle a selector needs. From a real Ulta product page:
+
+        <div class="Markdown" data-test="markdown">   <- addressable, no text child
+          <h4>Benefits</h4>                           <- holds text, no class
+          <ul><li>POS-ACNE CARE ...</li></ul>         <- holds text, no class
+
+    The `.Markdown` div is the only nameable thing on that branch, and its
+    children are all elements, so it never rendered. The `<li>` that holds the
+    text carries no class, so it never rendered either. The model was shown the
+    words with no addressable ancestor anywhere.
+    """
+
+    body = _node("body", 1)
+    markdown = _child(body, _node("div", 2, attrs={"class": "Markdown", "data-test": "markdown"}))
+    ul = _child(markdown, _node("ul", 3))
+    li = _child(ul, _node("li", 4))
+    _child(li, _node("#text", 5, node_type=NodeType.TEXT_NODE, value="POS-ACNE CARE"))
+
+    text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
+    assert "class=Markdown" in text
+    assert "data-test=markdown" in text
+    assert "POS-ACNE CARE" in text
+
+
+def test_only_the_nearest_one_is_rendered_not_the_chain() -> None:
+    """It still refuses the wrappers above: one line per branch, at the depth a
+    selector should point."""
+
+    body = _node("body", 1)
+    outer = _child(body, _node("section", 2, attrs={"class": "pal-c-Accordion__body"}))
+    inner = _child(outer, _node("div", 3, attrs={"class": "pal-c-Accordion__body--inner"}))
+    markdown = _child(inner, _node("div", 4, attrs={"class": "Markdown"}))
+    _child(markdown, _node("#text", 5, node_type=NodeType.TEXT_NODE, value="Aqua (Water)"))
+
+    text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
+    assert "class=Markdown" in text
+    assert "Accordion__body" not in text

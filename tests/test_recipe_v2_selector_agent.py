@@ -21,6 +21,11 @@ from agentpilot.recipe.v2.selector_agent import (
     parse_proposals,
     propose_and_verify,
     rank_candidates,
+    _MAX_CORRECTABLE_RETRIES,
+    comma_group_reason,
+    engine_only_selector_reason,
+    is_correctable,
+    scope_problem,
     shared_locator_failures,
     tautological_read,
     verify_locators,
@@ -1307,16 +1312,14 @@ async def test_a_collision_that_does_not_converge_binds_neither(monkeypatch) -> 
     that casts cleanly, so binding either would put the section heading into the
     dataset and nothing downstream would ever question it."""
 
-    stub = StubLLM([
-        {"fields": [
-            {"field": "care", "candidates": [dict(_ACCORDION)]},
-            {"field": "origin", "candidates": [dict(_ACCORDION)]},
-        ]},
-        {"fields": [
-            {"field": "care", "candidates": [dict(_ACCORDION)]},
-            {"field": "origin", "candidates": [dict(_ACCORDION)]},
-        ]},
-    ])
+    # Enough replies to exhaust the correctable-retry allowance too: a guard
+    # rejection now buys another round, and the point of this test is what
+    # happens when the model never takes the hint.
+    same = {"fields": [
+        {"field": "care", "candidates": [dict(_ACCORDION)]},
+        {"field": "origin", "candidates": [dict(_ACCORDION)]},
+    ]}
+    stub = StubLLM([dict(same) for _ in range(2 + _MAX_CORRECTABLE_RETRIES)])
     monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
 
     got = await propose_and_verify(
@@ -1494,3 +1497,156 @@ def test_the_revealed_content_binds_normally() -> None:
 
     loc = Locator(kind="css", selector=".care-panel")
     assert tautological_read(loc, "Do not wash. Do not bleach.", "care") is None
+
+
+# --- a correctable answer is not a dead end ----------------------------------
+#
+# A guard rejection and "that resolved to nothing" used to cost the same single
+# retry. Measured on an Ulta product page with all three accordions already
+# open: attempt one went on "this is 3 selectors joined by a comma", attempt two
+# came back "model did not propose a locator for this field". It had been told
+# its FORM was wrong, had no budget left to try the right one, and declined.
+# Four fields failed that way in one batch, every one of them on the page.
+
+
+def test_every_guard_message_is_recognised_as_correctable() -> None:
+    """`is_correctable` matches on message text, so it has to be checked against
+    the messages themselves -- otherwise editing a guard's wording silently
+    turns its retry allowance off."""
+
+    spec = FieldSpec(name="care")
+    loc = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
+
+    messages = [
+        tautological_read(loc, "Composition, care & origin", "care"),
+        tautological_read(loc, "COMPOSITION, CARE & ORIGIN", "care"),
+        comma_group_reason(Locator(kind="css", selector=".a, .b"), spec),
+        engine_only_selector_reason(".x:has-text('y')"),
+        shared_locator_failures({
+            "care": [Candidate(locator=loc)],
+            "origin": [Candidate(locator=loc)],
+        })["care"],
+        scope_problem({"spans_document": True, "matched": 9, "tag": "body"}, expects_many=True),
+    ]
+    for message in messages:
+        assert message, "a guard produced no message"
+        assert is_correctable(message), message[:70]
+
+
+def test_a_dead_end_is_not_correctable() -> None:
+    """"It resolved to nothing" tells the model nothing to change, so it must
+    not buy another round."""
+
+    for reason in (
+        "read nothing",
+        "no proposed candidate resolved to a value",
+        "model did not propose a locator for this field",
+    ):
+        assert not is_correctable(reason), reason
+
+
+@pytest.mark.asyncio
+async def test_a_correctable_round_buys_another_attempt(monkeypatch) -> None:
+    """With `max_retries=1` the comma rejection was the model's last word. It
+    now gets to act on what it was told."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-a, .care-b"},
+        ]}]},
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-body"},
+        ]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"care": CARE_ORIGIN["care"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({("css", ".care-body"): "Do not wash"}),
+        max_retries=0,          # no ordinary retry at all
+        dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.selector == ".care-body"
+    assert "joined by a comma" in stub.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_a_dead_end_does_not_buy_one(monkeypatch) -> None:
+    """The allowance is for feedback the model can act on, not for retrying a
+    field the page will not yield."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "care", "candidates": [{"kind": "css", "selector": ".nope"}]}]},
+        {"fields": [{"field": "care", "candidates": [{"kind": "css", "selector": ".nope2"}]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"care": CARE_ORIGIN["care"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({}), max_retries=0, dom_fallbacks=False,
+    )
+
+    assert got == {}
+    assert len(stub.prompts) == 1, "a dead end must not cost a second model call"
+
+
+@pytest.mark.asyncio
+async def test_one_correctable_field_earns_the_round_for_the_batch(monkeypatch) -> None:
+    """A batch asks about several fields at once and they fail for different
+    reasons. Requiring every one to be correctable meant the allowance never
+    fired: measured on an Ulta page where four fields failed together, two with
+    "joined by a comma" and two with "did not propose a locator", and the round
+    was denied to both. The retry is one shared model call."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-a, .care-b"},   # correctable
+        ]}]},                                                   # origin: absent -> dead end
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-body"},
+        ]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        CARE_ORIGIN,
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({("css", ".care-body"): "Do not wash"}),
+        max_retries=0, dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.selector == ".care-body"
+
+
+@pytest.mark.asyncio
+async def test_the_allowance_fires_at_the_production_retry_setting(monkeypatch) -> None:
+    """`max_retries=1` is what `onboard` actually uses, and the first version of
+    this only granted the round when the budget was already spent -- by which
+    point the model answers "did not propose a locator", which is not
+    correctable. The allowance never fired once in production; the correctable
+    answer arrives on the FIRST round and that is the one that must buy the
+    next."""
+
+    stub = StubLLM([
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-a, .care-b"},
+        ]}]},
+        {"fields": []},                                    # gives up
+        {"fields": [{"field": "care", "candidates": [
+            {"kind": "css", "selector": ".care-body"},
+        ]}]},
+    ])
+    monkeypatch.setattr("agentpilot.recipe.v2.selector_agent.propose_locators", stub)
+
+    got = await propose_and_verify(
+        {"care": CARE_ORIGIN["care"]},
+        snapshot_text="", structured_data={}, llm_config=None,
+        verify=_ax_page({("css", ".care-body"): "Do not wash"}),
+        max_retries=1, dom_fallbacks=False,
+    )
+
+    assert got["care"][0].locator.selector == ".care-body"
+    assert len(stub.prompts) == 3, "the comma rejection must buy a further round"

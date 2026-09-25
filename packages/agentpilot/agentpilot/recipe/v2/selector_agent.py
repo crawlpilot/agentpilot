@@ -45,6 +45,7 @@ from agentpilot.recipe.v2.json_index import (
     outline,
 )
 from agentpilot.recipe.v2.locator_lint import (
+    engine_only_selector_reason,
     partial_case_fold_reason,
     relativize_xpath,
     xpath_escape_reason,
@@ -151,6 +152,21 @@ Set `all` to true when the field is a list and the selector matches every item. 
 A list field bound to a selector without `all` returns ONE value where an array \
 was asked for, so point the selector at the items themselves rather than at the \
 container that holds them.
+
+ONE selector per candidate. `.a, .b` is CSS for "whichever of these exists",
+and that is what the CANDIDATE LIST is for -- it is tried in order, each entry \
+is verified on its own, and the recipe records which one won. A comma group is \
+unordered, verified as a whole, and hides which branch matched; worse, a branch \
+that is present before a panel is opened masks that another needs a click. Put \
+your alternatives in the list, not in the selector. (A comma inside `:is(...)` \
+or an attribute value is fine, and a LIST field with `all` may legitimately \
+union two selectors.)
+
+CSS here is what `document.querySelector` understands and NOTHING else. \
+`:has-text()`, `:text()`, `:visible`, `:nth-match()` and `>>` are Playwright \
+extensions -- they look like CSS, most examples you have seen use them, and \
+every one of them throws here. `:has()`, `:not()` and attribute selectors are \
+real CSS and work. To match on TEXT, use an xpath, which is what it is for.
 
 Prefer a selector that names what the element IS over one that describes where \
 it sits. A long chain of class names, or a positional path like \
@@ -704,6 +720,45 @@ def _collapses_list(spec: FieldSpec) -> bool:
     return any(t.op in _COLLAPSING_OPS for t in spec.transform)
 
 
+# Phrases from the guards in this module. A rejection carrying one of these
+# told the model something it can act on -- "right idea, wrong form" -- as
+# opposed to "that resolved to nothing", which is a dead end.
+#
+# Coupled to the message text on purpose, and pinned by a test that feeds every
+# guard through `is_correctable`: the alternative is threading a flag out of
+# `verify_locators`, whose signature is shared with the assist path.
+_CORRECTABLE_MARKERS = (
+    "selectors joined by a comma",
+    "reads back exactly the",
+    "caption NAMING",
+    "Playwright selector syntax",
+    "very same locator as",
+    "but this field is one value",
+    "but this field is a list",
+    "spread across the whole page",
+)
+
+# How many extra rounds a correctable answer may buy. Bounded: a model that
+# keeps making the same fixable mistake has to stop somewhere, and each round
+# is a model call plus a verification pass.
+_MAX_CORRECTABLE_RETRIES = 2
+
+
+def is_correctable(reason: str) -> bool:
+    """Whether this rejection handed the model something to act on.
+
+    A guard rejection and a dead end used to cost the same single retry, and
+    they are not the same thing. Measured on an Ulta product page: attempt one
+    went on "this is 3 selectors joined by a comma", attempt two came back
+    "model did not propose a locator for this field" -- it had been told its
+    form was wrong, had no budget left to try the right one, and declined. Four
+    fields failed that way in one batch, every one of them present on the page
+    with its panel already open.
+    """
+
+    return any(marker in reason for marker in _CORRECTABLE_MARKERS)
+
+
 def comma_group_reason(loc: Locator, spec: FieldSpec | None) -> str | None:
     """Why a single-value CSS selector must not be an alternation, or None.
 
@@ -1100,6 +1155,16 @@ async def verify_locators(
         # Refused before it is even run. An expression on one of these axes
         # cannot be contained by any scope, so there is no version of it worth
         # verifying -- see `locator_lint`.
+        if loc.kind == "css":
+            # Refused before it is run, like the xpath axis check below: the
+            # DOM's own error for this says the string was malformed, not that
+            # the dialect was wrong, and the model answers it with another
+            # variant of the same thing.
+            dialect = engine_only_selector_reason(loc.selector or "")
+            if dialect is not None:
+                last_error = rejected(loc, dialect)
+                continue
+
         if loc.kind == "xpath":
             escape = xpath_escape_reason(
                 loc.selector or "", scoped=loc.within is not None
@@ -1598,8 +1663,12 @@ async def propose_and_verify(
     # back for a retry is retried as itself.
     bound_under: dict[str, FieldSpec] = {}
 
-    for _attempt in range(max_retries + 1):
-        if not remaining:
+    _attempt = -1
+    budget = max_retries
+    corrections = 0
+    while True:
+        _attempt += 1
+        if _attempt > budget or not remaining:
             break
         proposals = await propose_locators(
             remaining,
@@ -1687,6 +1756,34 @@ async def propose_and_verify(
         failures = next_failures
         if not failures:
             break
+
+        # A round that only produced correctable answers buys another one. The
+        # model was told what was wrong with its form; refusing it the chance to
+        # apply that is how a field that IS on the page ends up unresolved --
+        # see `is_correctable`.
+        # Evaluated on EVERY round, not only the last. Gating it on
+        # `_attempt >= budget` meant the grant was considered only after the
+        # model had run out of rope -- and by then its answers are "did not
+        # propose a locator", which is not correctable, so the allowance never
+        # fired once in production. The correctable answer arrives on the FIRST
+        # round; that is the one that has to buy the next.
+        if (
+            corrections < _MAX_CORRECTABLE_RETRIES
+            # ANY, not all. A batch asks about several fields at once and they
+            # fail for different reasons, so requiring every one to be
+            # correctable meant the allowance never fired at all -- measured on
+            # an Ulta page where four fields failed together, two with "joined
+            # by a comma" and two with "did not propose a locator", and the
+            # round was denied to both. The retry is one shared model call: if
+            # a single field can act on what it was told, it is worth making.
+            and any(is_correctable(reason) for reason in failures.values())
+        ):
+            corrections += 1
+            budget += 1
+            log.info(
+                "propose.retry_granted",
+                fields=sorted(failures), correction=corrections,
+            )
 
     # Once more, because the loop above can exit without ever reaching the
     # check: a batch whose every field was bound from the page's own JSON
