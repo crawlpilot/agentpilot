@@ -92,35 +92,74 @@ def _is_addressable(node: SimplifiedNode) -> bool:
     )
 
 
+# How many addressable ancestors to render above the element that holds the
+# text. Enough to make a duplicate handle nameable; not so many that the page
+# becomes scaffolding. Affordable because `content_only` removed the chrome
+# first -- on an Ulta page that was 50 000 characters of the 50 300.
+_MAX_AUTHORING_ANCESTORS = 3
+
+
 def _authoring_line(node: SimplifiedNode, include_attributes: tuple[str, ...]) -> str | None:
-    """A structural line for the nearest addressable ancestor of some text.
+    """A structural line for an addressable element that contains text.
 
-    "Directly contains a text node" was too strict, and it excluded exactly the
-    handle a selector needs. Measured on an Ulta product page:
+    Renders the CHAIN, not just the innermost handle, and the reason is
+    uniqueness. Ulta's three accordion bodies are byte-identical --
+    `<div class="Markdown" data-test="markdown">` each time, with `id=""` and
+    `aria-controls=""` empty -- so the innermost handle alone gives the model
+    three indistinguishable options and no way to name one. What separates them
+    is an ancestor: the `pal-c-Accordion` that also contains
+    `button[aria-label="How To Use"]`.
 
-        <div class="Markdown" data-test="markdown">   <- addressable, no text child
-          <h4>Benefits</h4>                           <- holds text, no class
-          <ul><li>POS-ACNE CARE ...</li></ul>         <- holds text, no class
+    Indentation carries that containment, which is what makes
+    `.pal-c-Accordion:has(button[aria-label="..."]) .Markdown` writable. A
+    handle with no context is a selector that matches three things.
 
-    The `.Markdown` div is the only thing on that branch a selector can name,
-    and its children are all elements, so it never rendered. The `<li>` and
-    `<p>` that do hold the text carry no class, so they never rendered either.
-    The model was shown the words with no addressable ancestor anywhere -- the
-    very situation the authoring view exists to prevent.
-
-    So: render an addressable element that has text somewhere beneath it, unless
-    a nearer addressable element also has that text. That is one line per
-    branch, at the depth a selector should actually point, and it still refuses
-    to emit the chain of wrappers above it.
+    Bounded above by `_MAX_AUTHORING_ANCESTORS` so a deeply nested page does not
+    turn into its own outline.
     """
 
     if not _is_addressable(node) or not _subtree_has_text(node):
         return None
-    if any(
-        _is_addressable(d) and _subtree_has_text(d) for d in _descendants(node)
-    ):
+    # A join -- a node where two content branches meet -- is always rendered,
+    # however deep. It is the smallest scope containing both, which is exactly
+    # what `:has()` needs and exactly what the depth cap would otherwise cut.
+    # On Ulta that node is `pal-c-Accordion`: the only thing tying
+    # `button[aria-label="How To Use"]` to the body it opens.
+    if _content_branches(node) < 2 and _addressable_depth_below(node) > _MAX_AUTHORING_ANCESTORS:
         return None
     return f"<{node.original.tag_name}{_attribute_string(node, include_attributes)}>"
+
+
+def _content_branches(node: SimplifiedNode) -> int:
+    """How many of this node's child subtrees carry text of their own.
+
+    Two or more makes it a join point: the nearest common ancestor of content
+    that would otherwise look unrelated, and the handle a selector needs when
+    the inner ones are indistinguishable from each other.
+    """
+
+    return sum(1 for child in node.children if _subtree_has_text(child))
+
+
+def _addressable_depth_below(node: SimplifiedNode) -> int:
+    """How many addressable-with-text generations sit beneath this node.
+
+    Zero for the element that directly holds the text; one for its nearest
+    addressable ancestor, and so on. The cap is applied to this rather than to
+    absolute depth so the budget is spent near the content, wherever the page
+    happens to put it.
+    """
+
+    best = -1
+    for child in node.children:
+        if _is_addressable(child) and _subtree_has_text(child):
+            best = max(best, _addressable_depth_below(child))
+        else:
+            for deeper in _descendants(child):
+                if _is_addressable(deeper) and _subtree_has_text(deeper):
+                    best = max(best, _addressable_depth_below(deeper))
+                    break
+    return best + 1
 
 
 def _descendants(node: SimplifiedNode):

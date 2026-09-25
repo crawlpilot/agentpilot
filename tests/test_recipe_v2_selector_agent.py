@@ -22,6 +22,8 @@ from agentpilot.recipe.v2.selector_agent import (
     propose_and_verify,
     rank_candidates,
     _MAX_CORRECTABLE_RETRIES,
+    _MAX_SNAPSHOT_CHARS,
+    focus_snapshot,
     comma_group_reason,
     engine_only_selector_reason,
     is_correctable,
@@ -1650,3 +1652,75 @@ async def test_the_allowance_fires_at_the_production_retry_setting(monkeypatch) 
 
     assert got["care"][0].locator.selector == ".care-body"
     assert len(stub.prompts) == 3, "the comma rejection must buy a further round"
+
+
+# --- the snapshot budget follows the fields, not document order --------------
+
+
+def _long_page(tail_lines: list[str]) -> str:
+    head = "\n".join(f"\t<div class=nav>\n\t\tNav promo {i}" for i in range(2600))
+    return head + "\n" + "\n".join(tail_lines)
+
+
+def test_the_budget_reaches_content_a_head_prefix_never_would() -> None:
+    """A head-first prefix spends the budget in document order, and on a
+    commerce page document order is the header.
+
+    Measured on an Ulta product page: the render is 72 000 characters, the cap
+    is 24 000, so the model saw the first third -- "SKIP TO MAIN", "Join / Sign
+    in", "Track an Order" -- and none of the accordion content it was asked to
+    locate. It declined every field, correctly, because from where it stood the
+    page did not have them.
+    """
+
+    page = _long_page([
+        '[e13]<button "Ingredients" aria-label=Ingredients />',
+        "<div class=Markdown data-test=markdown>",
+        "\tAqua (Water), Melaleuca Alternifolia Leaf Water, Propanediol.",
+    ])
+    fields = {
+        "ingredients": FieldSpec(
+            name="ingredients", description="Complete ingredient list as displayed"
+        )
+    }
+    _ = fields
+
+    assert "Ingredients" not in page[:_MAX_SNAPSHOT_CHARS]
+    focused = focus_snapshot(page, fields)
+    assert "Ingredients" in focused
+    assert len(focused) <= _MAX_SNAPSHOT_CHARS
+
+
+def test_the_head_is_kept_for_the_pages_identity() -> None:
+    """The title, the price and the breadcrumb live there."""
+
+    page = _long_page(["\tIngredients listed here"])
+    focused = focus_snapshot(page, {"ingredients": FieldSpec(name="ingredients", description="ingredient list")})
+    assert "Nav promo 0" in focused
+
+
+def test_elisions_are_marked() -> None:
+    """So the model knows it is reading an excerpt rather than the end of the
+    page -- the mistake the agent-loop truncation used to invite."""
+
+    page = _long_page(["\tIngredients listed here"])
+    focused = focus_snapshot(page, {"ingredients": FieldSpec(name="ingredients", description="ingredient list")})
+    assert "lines not shown" in focused
+
+
+def test_a_snapshot_inside_the_budget_is_untouched() -> None:
+    page = "<div class=a>\n\tsmall page"
+    assert focus_snapshot(page, {"x": FieldSpec(name="x", description="thing")}) == page
+
+
+def test_nothing_matching_falls_back_to_the_plain_prefix() -> None:
+    """A field's vocabulary and its content's need not overlap at all -- "Apply
+    an adequate amount" shares no word with "Directions or instructions for
+    using". When the windows find nothing this must be no worse than not
+    having it."""
+
+    page = _long_page(["\tApply an adequate amount evenly."])
+    fields = {"how_to_use": FieldSpec(name="how_to_use", description="Directions for using")}
+    assert focus_snapshot(page, fields) == page[:_MAX_SNAPSHOT_CHARS]
+
+    assert focus_snapshot(page, {"a": FieldSpec(name="a", description="the of and")}) == page[:_MAX_SNAPSHOT_CHARS]

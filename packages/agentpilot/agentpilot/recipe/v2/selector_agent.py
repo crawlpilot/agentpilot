@@ -249,6 +249,101 @@ def _value_array_hints(
     return "\n".join(lines)
 
 
+# Words too common to point at anything. A field described with only these has
+# no usable signal and falls back to the head of the page.
+_SNAPSHOT_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "for", "and", "or", "to", "in", "on", "all", "any",
+    "this", "that", "its", "it", "page", "product", "value", "text", "from",
+    "when", "available", "displayed", "current", "full", "complete", "list",
+    "url", "name", "information", "details", "item",
+})
+
+# How much of the head to keep regardless. The title, the price and the
+# breadcrumb live there, and so does the page's identity.
+_SNAPSHOT_HEAD_CHARS = 6_000
+# Lines of context kept either side of a line that mentions a wanted field.
+_FOCUS_CONTEXT_LINES = 12
+
+
+def _field_words(fields: dict[str, FieldSpec]) -> set[str]:
+    words: set[str] = set()
+    for name, spec in fields.items():
+        for w in re.split(r"[^a-z0-9]+", f"{name} {spec.description}".lower()):
+            if len(w) > 3 and w not in _SNAPSHOT_STOPWORDS:
+                words.add(w)
+    return words
+
+
+def focus_snapshot(snapshot_text: str, fields: dict[str, FieldSpec]) -> str:
+    """The snapshot, trimmed to the budget around what is being looked for.
+
+    A head-first prefix spends the budget in document order, and on a commerce
+    page document order is the header. Measured on an Ulta product page: the
+    render is 72 000 characters, the cap is 24 000, so the model was shown the
+    first third -- "SKIP TO MAIN", "Join / Sign in", "Track an Order" -- and
+    none of the accordion content it was being asked to locate. It declined
+    every field, correctly, because from where it stood the page did not have
+    them.
+
+    So the budget follows the FIELDS instead: the head is kept for the page's
+    identity, and the rest is spent on windows around lines that mention what
+    was asked for. Elisions are marked so the model knows it is seeing an
+    excerpt rather than the end of the page.
+    """
+
+    if len(snapshot_text) <= _MAX_SNAPSHOT_CHARS:
+        return snapshot_text
+
+    words = _field_words(fields)
+    lines = snapshot_text.splitlines()
+    if not words:
+        return snapshot_text[:_MAX_SNAPSHOT_CHARS]
+
+    keep: set[int] = set()
+    spent = 0
+    head_lines = 0
+    for i, line in enumerate(lines):
+        spent += len(line) + 1
+        if spent > _SNAPSHOT_HEAD_CHARS:
+            break
+        keep.add(i)
+        head_lines = i
+
+    budget = _MAX_SNAPSHOT_CHARS - spent
+    for i, line in enumerate(lines):
+        if i <= head_lines or budget <= 0:
+            continue
+        low = line.lower()
+        if not any(w in low for w in words):
+            continue
+        for j in range(max(0, i - _FOCUS_CONTEXT_LINES), min(len(lines), i + _FOCUS_CONTEXT_LINES + 1)):
+            if j not in keep:
+                cost = len(lines[j]) + 1
+                if budget - cost < 0:
+                    break
+                keep.add(j)
+                budget -= cost
+
+    # Nothing matched: the field's vocabulary and the content's need not
+    # overlap at all -- "Apply an adequate amount" shares no word with
+    # "Directions or instructions for using". Falling back to the plain prefix
+    # keeps this strictly no worse than not having it, which is the only honest
+    # thing for a heuristic that can miss.
+    if not any(i > head_lines for i in keep):
+        return snapshot_text[:_MAX_SNAPSHOT_CHARS]
+
+    out: list[str] = []
+    previous = -1
+    for i in sorted(keep):
+        if previous >= 0 and i > previous + 1:
+            out.append(f"… [{i - previous - 1} lines not shown] …")
+        out.append(lines[i])
+        previous = i
+    if previous < len(lines) - 1:
+        out.append(f"… [{len(lines) - 1 - previous} lines not shown] …")
+    return "\n".join(out)
+
+
 def build_user_message(
     fields: dict[str, FieldSpec],
     *,
@@ -258,7 +353,7 @@ def build_user_message(
 ) -> str:
     parts = [
         f"Fields to locate:\n{render_fields_for_prompt(fields)}",
-        f"\nPage snapshot:\n{snapshot_text[:_MAX_SNAPSHOT_CHARS]}",
+        f"\nPage snapshot:\n{focus_snapshot(snapshot_text, fields)}",
         "\nPaths available in this page's structured data (json_ld / hydration / "
         "metadata). Each path is written the way a locator takes it, and is "
         "anchored -- use one of these rather than composing your own:\n"

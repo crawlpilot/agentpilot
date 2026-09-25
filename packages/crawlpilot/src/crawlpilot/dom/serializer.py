@@ -49,6 +49,41 @@ _SVG_TAG = "svg"
 _CONTAINMENT_THRESHOLD = 0.99
 _FORM_CONTROL_TAGS = frozenset({"input", "select", "textarea", "option"})
 
+# Site chrome, by landmark. Semantic and site-agnostic: a `<nav>` is chrome
+# wherever it appears, where a class name would only be a guess.
+_CHROME_TAGS = frozenset({"nav", "header", "footer", "aside"})
+_CHROME_ROLES = frozenset(
+    {"navigation", "banner", "contentinfo", "complementary", "search"}
+)
+
+
+def _is_chrome(node: SimplifiedNode) -> bool:
+    original = node.original
+    if original.node_type != NodeType.ELEMENT_NODE:
+        return False
+    if original.tag_name in _CHROME_TAGS:
+        return True
+    role = (original.ax_role or "").lower()
+    if role in _CHROME_ROLES:
+        return True
+    return (original.attributes.get("role") or "").lower() in _CHROME_ROLES
+
+
+def _prune_chrome(node: SimplifiedNode) -> SimplifiedNode | None:
+    """The tree with navigation, header, footer and complementary panels gone.
+
+    Subtractive rather than "keep `<main>`": plenty of pages mark neither, and
+    a rule that keeps nothing when `main` is absent would be worse than no rule
+    at all. See `SnapshotView.content_only`.
+    """
+
+    if _is_chrome(node):
+        return None
+    node.children = [
+        kept for kept in (_prune_chrome(child) for child in node.children) if kept
+    ]
+    return node
+
 
 @dataclass(frozen=True)
 class PromotedControl:
@@ -563,6 +598,14 @@ def serialize(
         return SerializedDOM(selector_map={}, llm_text="(empty page)")
 
     view = view or SnapshotView()
+    if view.content_only:
+        # Before every other pass: occlusion and containment are cheaper over a
+        # smaller tree, and nothing downstream wants to reason about chrome.
+        pruned = _prune_chrome(simplified)
+        # A page that is *all* chrome is a page this rule cannot help with --
+        # keep what there is rather than hand back nothing.
+        if pruned is not None and _iter_document_order(pruned):
+            simplified = pruned
     _apply_paint_order(simplified, root, test_text=view.visible_text_only)
     _apply_containment(simplified)
     # After both, deliberately: occlusion and containment reason about the whole

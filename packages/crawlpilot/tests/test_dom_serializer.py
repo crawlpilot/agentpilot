@@ -728,18 +728,23 @@ def test_an_unaddressable_wrapper_earns_no_line() -> None:
     assert "Do not wash" in text
 
 
-def test_only_elements_that_directly_hold_text_are_rendered() -> None:
-    """A wrapper whose text all lives three levels down is not where a selector
-    should point, and rendering every ancestor buries the page in scaffolding."""
+def test_the_ancestor_chain_is_rendered_but_bounded() -> None:
+    """The chain is what makes a duplicate handle nameable -- see
+    `test_the_joining_ancestor_is_rendered_so_a_handle_can_be_made_unique`. It
+    is still bounded: an ancestor further above the content than
+    `_MAX_AUTHORING_ANCESTORS` is scaffolding, not context."""
 
     body = _node("body", 1)
-    outer = _child(body, _node("section", 2, attrs={"class": "outer"}))
-    inner = _child(outer, _node("p", 3, attrs={"class": "inner"}))
-    _child(inner, _node("#text", 4, node_type=NodeType.TEXT_NODE, value="Made in China"))
+    n = 2
+    node = body
+    for depth in range(8):
+        node = _child(node, _node("div", n, attrs={"class": f"level{depth}"}))
+        n += 1
+    _child(node, _node("#text", n, node_type=NodeType.TEXT_NODE, value="Made in China"))
 
     text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
-    assert "class=inner" in text
-    assert "class=outer" not in text
+    assert "class=level7" in text, "the handle holding the text"
+    assert "class=level0" not in text, "eight levels up is scaffolding"
 
 
 def test_the_authoring_view_is_off_for_the_agent_loop() -> None:
@@ -776,9 +781,9 @@ def test_the_nearest_addressable_ancestor_of_text_is_rendered() -> None:
     assert "POS-ACNE CARE" in text
 
 
-def test_only_the_nearest_one_is_rendered_not_the_chain() -> None:
-    """It still refuses the wrappers above: one line per branch, at the depth a
-    selector should point."""
+def test_a_short_chain_is_kept_whole() -> None:
+    """Three wrappers over the content is context, not scaffolding: the outer
+    one is what a selector scopes to when the inner is not unique."""
 
     body = _node("body", 1)
     outer = _child(body, _node("section", 2, attrs={"class": "pal-c-Accordion__body"}))
@@ -788,4 +793,141 @@ def test_only_the_nearest_one_is_rendered_not_the_chain() -> None:
 
     text = serialize(body, view=SnapshotView(for_authoring=True)).llm_text
     assert "class=Markdown" in text
-    assert "Accordion__body" not in text
+    assert "Accordion__body" in text
+    assert "Aqua (Water)" in text
+
+
+# ------------------------------------------------------- content_only
+#
+# Nothing narrowed the page before this. On an Ulta product page the render was
+# 72 000 characters and the selector agent's budget is 24 000, so it was shown
+# the first third -- "SKIP TO MAIN", "Join / Sign in" and two thousand nav
+# entries -- and none of the content it was asked to locate. It declined every
+# field, correctly, because from where it stood the page did not have them.
+
+
+def _page_with_chrome() -> EnhancedDOMTreeNode:
+    body = _node("body", 1)
+    nav = _child(body, _node("nav", 2))
+    _child(nav, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="Nav category one"))
+    header = _child(body, _node("header", 4))
+    _child(header, _node("#text", 5, node_type=NodeType.TEXT_NODE, value="SKIP TO MAIN"))
+    content = _child(body, _node("div", 6, attrs={"class": "Markdown"}))
+    _child(content, _node("#text", 7, node_type=NodeType.TEXT_NODE, value="Aqua (Water), Glycerin"))
+    footer = _child(body, _node("footer", 8))
+    _child(footer, _node("#text", 9, node_type=NodeType.TEXT_NODE, value="Footer link"))
+    return body
+
+
+def test_chrome_is_dropped_and_content_kept() -> None:
+    text = serialize(
+        _page_with_chrome(), view=SnapshotView(for_authoring=True, content_only=True)
+    ).llm_text
+    assert "Aqua (Water)" in text
+    for chrome in ("Nav category one", "SKIP TO MAIN", "Footer link"):
+        assert chrome not in text
+
+
+def test_chrome_is_kept_by_default() -> None:
+    """The agent loop needs it: an agent that cannot see the navigation cannot
+    navigate."""
+
+    text = serialize(_page_with_chrome()).llm_text
+    assert "Nav category one" in text
+    assert "SKIP TO MAIN" in text
+
+
+def test_landmark_roles_count_as_chrome_too() -> None:
+    """A `<div role="navigation">` is a `<nav>` that chose a different tag."""
+
+    body = _node("body", 1)
+    nav = _child(body, _node("div", 2, ax_role="navigation", attrs={"role": "navigation"}))
+    _child(nav, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="Shop all"))
+    keep = _child(body, _node("div", 4, attrs={"class": "Markdown"}))
+    _child(keep, _node("#text", 5, node_type=NodeType.TEXT_NODE, value="Ingredients here"))
+
+    text = serialize(body, view=SnapshotView(content_only=True, for_authoring=True)).llm_text
+    assert "Ingredients here" in text
+    assert "Shop all" not in text
+
+
+def test_a_page_that_is_all_chrome_keeps_what_there_is() -> None:
+    """A rule that hands back nothing is worse than no rule."""
+
+    body = _node("body", 1)
+    nav = _child(body, _node("nav", 2))
+    _child(nav, _node("#text", 3, node_type=NodeType.TEXT_NODE, value="only navigation"))
+
+    text = serialize(body, view=SnapshotView(content_only=True)).llm_text
+    assert text
+
+
+# ------------------------------------------------- authoring context & uniqueness
+
+
+def _three_identical_panels() -> EnhancedDOMTreeNode:
+    """Ulta's accordions: three byte-identical bodies, told apart only by a
+    button that is their sibling, not their ancestor."""
+
+    body = _node("body", 1)
+    ident = 10
+    for label, content in (
+        ("Details", "Benefits and key ingredients"),
+        ("How To Use", "Apply an adequate amount"),
+        ("Ingredients", "Aqua (Water), Glycerin"),
+    ):
+        acc = _child(body, _node("div", ident, attrs={"class": "pal-c-Accordion"}))
+        head = _child(acc, _node("div", ident + 1, attrs={"class": "pal-c-Accordion__header"}))
+        _child(head, _node("button", ident + 2, ax_role="button", ax_name=label,
+                           attrs={"aria-label": label, "class": "pal-c-Accordion__button"},
+                           bounds=BoundingBox(0, 0, 40, 20)))
+        sect = _child(acc, _node("section", ident + 3, attrs={"class": "pal-c-Accordion__body"}))
+        md = _child(sect, _node("div", ident + 4, attrs={"class": "Markdown", "data-test": "markdown"}))
+        _child(md, _node("#text", ident + 5, node_type=NodeType.TEXT_NODE, value=content))
+        ident += 10
+    return body
+
+
+def test_the_joining_ancestor_is_rendered_so_a_handle_can_be_made_unique() -> None:
+    """The innermost handle alone is not a selector.
+
+    Ulta's three accordion bodies are byte-identical -- `<div class="Markdown"
+    data-test="markdown">` each time, `id=""` and `aria-controls=""` empty -- so
+    naming one requires the ancestor that also contains its button. Without the
+    chain the model has three indistinguishable options and picks wrongly or
+    declines; with it, `.pal-c-Accordion:has(button[aria-label=...]) .Markdown`
+    is writable.
+    """
+
+    text = serialize(
+        _three_identical_panels(),
+        view=SnapshotView(for_authoring=True, content_only=True),
+    ).llm_text
+
+    assert text.count("class=Markdown") == 3, "all three bodies are shown"
+    # and each is inside a rendered accordion that also holds its button
+    assert text.count("class=pal-c-Accordion") >= 3
+    for label in ("Details", "How To Use", "Ingredients"):
+        assert label in text
+
+
+def test_the_chain_is_indented_so_containment_is_readable() -> None:
+    """Indentation is what carries containment -- a flat list of handles says
+    nothing about which body belongs to which button."""
+
+    text = serialize(
+        _three_identical_panels(),
+        view=SnapshotView(for_authoring=True, content_only=True),
+    ).llm_text
+    lines = [ln for ln in text.splitlines() if "class=Markdown" in ln]
+    assert lines and all(ln.startswith("\t") for ln in lines), lines
+
+
+def test_context_does_not_cost_the_whole_page() -> None:
+    """Chrome removal bought the budget this spends; it must stay modest."""
+
+    text = serialize(
+        _three_identical_panels(),
+        view=SnapshotView(for_authoring=True, content_only=True),
+    ).llm_text
+    assert len(text) < 1500, len(text)

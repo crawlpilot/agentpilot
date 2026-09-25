@@ -905,7 +905,7 @@ class ExplorationState:
         structured = await self._reader.structured_data()
         # The structure a SELECTOR is written against, not the click-target
         # list. See `SnapshotView.for_authoring`.
-        snapshot_text = serialize(snapshot, view=SnapshotView(for_authoring=True)).llm_text
+        snapshot_text = serialize(snapshot, view=SnapshotView(for_authoring=True, content_only=True)).llm_text
 
         # Exactly what the selector prompts were shown of the page's JSON, kept
         # once. When a build writes a path that resolves to nothing -- or writes

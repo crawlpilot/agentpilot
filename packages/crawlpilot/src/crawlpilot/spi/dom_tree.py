@@ -83,6 +83,29 @@ class SnapshotView:
     resolved by the driver from the live viewport size."""
     max_nodes: int | None = None
     """Cap on how many interactive elements are offered, in document order."""
+    content_only: bool = False
+    """Drop the site's chrome -- navigation, header, footer, complementary
+    panels -- and keep the page's own content.
+
+    Nothing narrowed the page before this. The serializer prunes `script` and
+    `style`, resolves occlusion and dedupes containment, but had no notion of
+    which *region* mattered, so a product page serialized entire: 72 000
+    characters on Ulta, of which the first 24 000 -- the whole of the selector
+    agent's budget -- was "SKIP TO MAIN", "Join / Sign in", "Track an Order"
+    and two thousand navigation entries. The content it was being asked to
+    locate never appeared, and it declined every field, correctly, because from
+    where it stood the page did not have them.
+
+    Landmarks are the right instrument because they are semantic and
+    site-agnostic: a `<nav>` is chrome on every site that has one, whereas a
+    class name is a guess. Deliberately subtractive -- drop the chrome rather
+    than require a `<main>` -- because plenty of pages mark neither, and a rule
+    that keeps nothing when `main` is absent would be worse than no rule.
+
+    For the selector agent and the judge, never the agent loop: an agent that
+    cannot see the navigation cannot navigate.
+    """
+
     for_authoring: bool = False
     """Render the structure a SELECTOR has to be written against.
 

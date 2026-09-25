@@ -659,7 +659,7 @@ async def _apply_steps(
 
         binding = await propose_rows(
             spec,
-            snapshot_text=serialize(snapshot, view=SnapshotView(for_authoring=True)).llm_text,
+            snapshot_text=serialize(snapshot, view=SnapshotView(for_authoring=True, content_only=True)).llm_text,
             structured_data=await reader.structured_data(),
             reader=reader,
             llm_config=llm_config,
@@ -675,7 +675,7 @@ async def _apply_steps(
 
     verified = await propose_and_verify(
         {resolution.field: spec},
-        snapshot_text=serialize(snapshot, view=SnapshotView(for_authoring=True)).llm_text,
+        snapshot_text=serialize(snapshot, view=SnapshotView(for_authoring=True, content_only=True)).llm_text,
         structured_data=await reader.structured_data(),
         llm_config=llm_config,
         verify=reader.read,
