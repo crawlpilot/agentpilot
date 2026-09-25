@@ -680,6 +680,30 @@ def _names_the_field(field_name: str, value: str) -> bool:
     return bool(words & present)
 
 
+# Ops that take a list and hand back one thing. A pipeline containing one of
+# these is a field that MEANS to read several elements and combine them.
+_COLLAPSING_OPS = frozenset({"join", "index", "to_object", "to_pairs"})
+
+
+def _collapses_list(spec: FieldSpec) -> bool:
+    """Whether this field's cleanup turns a list into a single value.
+
+    The arity guard runs before the pipeline does, so without this it rejects
+    the very reads the pipeline exists to handle. `_repair_transform` had
+    already answered correctly -- `filter_empty -> join -> collapse_ws -> trim
+    -> cast` for a care panel whose lines live in separate elements -- and the
+    guard threw it away three seconds later with "reads 11 values but this
+    field is one value", which is exactly the arrangement `join` was proposed
+    for.
+
+    `filter_empty` and `unique` are deliberately NOT here: both take a list and
+    return a list, so a field carrying only those is still handing back several
+    values and the guard should still fire.
+    """
+
+    return any(t.op in _COLLAPSING_OPS for t in spec.transform)
+
+
 def comma_group_reason(loc: Locator, spec: FieldSpec | None) -> str | None:
     """Why a single-value CSS selector must not be an alternation, or None.
 
@@ -1136,7 +1160,7 @@ async def verify_locators(
             resolving.append(VerifiedLocator(locator=loc, raw=raw, value=raw))
             continue
 
-        if spec.type.kind == "scalar" and isinstance(raw, list):
+        if spec.type.kind == "scalar" and isinstance(raw, list) and not _collapses_list(spec):
             # One value was asked for and many came back, which is what an
             # `all: true` locator on a scalar field means. It used to be
             # accepted: the read is non-empty, and the scalar cleanup maps over
@@ -1149,7 +1173,12 @@ async def verify_locators(
             last_error = rejected(
                 loc,
                 f"reads {len(raw)} values but this field is one value -- the "
-                "selector is matching a whole set rather than a single element",
+                "selector is matching a whole set rather than a single element. "
+                "If these are genuinely the parts of ONE value (the lines of a "
+                "care panel, a multi-line address), point at the element that "
+                "contains them all, or keep this selector and add a `join` "
+                "cleanup; if they are separate values, the field was declared "
+                "wrong",
                 raw=raw,
             )
             continue
@@ -1318,6 +1347,12 @@ Available ops, applied in order:
 - regex_replace {pattern, repl} -- strip separators, symbols, units.
 - trim, collapse_ws, strip_html, strip_accents
 - split {sep} then index {i} -- take one side of a range or a list.
+- filter_empty then join {sep} -- when the read is a LIST and the caller asked \
+for one string, because the value arrives in parts: the lines of a care panel, \
+an address over several elements. Only when the parts are one value between \
+them. Several separate values joined into a string is a field that was \
+declared wrong, and a pipeline cannot fix that -- return an empty list and say \
+so by returning nothing.
 - cast {to} -- the last step, into the wanted type.
 - default {value} -- only when a missing value has a sensible stand-in.
 

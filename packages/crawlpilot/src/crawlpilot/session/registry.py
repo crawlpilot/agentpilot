@@ -84,7 +84,28 @@ class Registry:
         lock = await self._lock_for(identity)
         async with lock:
             entry = self._entries.get(identity)
-            if entry is not None and entry.context_ref.state is ContextState.ACTIVE:
+            # Owned is owned, whichever way the entry says so.
+            #
+            # This used to test the state flag alone, and the flag and the lease
+            # are two records of the same fact -- so when they disagreed, an
+            # identity someone was still using looked free. The next `acquire`
+            # then reused the entry, overwrote `entry.lease`, and left the
+            # previous holder's id dangling in `_lease_owner`: their next
+            # `renew` found a different lease on the entry and raised "lease
+            # was reclaimed".
+            #
+            # That message is what a reaper eviction looks like, so the failure
+            # read as a timeout and could not be told apart from one -- no
+            # reaper line in the log, because no reaper was involved. Measured
+            # on two concurrent recipe builds against the same domain: the
+            # second stole the first's warm slot mid-run, and the first died
+            # five steps later with every observation failing at once.
+            #
+            # `release` clears the lease, so a genuinely free entry is still
+            # reusable and the warm pool keeps working.
+            if entry is not None and (
+                entry.context_ref.state is ContextState.ACTIVE or entry.lease is not None
+            ):
                 raise LeaseConflict(f"identity {identity.slug()!r} already has an active session")
 
             if entry is None:

@@ -117,3 +117,57 @@ async def test_lease_conflict_propagates(tmp_path: Path) -> None:
             ttl_seconds=300.0,
             opener=opener,
         )
+
+
+# --- a lease is ownership, whichever field records it ------------------------
+
+
+async def test_an_entry_that_still_holds_a_lease_is_not_reusable(tmp_path) -> None:
+    """The state flag and the lease are two records of one fact, and when they
+    disagreed an identity someone was still using looked free.
+
+    The next `acquire` reused the entry, overwrote `entry.lease`, and left the
+    previous holder's id dangling in `_lease_owner` -- so their next `renew`
+    raised "lease was reclaimed". That is what a reaper eviction looks like, so
+    the failure was indistinguishable from a timeout, with no reaper line in
+    the log because no reaper was involved.
+
+    Measured on two concurrent recipe builds against the same domain: the
+    second stole the first's warm slot mid-run and the first died five steps
+    later, every observation failing at once.
+    """
+
+    registry = Registry()
+    driver = FakeDriver()
+    _ctx, lease = await registry.acquire(
+        _IDENTITY, "first", 300.0, _opener(driver, tmp_path)
+    )
+
+    # However the flag came to disagree -- a partial release, a reaper pass
+    # that set the state without clearing the lease -- the lease is still held.
+    registry._entries[_IDENTITY].context_ref.state = ContextState.IDLE
+
+    with pytest.raises(LeaseConflict):
+        await registry.acquire(_IDENTITY, "second", 300.0, _opener(driver, tmp_path))
+
+    # And the first owner still owns it.
+    renewed = await registry.renew(lease.lease_id)
+    assert renewed.lease_id == lease.lease_id
+
+
+async def test_a_released_identity_is_still_reusable(tmp_path) -> None:
+    """The warm pool depends on it: a released context stays alive and the next
+    run takes it over rather than paying for a cold Chrome."""
+
+    registry = Registry()
+    driver = FakeDriver()
+    ctx_a, lease = await registry.acquire(
+        _IDENTITY, "first", 300.0, _opener(driver, tmp_path)
+    )
+    await registry.release(lease.lease_id)
+
+    ctx_b, second = await registry.acquire(
+        _IDENTITY, "second", 300.0, _opener(driver, tmp_path)
+    )
+    assert ctx_b is ctx_a, "the warm context must be reused, not reopened"
+    assert second.lease_id != lease.lease_id

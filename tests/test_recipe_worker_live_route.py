@@ -88,6 +88,10 @@ def _loop(placer: Any, *, store: Any = None, stale_after: float = 3.0) -> Recipe
     )
 
 
+def _ident() -> IdentityRef:
+    return identity_for("t", "example.com", "recipe-0")
+
+
 def _session() -> _Session:
     return _Session(
         ctx=_Ctx(node_id="node-a"),
@@ -165,3 +169,64 @@ async def test_the_heartbeat_renews_the_lock_with_no_route_registered() -> None:
 
     assert store.renewals == ["run-1"]
     assert placer.committed == []
+
+
+class _Lease:
+    """A registry whose `renew` can be made to fail the way the reaper's
+    force-release makes it fail."""
+
+    def __init__(self, *, reclaimed: bool = False) -> None:
+        self.renewals: list[str] = []
+        self._reclaimed = reclaimed
+
+    async def renew(self, lease_id: str) -> None:
+        if self._reclaimed:
+            raise KeyError(f"lease {lease_id!r} was reclaimed")
+        self.renewals.append(lease_id)
+
+
+@dataclass
+class _Leased:
+    ctx: _Ctx
+    identity: IdentityRef
+    lease_id: str = "lease-1"
+
+
+async def test_the_heartbeat_keeps_the_browser_lease_alive() -> None:
+    """The lease is renewed by `execute_on_session`, so it tracks PAGE activity
+    -- and a build spends most of its time in model calls. One Bedrock request
+    that stalled for 127 seconds left the lease un-renewed past its 300s TTL;
+    the reaper force-released it, and every observation after that failed with
+    "lease was reclaimed" until the run aborted.
+    """
+
+    registry = _Lease()
+    loop = _loop(_RecordingPlacer(), store=_RecordingStore())
+    loop._registry = registry  # type: ignore[assignment]
+    run = _Run()
+    loop._live_routes[run.run_id] = ("recipe-run-1", _Leased(_Ctx("node-a"), _ident()), "auto")
+
+    beat = asyncio.create_task(loop._heartbeat(run))  # type: ignore[arg-type]
+    await asyncio.sleep(1.2)
+    beat.cancel()
+    await asyncio.gather(beat, return_exceptions=True)
+
+    assert registry.renewals, "the lease must be renewed independently of page activity"
+
+
+async def test_a_lease_the_reaper_already_took_stops_being_chased() -> None:
+    """Renewing is then neither possible nor useful -- the run fails on its next
+    page read and reports it properly. The heartbeat outlives that, so without
+    this it would log every 40s for the rest of the run."""
+
+    loop = _loop(_RecordingPlacer(), store=_RecordingStore())
+    loop._registry = _Lease(reclaimed=True)  # type: ignore[assignment]
+    run = _Run()
+    loop._live_routes[run.run_id] = ("recipe-run-1", _Leased(_Ctx("node-a"), _ident()), "auto")
+
+    beat = asyncio.create_task(loop._heartbeat(run))  # type: ignore[arg-type]
+    await asyncio.sleep(1.2)
+    beat.cancel()
+    await asyncio.gather(beat, return_exceptions=True)
+
+    assert run.run_id not in loop._live_routes

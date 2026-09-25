@@ -259,6 +259,21 @@ class RecipeWorkerLoop:
                 # Already best-effort and idempotent; a redis hiccup costs the
                 # live view, never the run.
                 await self._publish_live_route(*route)
+                # And the session lease, which nothing else renews on its own.
+                #
+                # `execute_on_session` renews it before every dispatch, so the
+                # lease tracks PAGE activity -- and a build spends most of its
+                # time in model calls, not page calls. One Bedrock request that
+                # stalled for 127 seconds, inside a `_look` batch of several,
+                # was enough to leave the lease un-renewed past its 300s TTL.
+                # The reaper then force-released it (it cannot distinguish a
+                # slow owner from a crashed one), and every observation after
+                # that failed with "lease was reclaimed" until the run aborted.
+                #
+                # The heartbeat is the right cadence for the same reason it is
+                # for the route: it is the only thing in the run that ticks
+                # independently of what the run happens to be waiting on.
+                await self._renew_session_lease(run, route[1])
 
     async def _process_run(self, run: ClaimedRecipeRun) -> None:
         if run.kind == "codegen":
@@ -342,6 +357,26 @@ class RecipeWorkerLoop:
                 )
             except Exception:
                 log.warning("recipe_worker_loop.release_failed", run_id=run.run_id)
+
+    async def _renew_session_lease(self, run: ClaimedRecipeRun, session: Any) -> None:
+        """Keep the browser lease alive across a long model call.
+
+        A `KeyError` means the reaper already took it, and renewing is then
+        neither possible nor useful -- the run is going to fail on its next
+        page read and say so properly. Logged once at that point rather than
+        every 40s, because the heartbeat outlives the failure.
+        """
+
+        try:
+            await self._registry.renew(session.lease_id)
+        except KeyError:
+            log.warning(
+                "recipe_worker_loop.lease_already_reclaimed",
+                run_id=run.run_id, lease=str(getattr(session, "lease_id", "")),
+            )
+            self._live_routes.pop(run.run_id, None)
+        except Exception:
+            log.warning("recipe_worker_loop.lease_renew_failed", run_id=run.run_id)
 
     async def _publish_live_route(self, session_id: str, session: Any, tier: str) -> None:
         """Make this worker's session reachable by the live view.
