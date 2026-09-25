@@ -21,7 +21,15 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, Snapshot, SnapshotView
 
-ExtractFormat = Literal["markdown", "text", "html", "structured_data"]
+ExtractFormat = Literal[
+    "markdown", "text", "html", "structured_data", "fit_markdown", "entities"
+]
+"""`fit_markdown` is `markdown` with `extraction.prune`'s density scoring and,
+when a `relevance_query` is given, `extraction.relevance`'s BM25 ranking
+applied -- a deliberately separate format rather than a flag on `markdown`, so
+a caller can ask for both and see what the filter threw away. `entities` is
+deterministic regex extraction (`extraction.entities`) returned as a JSON
+object, same as `structured_data`."""
 
 # When `page.goto` considers a navigation "done". `"load"` (Playwright's own
 # default) waits for every subresource, which heavy retail SPAs (Walmart,
@@ -127,6 +135,14 @@ class ExtractAction:
     include_tags: tuple[str, ...] | None = None
     exclude_tags: tuple[str, ...] | None = None
     base_url: str | None = None
+    relevance_query: str | None = None
+    """Only meaningful for `format="fit_markdown"`, and ignored by every other
+    format -- `markdown` stays the whole main content by definition, so a query
+    that silently narrowed it would leave a caller no way to ask for the page."""
+    citations: bool = False
+    """Rewrite inline links as numbered references with a trailing
+    `## References` block (`extraction.postprocess.to_citations`). Applies to
+    `markdown` and `fit_markdown`."""
     terminates_sequence: bool = False
 
 

@@ -18,6 +18,20 @@ exempt from the empty-content main-content fallback below (that logic is
 markdown/text-specific) and returns a JSON string, same as every other
 format, to fit `spi.actions.ActionResult.extracts: list[str]`'s per-format
 correlation.
+
+`fit_markdown` inserts a stage 1b between sanitize and convert: `prune.py`
+scores every element and drops the low-scoring subtrees the selector list in
+`selectors.py` has no name for, and `relevance.py` additionally drops the
+blocks that do not rank against `relevance_query` when one is given. It is a
+*separate format* rather than a flag on `markdown` deliberately -- a caller can
+request both and compare, which is the only honest way to tune a filter whose
+whole job is throwing content away. `markdown` therefore always means "the
+whole main content", and is never silently narrowed by a query.
+
+`entities` (see `entities.py`) is deterministic regex extraction over the
+unfiltered markdown -- unfiltered because an email address in a footer is
+exactly the kind of thing both filters above are designed to discard, and a
+caller asking for entities wants all of them.
 """
 
 from __future__ import annotations
@@ -27,7 +41,15 @@ from typing import Any
 
 from lxml.html import HtmlElement
 
-from crawlpilot.extraction import markdown_converter, postprocess, sanitizer, structured_data
+from crawlpilot.extraction import (
+    entities,
+    markdown_converter,
+    postprocess,
+    prune,
+    relevance,
+    sanitizer,
+    structured_data,
+)
 from crawlpilot.spi.actions import ExtractFormat
 
 
@@ -39,6 +61,8 @@ def extract(
     exclude_tags: tuple[str, ...] | None = None,
     base_url: str | None = None,
     live_hydration: dict[str, Any] | None = None,
+    relevance_query: str | None = None,
+    citations: bool = False,
 ) -> str:
     if format == "html":
         return html
@@ -49,6 +73,17 @@ def extract(
             data["hydration"] = {**data["hydration"], **live_hydration}
         return json.dumps(data)
 
+    if format == "entities":
+        markdown = _render(
+            html,
+            format="markdown",
+            main_content=main_content,
+            include_tags=include_tags,
+            exclude_tags=exclude_tags,
+            base_url=base_url,
+        )
+        return json.dumps(entities.extract_entities(markdown))
+
     result = _render(
         html,
         format=format,
@@ -56,7 +91,25 @@ def extract(
         include_tags=include_tags,
         exclude_tags=exclude_tags,
         base_url=base_url,
+        relevance_query=relevance_query,
+        citations=citations,
     )
+
+    if format == "fit_markdown" and not result.strip():
+        # Filter-emptied fallback: scoring is heuristic and a page built
+        # entirely out of short, link-heavy blocks can score badly end to end.
+        # Returning the unfiltered markdown is the right failure -- a caller
+        # who asked for less content still wanted *some*, and an empty string
+        # is indistinguishable from a page that never loaded.
+        result = _render(
+            html,
+            format="markdown",
+            main_content=main_content,
+            include_tags=include_tags,
+            exclude_tags=exclude_tags,
+            base_url=base_url,
+            citations=citations,
+        )
 
     if main_content and not result.strip():
         # Empty-content fallback: a boilerplate selector over-trimmed the
@@ -69,6 +122,8 @@ def extract(
             include_tags=include_tags,
             exclude_tags=exclude_tags,
             base_url=base_url,
+            relevance_query=relevance_query,
+            citations=citations,
         )
 
     return result
@@ -82,6 +137,8 @@ def _render(
     include_tags: tuple[str, ...] | None,
     exclude_tags: tuple[str, ...] | None,
     base_url: str | None,
+    relevance_query: str | None = None,
+    citations: bool = False,
 ) -> str:
     root = sanitizer.sanitize(
         html,
@@ -90,8 +147,14 @@ def _render(
         exclude_tags=exclude_tags,
         base_url=base_url,
     )
-    if format == "markdown":
-        return postprocess.postprocess(markdown_converter.to_markdown(root))
+    if format == "fit_markdown":
+        root = prune.prune(root)
+        if relevance_query:
+            root = relevance.filter_by_query(root, relevance_query)
+    if format in ("markdown", "fit_markdown"):
+        return postprocess.postprocess(
+            markdown_converter.to_markdown(root), citations=citations
+        )
     return _extract_text(root)
 
 

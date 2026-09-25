@@ -179,6 +179,17 @@ class Resolution:
     open it first" -- while `steps` alone throws away the region the person
     pointed at and hands the model the whole page again."""
 
+    teardown: list[Step] = field(default_factory=list)
+    """What the person did AFTER reading the value -- closing the modal it was
+    inside, collapsing the section they opened.
+
+    Split off `steps` at the route's select marker by `split_route`, and it has
+    to be: a group runs its steps and *then* reads, so a trailing "close this"
+    folded into `steps` would run before the binding and shut the value away.
+    It only matters once several fields share a group and run in sequence,
+    which is exactly when it matters a great deal -- the second field starts on
+    whatever the first one left behind."""
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Resolution | None:
         name = str(d.get("field") or "")
@@ -195,7 +206,9 @@ class Resolution:
                 except Exception:  # noqa: BLE001 - a bad locator is not a bad request
                     continue
         hint = str(d.get("hint") or "").strip()
-        steps = parse_recorded_steps(d.get("steps") or [])
+        before, after = split_route(d.get("steps") or [])
+        steps = parse_recorded_steps(before)
+        teardown = parse_recorded_steps(after)
         if action in ("pick", "scope") and not locators:
             return None
         if action == "describe" and not hint:
@@ -213,6 +226,7 @@ class Resolution:
             shape=shape if shape in ("one", "values", "map", "rows") else "one",
             html=str(d.get("html") or ""),
             steps=steps,
+            teardown=teardown,
         )
 
 
@@ -250,8 +264,14 @@ def parse_recorded_steps(raw: list[Any]) -> list[Step]:
         if not isinstance(item, dict):
             continue
         op = str(item.get("op") or "")
+        # The select marker is not a step. It is where the binding happens, and
+        # `split_route` has already used it; reaching here it is simply not
+        # something the driver can be asked to do.
+        if op == _SELECT_OP:
+            continue
         if op not in _RECORDABLE_OPS:
             continue
+        intent = _intent_of(item)
 
         # Two shapes reach here and both are the same steps. The browser sends
         # `{op, selector, kind, text}`; the run is then parked, and what comes
@@ -277,9 +297,9 @@ def parse_recorded_steps(raw: list[Any]) -> list[Step]:
         # see it for what it is.
         kind = "xpath" if item.get("kind") == "xpath" else "css"
         target = Locator(kind=kind, selector=selector) if selector else None
-        # `press` and a page-level `scroll` legitimately have no target; every
-        # other op needs one, and one without is not replayable.
-        if target is None and op not in ("press", "scroll"):
+        # `press`, a page-level `scroll` and a bare `wait` legitimately have no
+        # target; every other op needs one, and one without is not replayable.
+        if target is None and op not in ("press", "scroll", "wait"):
             continue
         if dispatchability_error(target, op) is not None:
             continue
@@ -294,30 +314,77 @@ def parse_recorded_steps(raw: list[Any]) -> list[Step]:
             args = {"key": text or "Enter"}
         elif op == "scroll":
             args = {"direction": "down"}
+        elif op == "wait":
+            # Capped the same way the in-page rehearsal caps it, so a mistyped
+            # value cannot park a run for a minute per iteration.
+            try:
+                ms = int(item.get("ms") or 0)
+            except (TypeError, ValueError):
+                ms = 0
+            args = {"ms": max(0, min(ms, 5_000))}
 
         out.append(
             Step(
                 op=op,  # type: ignore[arg-type]
                 target=target,
                 args=args,
+                # See the docstring: only a dismissal is allowed to go missing
+                # quietly. A reveal that matched nothing is the single most
+                # useful thing `step_trace` can tell the next person, and
+                # `optional` is what used to hide it.
                 on_error="continue",
-                optional=True,
-                label=_recorded_label(op, item.get("text")),
+                optional=intent in ("dismiss", "incidental"),
+                label=_recorded_label(op, item.get("text"), intent),
             )
         )
     return out
 
 
-def _recorded_label(op: str, text: Any) -> str:
+def split_route(raw: list[Any]) -> tuple[list[Any], list[Any]]:
+    """A recorded route, cut at the point the value is read.
+
+    A route is one ordered thing -- *dismiss the banner, open the accordion,
+    read the table, close the modal* -- but a `FieldGroup` runs its steps and
+    then reads. So the steps before the selection are setup, and the steps
+    after it only make sense as teardown: they are what returns the page to a
+    state the *next* field in the group can start from. Running them before the
+    binding, which is what a single `steps` list would have meant, closes the
+    modal the value is inside.
+
+    Cut at the LAST select, matching the client: a person who picks, reads the
+    preview and picks again has corrected themselves, and everything between
+    the two attempts is still part of getting there.
+    """
+
+    last = -1
+    for i, item in enumerate(raw):
+        if isinstance(item, dict) and str(item.get("op") or "") == _SELECT_OP:
+            last = i
+    if last == -1:
+        return list(raw), []
+    return list(raw[:last]), list(raw[last + 1 :])
+
+
+def _recorded_label(op: str, text: Any, intent: str = "reveal") -> str:
     """What the person did, in their words, so a recipe reads as a sequence
-    rather than as anonymous selectors."""
+    rather than as anonymous selectors.
+
+    The intent leads, because the label is what `step_trace` shows the next
+    person to look at a broken field -- and "reveal: click Specifications --
+    no match" says what is wrong, where "click Specifications -- no match"
+    leaves them to work out whether that click ever mattered.
+    """
 
     said = str(text or "").strip()
     if op == "click" and said:
-        return f'click "{said[:40]}"'
-    if op == "press" and said:
-        return f"press {said}"
-    return f"recorded {op}"
+        body = f'click "{said[:40]}"'
+    elif op == "press" and said:
+        body = f"press {said}"
+    elif op == "wait_for_selector":
+        body = f'wait for "{said[:40]}"' if said else "wait for it to appear"
+    else:
+        body = f"recorded {op}"
+    return body if intent == "reveal" else f"{intent}: {body}"
 
 
 def parse_resolutions(
@@ -419,7 +486,8 @@ def drop_field(recipe: Recipe, name: str) -> Recipe:
         groups.append(
             FieldGroup(
                 group_id=group.group_id, field_names=names, bindings=bindings,
-                steps=list(group.steps), repeat=group.repeat, expect=group.expect,
+                steps=list(group.steps), teardown=list(group.teardown),
+                repeat=group.repeat, expect=group.expect,
             )
         )
 
@@ -729,12 +797,18 @@ async def _apply_steps(
     return _with_steps(recipe, resolution.field, resolution.steps), None
 
 
-def _with_steps(recipe: Recipe, name: str, steps: list[Step]) -> Recipe:
+def _with_steps(
+    recipe: Recipe, name: str, steps: list[Step], teardown: list[Step] | None = None
+) -> Recipe:
     """Put the recorded route onto the group that owns the field.
 
     Replaces rather than appends: the recording is the whole route from a fresh
     page, which is exactly what a group's `steps` are, and running whatever was
     there before it would repeat half of it.
+
+    `teardown` is the part of the route recorded *after* the value was picked
+    -- closing the modal it was read from. Replaced on the same terms and for
+    the same reason.
     """
 
     from agentpilot.recipe.v2.schema import column_to_table_map
@@ -748,6 +822,7 @@ def _with_steps(recipe: Recipe, name: str, steps: list[Step]) -> Recipe:
                 field_names=list(group.field_names),
                 bindings=dict(group.bindings),
                 steps=list(steps),
+                teardown=list(teardown) if teardown is not None else list(group.teardown),
                 repeat=group.repeat,
                 expect=group.expect,
             )
@@ -953,6 +1028,7 @@ def _bind_repeat(recipe: Recipe, name: str, binding: Any) -> Recipe:
                 field_names=list(group.field_names),
                 bindings=binding.bindings,
                 steps=list(group.steps),
+                teardown=list(group.teardown),
                 repeat=binding.repeat,
                 expect=group.expect,
             )
@@ -1058,7 +1134,8 @@ def _bind(recipe: Recipe, name: str, candidates: list[Candidate]) -> Recipe:
                 names.append(owner)
             groups[index] = FieldGroup(
                 group_id=group.group_id, field_names=names, bindings=bindings,
-                steps=list(group.steps), repeat=group.repeat, expect=group.expect,
+                steps=list(group.steps), teardown=list(group.teardown),
+                repeat=group.repeat, expect=group.expect,
             )
             recipe.field_groups = groups
             return recipe

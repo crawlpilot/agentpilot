@@ -184,6 +184,8 @@ def _build_batch(
             main_content=options.only_main_content,
             include_tags=options.include_tags,
             exclude_tags=options.exclude_tags,
+            relevance_query=options.relevance_query,
+            citations=options.citations,
         )
         for fmt in _effective_formats(options)
     )

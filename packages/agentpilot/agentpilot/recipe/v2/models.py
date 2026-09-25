@@ -443,6 +443,18 @@ class FieldGroup:
     field_names: list[str]
     bindings: dict[str, list[Candidate]]
     steps: list[Step] = field(default_factory=list)
+    teardown: list[Step] = field(default_factory=list)
+    """What to do after this group's fields have been read.
+
+    The counterpart `steps` never had. A recorded route is one ordered thing --
+    *dismiss the banner, open the accordion, read the table, close the modal* --
+    and until there was somewhere to put that last part it had to be folded in
+    with the setup, where it ran before the binding and shut the value away.
+
+    Runs best-effort and never fails the group: by the time it executes the
+    values are already collected, so a close button that has moved costs the
+    next group a dirty page, not this one its data. See `replay._replay_group`.
+    """
     repeat: RepeatSpec | None = None
     expect: Expectation | None = None
 
@@ -454,6 +466,8 @@ class FieldGroup:
         }
         if self.steps:
             out["steps"] = [s.to_dict() for s in self.steps]
+        if self.teardown:
+            out["teardown"] = [s.to_dict() for s in self.teardown]
         if self.repeat is not None:
             out["repeat"] = self.repeat.to_dict()
         if self.expect is not None:
@@ -471,6 +485,7 @@ class FieldGroup:
                 for k, v in (d.get("bindings") or {}).items()
             },
             steps=[Step.from_dict(s) for s in (d.get("steps") or [])],
+            teardown=[Step.from_dict(s) for s in (d.get("teardown") or [])],
             repeat=RepeatSpec.from_dict(repeat) if repeat else None,
             expect=Expectation.from_dict(d.get("expect")),
         )

@@ -292,6 +292,7 @@ async def repair_fields(
             field_names=list(group.field_names),
             bindings=bindings,
             steps=list(group.steps),
+            teardown=list(group.teardown),
             repeat=group.repeat,
             expect=group.expect,
         )

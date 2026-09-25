@@ -129,6 +129,8 @@ async def fetch_via_http(
                 include_tags=options.include_tags,
                 exclude_tags=options.exclude_tags,
                 base_url=final_url,
+                relevance_query=options.relevance_query,
+                citations=options.citations,
             )
         )
     return result

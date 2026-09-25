@@ -38,6 +38,15 @@ class ScrapeOptions:
     only_main_content: bool = True
     include_tags: tuple[str, ...] | None = None
     exclude_tags: tuple[str, ...] | None = None
+    relevance_query: str | None = None
+    """Ranking query for the `"fit_markdown"` format: blocks that do not rank
+    against it are dropped (`crawlpilot.extraction.relevance`, Okapi BM25 with
+    the page as its own corpus). Ignored unless `"fit_markdown"` is in
+    `formats`, and never applied to `"markdown"` -- see `ExtractFormat`."""
+    citations: bool = False
+    """Rewrite inline links in the markdown formats as numbered references with
+    a trailing `## References` block. Cuts the token cost of a link-dense page
+    substantially and collapses repeated links onto one entry."""
     timeout_ms: int = 30_000
     wait_for_ms: int | None = None
     actions: tuple[Action, ...] = ()
@@ -84,8 +93,19 @@ class Document:
     document_id: str
     url: str
     markdown: str | None = None
+    fit_markdown: str | None = None
+    """The filtered markdown, set when `formats` includes `"fit_markdown"`:
+    density-pruned, and additionally BM25-ranked when `ScrapeOptions
+    .relevance_query` was given. Separate from `markdown` rather than replacing
+    it so a caller can request both and see what was dropped -- which is the
+    only way to tune a threshold whose job is discarding content."""
     text: str | None = None
     html: str | None = None
+    entities: dict[str, list[str]] | None = None
+    """Regex-extracted emails, phones, prices, dates and identifiers
+    (`crawlpilot.extraction.entities`), set when `formats` includes
+    `"entities"`. Deterministic and free, like `structured_data`, but finds
+    what a page states in prose rather than what it declares about itself."""
     structured_data: dict[str, Any] | None = None
     """JSON-LD/meta-OG-Twitter-DC/Next.js-Nuxt hydration-state bundle, set
     when `formats` includes `"structured_data"` -- see `crawlpilot.extraction
