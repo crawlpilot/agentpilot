@@ -126,7 +126,7 @@ export function AssistPanel({
     }
     for (const [field, steps] of Object.entries(recorded)) {
       if (!steps.length) continue
-      const recording = steps as unknown as Array<Record<string, unknown>>
+      const recording = steps.map(forWire) as unknown as Array<Record<string, unknown>>
       const answer = out[field]
       // A route that contains a `select` already names the element, so it is a
       // `pick` whose steps happen to describe how to reach it -- not a bare
@@ -393,6 +393,23 @@ const SHAPE_HELP = {
   map: 'Labelled pairs whose keys come from the page — a specifications block.',
   rows: 'Repeating rows with the same columns.',
 } as const
+
+/**
+ * One route step, minus what only the browser needed.
+ *
+ * `pick` is the entire enriched `PickPayload` — candidate chains, extracted
+ * rows, inferred columns — and for a list pick that runs to tens of kilobytes.
+ * It has already done its job by the time a route is submitted: `selectInRoute`
+ * turned it into the locators and spec travelling alongside. The server wants
+ * the `select` marker, so it knows where to cut the route, and nothing else
+ * from it. Sending the payload would put it in the request body sixty times
+ * over for no reader.
+ */
+function forWire(step: PreviewStep): PreviewStep {
+  if (!step.pick) return step
+  const { pick: _drop, ...rest } = step
+  return rest
+}
 
 /**
  * The binding a route carries, if the person picked one while recording.

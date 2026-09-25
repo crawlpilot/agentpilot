@@ -448,12 +448,28 @@ class FieldGroup:
 
     The counterpart `steps` never had. A recorded route is one ordered thing --
     *dismiss the banner, open the accordion, read the table, close the modal* --
-    and until there was somewhere to put that last part it had to be folded in
-    with the setup, where it ran before the binding and shut the value away.
+    and with nowhere to put that last part it had to be folded in with the
+    setup, where it ran BEFORE the binding and shut the value away. Separating
+    it is the fix; running it is close to a no-op.
+
+    **It changes no outcome today, and that is expected.** This is the same
+    problem re-navigation solves, solved the cheap way. `replay` reloads the
+    page before every group precisely because state one group leaves corrupts
+    the next -- on a Zara product page, an open PRODUCT MEASUREMENTS drawer
+    physically covers the COMPOSITION button, so two reveal steps that each
+    work alone time out in sequence. Re-navigation answers that by throwing the
+    whole page away, at O(groups) page loads; teardown answers it by closing
+    what was opened.
+
+    So while both run, this is redundant. It is here because the alternative
+    was to discard the half of a recorded route that comes after the pick --
+    silently truncating what somebody deliberately recorded -- and because a
+    group that tidies up after itself is the precondition for the optimisation
+    `replay`'s docstring already names: skipping the reload for groups that
+    provably leave the page as they found it.
 
     Runs best-effort and never fails the group: by the time it executes the
-    values are already collected, so a close button that has moved costs the
-    next group a dirty page, not this one its data. See `replay._replay_group`.
+    values are already collected. See `replay._replay_group`.
     """
     repeat: RepeatSpec | None = None
     expect: Expectation | None = None

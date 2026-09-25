@@ -1364,6 +1364,8 @@ class PatchrightDriver:
                     exclude_tags=action.exclude_tags,
                     base_url=base_url,
                     live_hydration=live_hydration,
+                    relevance_query=action.relevance_query,
+                    citations=action.citations,
                 )
             )
         elif isinstance(action, PdfAction):

@@ -186,9 +186,11 @@ class Resolution:
     Split off `steps` at the route's select marker by `split_route`, and it has
     to be: a group runs its steps and *then* reads, so a trailing "close this"
     folded into `steps` would run before the binding and shut the value away.
-    It only matters once several fields share a group and run in sequence,
-    which is exactly when it matters a great deal -- the second field starts on
-    whatever the first one left behind."""
+
+    Separating it is the point; running it is nearly a no-op, because
+    `_replay_group` reloads the page for every group anyway. Keeping it rather
+    than dropping it is what stops the back half of a route somebody recorded
+    from being silently thrown away. See `FieldGroup.teardown`."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Resolution | None:
@@ -593,6 +595,17 @@ async def apply_resolutions(
                 resolution.field,
                 rank_candidates([v.locator for v in resolving]),
             )
+            if resolution.teardown:
+                # A route can be nothing but "point at it, then close the modal
+                # you were already looking at". There are no setup steps to run
+                # -- which is why this is a plain pick and not a routed one --
+                # but the tidying is still part of what they recorded, and
+                # dropping it here is exactly the silent truncation
+                # `split_route` exists to avoid.
+                recipe = _with_steps(
+                    recipe, resolution.field, _steps_of(recipe, resolution.field),
+                    resolution.teardown,
+                )
 
     for resolution in scopes:
         recipe, problem = await _apply_scope(
@@ -690,7 +703,7 @@ async def _apply_pick_after_steps(
     recipe = _bind(
         recipe, resolution.field, rank_candidates([v.locator for v in resolving])
     )
-    return _with_steps(recipe, resolution.field, resolution.steps), None
+    return _with_steps(recipe, resolution.field, resolution.steps, resolution.teardown), None
 
 
 async def _apply_steps(
@@ -770,7 +783,7 @@ async def _apply_steps(
                 "repeating rows"
             )
         recipe = _bind_repeat(recipe, spec.name, binding)
-        return _with_steps(recipe, spec.name, resolution.steps), None
+        return _with_steps(recipe, spec.name, resolution.steps, resolution.teardown), None
 
     verified = await propose_and_verify(
         {resolution.field: spec},
@@ -794,7 +807,23 @@ async def _apply_steps(
         policy=policy,
     )
     recipe = _bind(recipe, resolution.field, candidates)
-    return _with_steps(recipe, resolution.field, resolution.steps), None
+    return _with_steps(recipe, resolution.field, resolution.steps, resolution.teardown), None
+
+
+def _steps_of(recipe: Recipe, name: str) -> list[Step]:
+    """The setup steps already on the group that owns `name`.
+
+    So a teardown-only route can be written without `_with_steps` -- which
+    replaces by design -- erasing the setup the build worked out.
+    """
+
+    from agentpilot.recipe.v2.schema import column_to_table_map
+
+    owner = column_to_table_map(recipe.fields).get(name) or name
+    for group in recipe.field_groups:
+        if name in group.bindings or owner in group.field_names:
+            return list(group.steps)
+    return []
 
 
 def _with_steps(
@@ -935,7 +964,7 @@ async def _apply_scope(
             field=resolution.field, steps=len(resolution.steps), ran=len(ran),
             scoped=True,
         )
-        recipe = _with_steps(recipe, resolution.field, resolution.steps)
+        recipe = _with_steps(recipe, resolution.field, resolution.steps, resolution.teardown)
     return recipe, None
 
 

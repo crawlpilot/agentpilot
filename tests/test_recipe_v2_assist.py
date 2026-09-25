@@ -23,8 +23,16 @@ from agentpilot.recipe.v2.assist import (
     drop_field,
     parse_recorded_steps,
     parse_resolutions,
+    split_route,
 )
-from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator, Recipe, TargetSpec
+from agentpilot.recipe.v2.models import (
+    Candidate,
+    FieldGroup,
+    Locator,
+    Recipe,
+    Step,
+    TargetSpec,
+)
 from agentpilot.recipe.v2.schema import FieldSpec, TypeSpec
 from agentpilot.recipe.v2.validate import validate_document
 
@@ -584,9 +592,15 @@ def test_a_recording_becomes_replayable_steps() -> None:
     assert steps[2].args == {"text": "hello"}
     assert steps[3].args == {"key": "Escape"}
     assert steps[4].args == {"values": ["M"]}
-    # A recording is mostly reveals, and a reveal that does not land is an empty
-    # field rather than a failed run -- the rule every step here follows.
-    assert all(s.optional and s.on_error == "continue" for s in steps)
+    # No step here fails the run: a route is a best effort and a half-revealed
+    # page can still yield most of its fields.
+    assert all(s.on_error == "continue" for s in steps)
+    # But only the ones that may legitimately be missing are allowed to go
+    # quietly. Every step used to be `optional`, which made a reveal that
+    # stopped working indistinguishable from one that was never needed -- it is
+    # skipped, the field comes back empty, and `step_trace` has nothing to
+    # attribute it to. Absent intent means `reveal`, which is what these are.
+    assert [s.optional for s in steps] == [False, False, False, False, False]
 
 
 def test_a_step_the_driver_could_never_dispatch_is_dropped() -> None:
@@ -601,6 +615,153 @@ def test_a_step_the_driver_could_never_dispatch_is_dropped() -> None:
     ])
     assert len(steps) == 1
     assert steps[0].target is not None and steps[0].target.selector == ".ok"
+
+
+def test_only_a_dismissal_is_allowed_to_go_missing_quietly() -> None:
+    """The distinction the whole intent vocabulary exists for.
+
+    Every recorded step used to be `optional`, on the reasoning that a cookie
+    banner which did not appear this time is not a failed run. That is right
+    about the banner and wrong about the click that opens the section the field
+    lives in: marked optional, a reveal that stops working is skipped, the
+    field comes back empty, and `step_trace` has nothing to attribute it to --
+    which is the exact failure `PendingAsk.step_trace` was added to diagnose.
+    """
+
+    steps = parse_recorded_steps([
+        {"op": "click", "kind": "css", "selector": "#accept", "intent": "dismiss"},
+        {"op": "click", "kind": "css", "selector": "#specs", "intent": "reveal"},
+        {"op": "scroll", "intent": "incidental"},
+    ])
+
+    assert [s.optional for s in steps] == [True, False, True]
+    # None of them fails the run: a route is a best effort, and a half-revealed
+    # page still yields most of its fields.
+    assert all(s.on_error == "continue" for s in steps)
+    # The intent leads the label, because the label is what `step_trace` shows
+    # the next person: "reveal: click ... -- no match" says what is wrong.
+    assert steps[0].label.startswith("dismiss: ")
+    assert not steps[1].label.startswith("reveal: ")
+
+
+def test_an_unknown_intent_reads_as_reveal() -> None:
+    """Absent or nonsense means `reveal`, which is what every step recorded
+    before intents existed was in practice. A stored route re-parsed after a
+    park has to come back meaning what it meant going in."""
+
+    steps = parse_recorded_steps([
+        {"op": "click", "kind": "css", "selector": "#a"},
+        {"op": "click", "kind": "css", "selector": "#b", "intent": "teleport"},
+    ])
+    assert [s.optional for s in steps] == [False, False]
+
+
+def test_a_settle_step_is_kept_and_needs_a_target() -> None:
+    """A reveal that animates is open in the DOM long before it has finished
+    moving. The person never noticed -- they were never going to beat the
+    animation -- and replay is, so the route has to be able to say "wait"."""
+
+    steps = parse_recorded_steps([
+        {"op": "wait_for_selector", "kind": "css", "selector": "#drawer",
+         "intent": "settle", "text": "Composition"},
+        {"op": "wait", "ms": 400, "intent": "settle"},
+        # No target, and `wait_for_selector` is meaningless without one.
+        {"op": "wait_for_selector", "intent": "settle"},
+    ])
+
+    assert [s.op for s in steps] == ["wait_for_selector", "wait"]
+    assert steps[0].target is not None and steps[0].target.selector == "#drawer"
+    assert steps[1].args == {"ms": 400}
+
+
+def test_a_wait_longer_than_the_cap_is_clamped() -> None:
+    """A mistyped 60000 must not park every single run for a minute."""
+
+    steps = parse_recorded_steps([{"op": "wait", "ms": 60_000, "intent": "settle"}])
+    assert steps[0].args == {"ms": 5_000}
+
+
+def test_a_route_is_cut_at_the_point_the_value_is_read() -> None:
+    """A group runs its steps and THEN reads, so a trailing "close this" folded
+    in with the setup would run before the binding and shut the value away."""
+
+    before, after = split_route([
+        {"op": "click", "selector": "#accept", "intent": "dismiss"},
+        {"op": "click", "selector": "#specs", "intent": "reveal"},
+        {"op": "select", "intent": "select", "selector": "table.specs"},
+        {"op": "click", "selector": "#close", "intent": "dismiss"},
+    ])
+
+    assert [s["selector"] for s in before] == ["#accept", "#specs"]
+    assert [s["selector"] for s in after] == ["#close"]
+    # The marker itself is not a step -- `parse_recorded_steps` refuses it, so
+    # a route cannot smuggle an op the driver has never heard of into a recipe.
+    assert parse_recorded_steps([{"op": "select", "selector": "x"}]) == []
+
+
+def test_a_route_with_no_selection_is_all_setup() -> None:
+    """`action: 'steps'` -- they showed the way there and left the model to
+    find the value. Nothing to cut on, so nothing becomes teardown."""
+
+    before, after = split_route([{"op": "click", "selector": "#a"}])
+    assert len(before) == 1
+    assert after == []
+
+
+def test_a_route_is_cut_at_the_LAST_selection() -> None:
+    """Somebody who picks, reads the preview and picks again has corrected
+    themselves -- and everything between the two attempts is still part of
+    getting there, not tidying up after."""
+
+    before, after = split_route([
+        {"op": "select", "intent": "select", "selector": "first"},
+        {"op": "click", "selector": "#wider", "intent": "reveal"},
+        {"op": "select", "intent": "select", "selector": "second"},
+        {"op": "click", "selector": "#close", "intent": "dismiss"},
+    ])
+
+    assert [s["selector"] for s in before] == ["first", "#wider"]
+    assert [s["selector"] for s in after] == ["#close"]
+
+
+def test_the_teardown_half_of_a_route_reaches_the_resolution() -> None:
+    """End to end through `parse_resolutions`, because the split happening in
+    `Resolution.from_dict` is what makes it reach `_with_steps` at all."""
+
+    got = parse_resolutions(
+        [{
+            "field": "price", "action": "pick",
+            "locators": [{"kind": "css", "selector": ".price"}],
+            "steps": [
+                {"op": "click", "kind": "css", "selector": "#specs", "intent": "reveal"},
+                {"op": "select", "intent": "select"},
+                {"op": "click", "kind": "css", "selector": "#close", "intent": "dismiss"},
+            ],
+        }],
+        _asks(),
+    )
+
+    resolution = got["price"]
+    assert [s.target.selector for s in resolution.steps] == ["#specs"]
+    assert [s.target.selector for s in resolution.teardown] == ["#close"]
+    assert resolution.teardown[0].optional is True
+
+
+def test_a_field_group_round_trips_its_teardown() -> None:
+    """It is stored, or the back half of a recorded route is thrown away the
+    first time the document is serialised."""
+
+    group = FieldGroup(
+        group_id="g", field_names=["price"], bindings={},
+        teardown=[Step(op="click", target=Locator(kind="css", selector="#close"))],
+    )
+    back = FieldGroup.from_dict(group.to_dict())
+    assert back.teardown == group.teardown
+    # Absent rather than empty when there is none, so an ordinary group's
+    # document does not grow a key that says nothing.
+    assert "teardown" not in FieldGroup(
+        group_id="g", field_names=["price"], bindings={}
+    ).to_dict()
 
 
 def test_an_op_a_recording_cannot_produce_is_dropped() -> None:
@@ -658,7 +819,12 @@ def test_a_recording_survives_the_park_and_resume_round_trip() -> None:
     assert back[1].args == {"text": "hello"}
     assert back[2].args == {"key": "Escape"}
     assert back[0].target is not None and back[0].target.selector == "#specs"
-    assert all(s.optional and s.on_error == "continue" for s in back)
+    assert all(s.on_error == "continue" for s in back)
+    # `Step` has no `intent` field -- it is an authoring concept, not a replay
+    # one -- so the second pass cannot re-derive optionality and must carry it.
+    # `Step.from_dict` is what preserves what the first pass decided, instead
+    # of defaulting the whole route back to `reveal`.
+    assert [s.optional for s in back] == [s.optional for s in sent]
 
 
 # --- applying a pick ---------------------------------------------------------

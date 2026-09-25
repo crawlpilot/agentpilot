@@ -20,11 +20,15 @@ in noise:
   both return hundreds of matches, none of them a postcode.
 * **Dropped `credit_card` and `iban`.** Not a capability worth shipping in a
   scraping service, whatever the pattern's accuracy.
-* **Tightened `phone`, `ipv4` and `handle`.** Upstream's `phone_intl`
+* **Tightened `phone`, `url`, `ipv4` and `handle`.** Upstream's `phone_intl`
   (`\\+?\\d[\\d .()-]{7,}\\d`) matches any long run of digits and punctuation,
-  which on a page with part numbers or timestamps is most of them; its `ipv4`
-  matches software version strings; its `twitter_handle` matches the local part
-  of every email address on the page.
+  which on a page with part numbers or timestamps is most of them; its `url`
+  swallows the sentence's closing full stop; its `ipv4` accepts out-of-range
+  octets and any position inside a longer dotted run; its `twitter_handle`
+  matches the local part of every email address on the page.
+
+  What none of them can do is tell `1.2.3.4` the address from `1.2.3.4` the
+  version number -- that needs the surrounding sentence, not a better pattern.
 
 Returns every label that matched, rather than taking a caller-supplied
 selection: the whole pass is one regex sweep over text already in memory, so
@@ -44,10 +48,18 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     "phone": re.compile(
         r"(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,4}\)[ .-]?|\d{2,4}[ .-])\d{2,4}[ .-]?\d{2,4}(?:[ .-]?\d{2,4})?"
     ),
-    "url": re.compile(r"https?://[^\s\"'<>()\]]+", re.IGNORECASE),
-    # Octet-validated, so `lib 1.2.3.4` is not an address.
+    # The final class excludes sentence punctuation, so "see https://e.com/x."
+    # yields the URL and not the full stop.
+    "url": re.compile(
+        r"https?://[^\s\"'<>()\]]*[^\s\"'<>()\].,;:!?]", re.IGNORECASE
+    ),
+    # Octet-range-validated, and bounded so a longer dotted run is not read as
+    # an address with something after it: `lib 1.2.3.4.5` matches nothing.
+    # A four-group version string (`1.2.3.4`) is genuinely indistinguishable
+    # from an address by pattern alone, and is not claimed to be.
     "ipv4": re.compile(
-        r"\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"
+        r"(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}"
+        r"(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(?![\d.])"
     ),
     "ipv6": re.compile(r"\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b", re.IGNORECASE),
     "mac_address": re.compile(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", re.IGNORECASE),

@@ -282,6 +282,11 @@ export interface FieldGroup {
   group_id: string
   field_names: string[]
   steps?: Step[]
+  /**
+   * What runs after this group's fields are read — closing a modal a value was
+   * inside. The back half of a recorded route, split off at its `select`.
+   */
+  teardown?: Step[]
   bindings: Record<string, Candidate[]>
   repeat?: RepeatSpec
   expect?: GroupExpect

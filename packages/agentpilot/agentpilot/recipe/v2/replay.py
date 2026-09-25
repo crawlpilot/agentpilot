@@ -178,6 +178,28 @@ async def _replay_group(
     else:
         await _replay_scalar(group, recipe, result, reader, tctx)
 
+    if group.teardown:
+        # After the values are collected, and deliberately not guarded: the
+        # policy `run_steps` hands back is discarded because there is nothing
+        # left for a failure to spoil. A close button that moved leaves a dirty
+        # page, not a failed group.
+        #
+        # Worth being plain: this changes no outcome while the re-navigation
+        # above exists, because the two solve the same problem -- see this
+        # module's docstring on the Zara drawer that covers the next group's
+        # button. Reloading answers it by discarding the page; this answers it
+        # by closing what was opened. Both running means one is redundant.
+        #
+        # It is not therefore pointless. Discarding the part of a recorded
+        # route that comes after the pick would silently truncate what somebody
+        # deliberately recorded, and a group that tidies up after itself is
+        # what would let it skip the reload -- which is the O(groups) cost the
+        # docstring calls a worthwhile future optimisation.
+        teardown_trace, _ = await run_steps(
+            group.teardown, ctx, start_index=len(result.step_trace)
+        )
+        result.step_trace.extend(teardown_trace)
+
 
 async def _replay_scalar(
     group: FieldGroup,

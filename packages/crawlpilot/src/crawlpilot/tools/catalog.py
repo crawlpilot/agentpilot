@@ -108,7 +108,14 @@ CATALOG: tuple[ToolSpec, ...] = (
         name="extract",
         description="Read the current page's main content as markdown or plain text.",
         action_cls=sa.ExtractAction,
-        wire_fields=("format", "main_content", "include_tags", "exclude_tags"),
+        wire_fields=(
+            "format",
+            "main_content",
+            "include_tags",
+            "exclude_tags",
+            "relevance_query",
+            "citations",
+        ),
         agent_fields=("format",),
         wire_overrides={
             "include_tags": (list[str], PydanticField(default_factory=list)),

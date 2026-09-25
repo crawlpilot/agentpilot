@@ -1415,6 +1415,12 @@
             "$ref": "#/$defs/Step"
           }
         },
+        "teardown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
         "bindings": {
           "type": "object",
           "additionalProperties": {

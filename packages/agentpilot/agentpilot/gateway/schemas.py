@@ -543,6 +543,18 @@ class RecipeResolutionIn(BaseModel):
     filled and scrolled to make it visible. The answer to "how do I get to it?",
     which pointing at an element cannot give.
 
+    Each entry carries an `intent` (`reveal` / `dismiss` / `settle` / `select` /
+    `incidental`) saying what it is *for*, which is what decides how it replays
+    -- see `assist.parse_recorded_steps`. A `select` entry marks where in the
+    route the value is read; `assist.split_route` cuts there, and everything
+    after it becomes the group's teardown rather than more setup.
+
+    Left as free-form dicts on purpose. `extra="forbid"` above governs this
+    model, not these, so the recorder can add a field without a lockstep
+    deploy -- and every one of them is re-checked by `parse_recorded_steps`
+    against `_RECORDABLE_OPS` and the driver's dispatchability gate, which is a
+    stricter reading than a schema would give.
+
     Bounded because a recording is meant to be read and edited by a person;
     `record.ts` caps itself at the same number. Every step is re-checked
     server-side against a *freshly loaded* page before anything is bound."""
