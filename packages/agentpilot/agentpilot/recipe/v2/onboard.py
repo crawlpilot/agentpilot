@@ -150,6 +150,26 @@ class OnboardOutcome:
     steps_taken: int = 0
     agent_result: str | None = None
 
+    revealed_page_text: str = ""
+    """The most complete page text the build ever saw.
+
+    The judge reads ONE snapshot, taken after replay, with nothing necessarily
+    expanded -- so for a field that never bound, nothing ever opened the panel
+    holding it and the judge is shown a page the content genuinely is not on.
+    It then reports `absent`, which is terminal: absence is excluded from
+    repair on purpose and tells a person "it may simply not be on this page".
+
+    Measured on a Zara shirt. The agent opened the accordion at step 7 and
+    recorded "care instructions (machine wash max 30\u00baC, no bleach, iron max
+    150\u00baC, dry clean with tetrachloroethylene, do not tumble dry)". The judge,
+    reading a later unexpanded snapshot, replied "no washing, drying or ironing
+    instructions appear anywhere in the rendered text. Stop looking for care on
+    this page." Both were describing what they saw; only one of them had been
+    shown the page with the panel open.
+
+    Carrying the build's own best view means the judge cannot claim absence for
+    something it was simply never shown."""
+
     page_json_outline: str = ""
     """What the selector prompts were shown of the page's structured data.
 
@@ -196,6 +216,18 @@ def _keywords_in(spec: FieldSpec, haystack: str) -> str:
     low = haystack.lower()
     hit = sorted(w for w in words if w in low)
     return f"{len(hit)}/{len(words)} {hit[:5]}"
+
+
+def _same_document(before: str, after: str) -> bool:
+    """Whether two URLs are the same document, ignoring query and fragment.
+
+    `history.pushState` is how a single-page site records that a panel opened,
+    a tab changed or an image viewer came up. None of those left the document,
+    so the clicks that caused them still belong to it.
+    """
+
+    a, b = urlsplit(before), urlsplit(after)
+    return (a.scheme, a.netloc, a.path) == (b.scheme, b.netloc, b.path)
 
 
 def silently_unbound(
@@ -458,6 +490,7 @@ class ExplorationState:
         # loop it is rather than as fresh progress.
         self._ever_bound: set[str] = set()
         self.page_json_outline = ""
+        self.revealed_page_text = ""
         """What the selector prompts were shown of the page's JSON, as first
         read. Saved as an artifact only when asked for -- it is large -- but
         collected either way, because by the time anyone wants it the browser is
@@ -514,6 +547,28 @@ class ExplorationState:
             self._here = here
             return
         if here == self._here:
+            return
+
+        # A query or fragment change on the same document is not a navigation.
+        #
+        # This mattered on a real build and cost it every reveal step it had.
+        # A modern site opens a panel and calls `history.pushState` -- the
+        # accordion, the size guide, the image viewer all do it -- so the URL
+        # changes while the document does not. Treating that as a navigation
+        # threw away the route, INCLUDING the click that had just opened the
+        # panel, and the fields frozen immediately afterwards were written with
+        # no steps at all. The recipe then bound content that only exists after
+        # a click and had no way to produce it: on every future run those
+        # selectors read an empty page, silently, because every reveal step is
+        # `optional`/`on_error: continue`.
+        #
+        # The docstring's reasoning still holds for a real navigation -- clicks
+        # belonging to a page you have left are worse than useless. It does not
+        # hold here: replay navigates to the recorded URL and re-runs these
+        # steps, which is exactly what reproduces the state.
+        if _same_document(self._here, here):
+            log.info("onboard.route_kept_same_document", frm=self._here, to=here)
+            self._here = here
             return
 
         log.info("onboard.route_reset", frm=self._here, to=here, dropped=len(self._path))
@@ -802,6 +857,11 @@ class ExplorationState:
         # 12 000-character prefix of a 352 KB blob for precisely that reason.
         if not self.page_json_outline:
             self.page_json_outline = outline(structured, wanted=self._all_fields)
+        # The fullest view of the page this build ever had. Longest wins as a
+        # proxy for "most revealed": every accordion the agent opens adds text
+        # and none of it is ever removed. See `OnboardOutcome.revealed_page_text`.
+        if len(snapshot_text) > len(self.revealed_page_text):
+            self.revealed_page_text = snapshot_text
 
         # A field presumed absent is not proposed again. This is the whole of
         # the fix for the loop: the model was being asked, every step, to find
@@ -1463,5 +1523,6 @@ async def onboard_recipe(
         agent_result=run_result.result,
         trace=state.trace,
         page_json_outline=state.page_json_outline,
+        revealed_page_text=state.revealed_page_text,
     )
     return recipe, outcome

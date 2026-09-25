@@ -680,6 +680,60 @@ def _names_the_field(field_name: str, value: str) -> bool:
     return bool(words & present)
 
 
+def comma_group_reason(loc: Locator, spec: FieldSpec | None) -> str | None:
+    """Why a single-value CSS selector must not be an alternation, or None.
+
+    `a, b` means "whichever of these happens to exist", and for one value that
+    is a worse version of the candidate chain: the chain is ORDERED, each entry
+    is verified on its own, and the recipe records which one won. A comma group
+    is unordered, verifies as a whole, and hides which branch matched.
+
+    It also conceals a dependency, which is how it did real damage. A build
+    proposed `.product-detail-extra-detail__content, .product-detail-composition`
+    for a field whose content sits behind an accordion. The second branch is
+    rendered inline, so the selector verified on the unopened page -- reading
+    the wrong section -- and the field was frozen as satisfied without the
+    click that reveals the right one. The resulting recipe had no reveal step
+    at all, and the binding it did have was pointing somewhere else.
+
+    Only for a single value. A list with `all` is a genuine union: it wants
+    every match from both branches, and the ordering that matters for a chain
+    is meaningless there.
+    """
+
+    if loc.kind != "css" or loc.all:
+        return None
+    if spec is not None and (spec.type.kind == "list" or spec.type.is_rows):
+        return None
+    selector = loc.selector or ""
+    if "," not in _strip_bracketed(selector):
+        return None
+    branches = [part.strip() for part in selector.split(",") if part.strip()]
+    return (
+        f"this is {len(branches)} selectors joined by a comma, which reads "
+        f"whichever happens to exist rather than naming one thing -- and a "
+        f"branch that is present on the unopened page hides that another needs "
+        f"a click. Give the one selector you mean; put the alternatives in the "
+        f"candidate list, which is tried in order and records which one won"
+    )
+
+
+def _strip_bracketed(selector: str) -> str:
+    """The selector with `[...]` and `(...)` contents removed, so a comma inside
+    `:is(a, b)` or `[x='1,2']` is not mistaken for an alternation."""
+
+    out: list[str] = []
+    depth = 0
+    for char in selector:
+        if char in "[(":
+            depth += 1
+        elif char in "])":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(char)
+    return "".join(out)
+
+
 def locator_key(loc: Locator) -> tuple[Any, ...]:
     """Everything that decides what a locator reads.
 
@@ -1044,6 +1098,11 @@ async def verify_locators(
         circular = tautological_read(loc, raw, name)
         if circular is not None:
             last_error = rejected(loc, circular, raw=raw)
+            continue
+
+        alternation = comma_group_reason(loc, spec)
+        if alternation is not None:
+            last_error = rejected(loc, alternation, raw=raw)
             continue
 
         # Confine it to the container its own matches share. Re-read through the

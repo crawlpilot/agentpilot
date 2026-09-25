@@ -550,6 +550,9 @@ class RecipeWorkerLoop:
             llm_config=llm_config,
             max_repairs=cfg.max_judge_repairs,
             sample_limit=cfg.onboard_sample_runs,
+            # So the judge cannot call a field absent for content it was never
+            # shown -- see `OnboardOutcome.revealed_page_text`.
+            revealed_page_text=outcome.revealed_page_text,
             on_progress=publish,
         )
 

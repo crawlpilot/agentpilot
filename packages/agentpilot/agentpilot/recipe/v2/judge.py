@@ -142,23 +142,29 @@ truncated to whatever the first container held?
 
 You are judging WHAT THE VALUE IS ABOUT, not how tidy it is. A value that \
 contains what the field asked for PLUS adjacent text from the same region of \
-the page is CORRECT: ok=true. Descriptions carry country of origin, shipping \
-and returns notes, care instructions, warranty blurbs, size guidance and \
-legal disclaimers, because that is what the page puts there -- "100% cotton. \
-Imported from China." is a correct description, not a contaminated one. Extra \
-text is a cleanup problem for a transform, never a wrong value. Say so in the \
-note and pass it.
+the page is CORRECT: ok=true. Pages habitually run a wanted value together \
+with the boilerplate beside it -- a note, a caption, a disclaimer, a legal \
+line -- because that is how the section was written, not because the scraper \
+reached too far. Extra text is a cleanup problem for a transform, never a \
+wrong value. Say so in the note and pass it.
 
 Rejecting on noise is the most expensive mistake available to you: the field \
 already reads the right part of the page, and your reason sends a component \
 off to bind somewhere else, so a working recipe is traded for a worse one. \
-Reserve ok=false for a value that is about a DIFFERENT SUBJECT -- another \
-product, a sponsored tile, a breadcrumb, a navigation label.
+Reserve ok=false for a value that is about a DIFFERENT SUBJECT -- a \
+neighbouring item, a promoted placement, a breadcrumb, a navigation label.
 
 Answer ok=false ONLY when the page text gives you a concrete reason. A value \
 you cannot corroborate either way is ok=true with a short note -- an unproven \
 value is not a wrong one, and a false rejection sends a working recipe back to \
 a human for nothing.
+
+Before calling anything absent, check the expanded section too if one is \
+shown. "Not in the text I was given" is not the same as "not on the page": \
+content can sit behind a collapsed panel, a tab or a "show more" control, and \
+the recipe is able to open those -- so something that needs a click still \
+counts as present. Reserve absent=true for what the page does not carry in \
+any state.
 
 When the page simply DOES NOT CONTAIN what the field asked for, set \
 absent=true as well as ok=false, and say what is missing. This matters more \
@@ -211,6 +217,7 @@ def build_user_message(
     data: dict[str, Any],
     page_text: str,
     provenance: dict[str, dict[str, Any]] | None = None,
+    also_revealed: str = "",
 ) -> str:
     lines = [f"Fields the caller asked for:\n{render_fields_for_prompt(fields)}", ""]
     lines.append("What the scraper returned:")
@@ -222,7 +229,24 @@ def build_user_message(
         limit = _MAX_TEXT_VALUE_CHARS if is_free_text(spec) else _MAX_VALUE_CHARS
         lines.append(f"- {name} = {_render_value(data[name], limit)}{origin}")
     lines.append("")
-    lines.append(f"Rendered page text:\n{page_text[:_MAX_PAGE_CHARS]}")
+    # Both halves get room. `also_revealed` is the build's own fullest view of
+    # the page -- accordions open, panels expanded -- and it goes in its own
+    # section rather than appended to `page_text`, because appending put it
+    # past the cap and cut it off entirely, which is the same as not sending
+    # it. See `verify_and_judge`.
+    if also_revealed:
+        budget = _MAX_PAGE_CHARS // 2
+        lines.append(f"Rendered page text:\n{page_text[:budget]}")
+        lines.append("")
+        lines.append(
+            "The SAME page earlier in this run, with sections expanded that are "
+            "collapsed above. Content here is on the page -- it needs a click to "
+            "show, which the recipe can do. Never call a field absent because it "
+            "is missing from the collapsed view alone:\n"
+            f"{also_revealed[:budget]}"
+        )
+    else:
+        lines.append(f"Rendered page text:\n{page_text[:_MAX_PAGE_CHARS]}")
     return "\n".join(lines)
 
 
@@ -265,6 +289,7 @@ async def judge_collection(
     data: dict[str, Any],
     page_text: str,
     provenance: dict[str, dict[str, Any]] | None = None,
+    also_revealed: str = "",
     llm_config: LLMConfig,
 ) -> DataVerdict:
     """One skeptical pass over the collected values.
@@ -284,7 +309,8 @@ async def judge_collection(
         return DataVerdict(passed=True)
 
     user = build_user_message(
-        judgeable, data=data, page_text=page_text, provenance=provenance
+        judgeable, data=data, page_text=page_text, provenance=provenance,
+        also_revealed=also_revealed,
     )
     try:
         raw = await chat_json_conversation(

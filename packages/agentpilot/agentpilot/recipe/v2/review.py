@@ -387,6 +387,7 @@ async def verify_and_judge(
     llm_config: LLMConfig,
     max_repairs: int = DEFAULT_MAX_REPAIRS,
     sample_limit: int = DEFAULT_MAX_SAMPLE_RUNS,
+    revealed_page_text: str = "",
     on_progress: ProgressSink | None = None,
 ) -> tuple[Recipe, ReviewResult]:
     """Run it, judge it, repair what the judge rejected, run it again.
@@ -432,12 +433,25 @@ async def verify_and_judge(
         reader.invalidate()
         snapshot = await reader.snapshot()
         page_text = serialize(snapshot).llm_text if snapshot is not None else ""
-
         await say(step="judging", collected=data)
         result.verdict = await judge_collection(
             recipe.fields,
             data=data,
             page_text=page_text,
+            # The build's own fullest view of the page -- accordions open.
+            # Without it the judge reads one post-replay snapshot with nothing
+            # expanded, and for a field that never bound, nothing ever opened
+            # the panel holding it. It then reports `absent`, which is terminal:
+            # absence is excluded from repair by design and tells a person the
+            # page does not have the value.
+            #
+            # Measured on a Zara shirt. The agent had recorded "care
+            # instructions (machine wash max 30C, no bleach, iron max 150C...)"
+            # from the opened accordion; the judge replied "no washing, drying
+            # or ironing instructions appear anywhere in the rendered text.
+            # Stop looking for care on this page." Both described what they
+            # saw; only one had been shown the panel open.
+            also_revealed=revealed_page_text,
             provenance=merge_provenance(result.runs),
             llm_config=llm_config,
         )
