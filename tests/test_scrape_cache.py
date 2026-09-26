@@ -22,6 +22,7 @@ from agentpilot.jobs.cache import (
     document_from_json,
     document_to_json,
     is_cacheable,
+    is_cacheable_result,
 )
 from crawlpilot.spi.actions import ClickAction
 from crawlpilot.spi.scrape import Document, DocumentMetadata, ExtractConfig, ScrapeOptions
@@ -256,3 +257,75 @@ def test_every_document_field_is_accounted_for() -> None:
     serialized = set(document_to_json(_document()))
     declared = {f.name for f in dataclasses.fields(Document)}
     assert declared - serialized - excluded == set()
+
+
+# ------------------------------------------------- what may be *stored*
+
+
+def test_a_clean_document_is_storable() -> None:
+    assert is_cacheable_result(_document())
+
+
+def test_a_failed_page_load_is_not_stored() -> None:
+    doc = _document()
+    doc.error = "navigation timeout"
+    assert not is_cacheable_result(doc)
+
+
+def test_a_failed_llm_extraction_is_not_stored() -> None:
+    """The defect this function exists for.
+
+    A scrape with `extract` whose model call fails returns a *successful*
+    document: markdown intact, `error` unset, `extract` null, `extract_error`
+    populated. A write guarded only on `error` therefore stores that failure and
+    serves it back for the whole TTL -- so one transient rate-limit becomes an hour
+    of deterministically-empty extractions, with no further model calls attempted.
+    """
+
+    doc = _document()
+    doc.extract = None
+    doc.extract_error = "LLM request timed out"
+    assert not is_cacheable_result(doc)
+
+
+def test_a_degraded_but_successful_extraction_is_stored() -> None:
+    """`extract_warning` means truncated input, not failure -- there *is* a result,
+    and the warning travels with it."""
+
+    doc = _document()
+    doc.extract_error = None
+    doc.extract_warning = "page truncated to fit the model's input budget"
+    assert is_cacheable_result(doc)
+
+
+# ------------------------------------------------- the cache must fail open
+
+
+async def test_a_broken_backend_reads_as_a_miss() -> None:
+    """A cache is an optimization; one that can turn a working scrape into a 500 is
+    a liability. The concrete case: a deployment whose migrations have not run
+    since `scrape_cache` was added, where every lookup raises `UndefinedTable`.
+    """
+
+    from agentpilot.jobs.cache import PostgresScrapeCache
+
+    class _BrokenPool:
+        def connection(self) -> object:
+            raise RuntimeError('relation "scrape_cache" does not exist')
+
+    cache = PostgresScrapeCache(_BrokenPool())
+    assert await cache.get("k", max_age_ms=60_000) is None
+
+
+async def test_a_broken_backend_swallows_the_write() -> None:
+    """Failing to populate a cache costs the next caller a scrape. Raising costs
+    this caller their response for no reason at all."""
+
+    from agentpilot.jobs.cache import PostgresScrapeCache
+
+    class _BrokenPool:
+        def connection(self) -> object:
+            raise RuntimeError("pool timeout")
+
+    cache = PostgresScrapeCache(_BrokenPool())
+    await cache.put("k", tenant="t", url="https://e.com", document=_document())

@@ -1769,3 +1769,56 @@ def test_nothing_matching_falls_back_to_the_plain_prefix() -> None:
     assert focus_snapshot(page, fields) == page[:_MAX_SNAPSHOT_CHARS]
 
     assert focus_snapshot(page, {"a": FieldSpec(name="a", description="the of and")}) == page[:_MAX_SNAPSHOT_CHARS]
+
+
+# --- a caption is a bare label, not merely short text naming the field -------
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # The control or heading that leads to the content. All bare labels.
+        ("care", "CLEVER CARE"),
+        ("care", "COMPOSITION, CARE & ORIGIN"),
+        ("origin", "COMPOSITION, CARE & ORIGIN"),
+        ("composition", "Composition"),
+        ("highlights", "Highlights"),
+        ("ingredients", "Ingredients"),
+        ("how_to_use", "How to use"),
+    ],
+)
+def test_a_bare_label_is_still_refused(field: str, value: str) -> None:
+    why = tautological_read(Locator(kind="css", selector=".panel"), value, field)
+    assert why is not None
+    assert "caption" in why
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # Label-plus-content. A colon introduces a value; a digit IS one.
+        ("ingredients", "Ingredients: Water, Glycerin, Niacinamide"),
+        ("composition", "Composition: 100% cotton"),
+        ("care", "Care instructions: machine wash at 30"),
+        ("benefits", "Benefits: hydrates and smooths"),
+        # Prose that happens to contain a word from the field's name. This is
+        # the one that broke Ulta: `how_to_use` contributes "use", so every
+        # short instruction containing it was thrown away.
+        ("how_to_use", "Use daily on damp hair, then rinse."),
+        # And values with no overlap at all, which never reach the check.
+        ("care", "Machine wash at 30ºC. Do not bleach."),
+        ("origin", "Made in Turkiye"),
+        ("color", "Ecru / Black"),
+    ],
+)
+def test_content_behind_a_caption_is_not_mistaken_for_one(field: str, value: str) -> None:
+    """The regression this guard caused, and the reason length alone will not do.
+
+    Panel content routinely repeats its own heading, so a rule of "short, and
+    mentions the field's name" vetoed real values for exactly the fields that
+    live behind a click -- and a rejected binding keeps the field in `_unfound`,
+    so the build explores, gives up, and reports it unresolved. Click-revealed
+    fields stopped extracting on both Ulta and Zara.
+    """
+
+    assert tautological_read(Locator(kind="css", selector=".panel"), value, field) is None

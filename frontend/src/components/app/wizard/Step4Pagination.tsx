@@ -2,7 +2,7 @@ import { ArrowDown, ChevronRight, MousePointerClick } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { PickerControls } from './PickerControls'
+import { PickerControls, type RefineKey } from './PickerControls'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 import { cn } from '@/lib/utils'
 
@@ -21,7 +21,7 @@ interface Props {
   status: PickerStatus
   onPickButton: () => void
   onCancel: () => void
-  onRefine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
+  onRefine: (key: RefineKey) => void
 }
 
 const OPTIONS: { id: PaginationMode; title: string; hint: string; icon: typeof ChevronRight }[] = [

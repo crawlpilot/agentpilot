@@ -33,7 +33,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
+import structlog
+
 from crawlpilot.spi.scrape import Document, DocumentMetadata, ScrapeOptions
+
+log = structlog.get_logger(__name__)
 
 CacheMode = Literal["enabled", "bypass", "read_only", "write_only", "disabled"]
 """`enabled` reads and writes. `bypass` skips the read but still refreshes the
@@ -112,6 +116,32 @@ def is_cacheable(options: ScrapeOptions, *, session_name: str | None = None) -> 
     if options.screenshot:
         return False
     return True
+
+
+def is_cacheable_result(document: Document) -> bool:
+    """Whether a finished scrape may be stored.
+
+    `is_cacheable` above judges the *request*; this judges what came back. Two
+    refusals, both "an error is a statement about one attempt, not about the page":
+
+    * `document.error` -- the page did not load.
+    * `document.extract_error` -- the page loaded but the LLM extraction failed.
+
+    The second one is the whole reason this is a function rather than an `if` at
+    each call site. A scrape with `extract` set whose model call times out returns
+    a *successful* document: markdown intact, `error` unset, `extract` null and
+    `extract_error` populated. Guarding only on `error` therefore stores that
+    failure and serves it back for the whole TTL -- so one transient rate-limit
+    turns into an hour of a caller's extraction being deterministically empty,
+    with no further model calls attempted and nothing in the logs to say why.
+
+    `extract_warning` does *not* block a write: that document has a real result
+    (truncated input), and the warning travels with it.
+    """
+
+    if document.error is not None:
+        return False
+    return document.extract_error is None
 
 
 def cache_key(
@@ -289,17 +319,32 @@ class PostgresScrapeCache:
         await self._pool.close()
 
     async def get(self, key: str, *, max_age_ms: int) -> Document | None:
+        """A hit, or `None` for a miss *or any failure*.
+
+        Fail-open, and not as a nicety: a cache is an optimization, and an
+        optimization that can turn a working scrape into a 500 is a liability. The
+        concrete case is a deployment whose `alembic upgrade head` has not run
+        since this table was added -- `scrape_cache` does not exist, every lookup
+        raises `UndefinedTable`, and without this every single scrape fails. Same
+        for a connection-pool timeout under load, which is exactly when the cache
+        matters most and exactly when it is most likely to be unavailable.
+        """
+
         import uuid
 
         from psycopg.rows import dict_row
 
-        async with self._pool.connection() as conn:
-            async with conn.cursor(row_factory=dict_row) as cur:
-                await cur.execute(
-                    "SELECT document, created_at FROM scrape_cache WHERE cache_key = %s",
-                    (key,),
-                )
-                row = await cur.fetchone()
+        try:
+            async with self._pool.connection() as conn:
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(
+                        "SELECT document, created_at FROM scrape_cache WHERE cache_key = %s",
+                        (key,),
+                    )
+                    row = await cur.fetchone()
+        except Exception as exc:  # noqa: BLE001 -- degrade to a miss, never raise
+            log.warning("scrape_cache.read_failed", error=str(exc))
+            return None
         if row is None:
             return None
         age_ms = (datetime.now(UTC) - row["created_at"]).total_seconds() * 1000
@@ -308,6 +353,17 @@ class PostgresScrapeCache:
         return document_from_json(row["document"], document_id=str(uuid.uuid4()))
 
     async def put(self, key: str, *, tenant: str, url: str, document: Document) -> None:
+        """Store, or give up quietly. Same reasoning as `get`: failing to populate
+        a cache costs the next caller a scrape, while raising costs this one their
+        response for no reason at all."""
+
+
+        try:
+            await self._put(key, tenant=tenant, url=url, document=document)
+        except Exception as exc:  # noqa: BLE001 -- see the docstring
+            log.warning("scrape_cache.write_failed", error=str(exc))
+
+    async def _put(self, key: str, *, tenant: str, url: str, document: Document) -> None:
         from psycopg.types.json import Jsonb
 
         async with self._pool.connection() as conn:

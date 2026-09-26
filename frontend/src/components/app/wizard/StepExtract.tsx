@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Reorderable } from '@/components/ui/reorderable'
 import { CandidateChain } from './CandidateChain'
 import { CleanupEditor } from './CleanupEditor'
-import { PickerControls } from './PickerControls'
+import { PickerControls, type RefineKey } from './PickerControls'
 import { JsonFieldPicker } from './JsonFieldPicker'
 import { describeTypeSpec, moveItem } from '@/lib/recipe/document'
 import { READ_ATTRIBUTES } from '@/lib/recipe/attributes'
@@ -52,7 +52,7 @@ interface Props {
   onPickAction: (op: StepOp) => void
   onAddPlainAction: (op: StepOp) => void
   onCancel: () => void
-  onRefine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter') => void
+  onRefine: (key: RefineKey) => void
   onTestSelector?: (selector: string) => Promise<number>
   onFindInJson?: (draft: FieldDraft, index: number) => void
   jsonProbeReady: boolean

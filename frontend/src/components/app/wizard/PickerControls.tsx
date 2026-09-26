@@ -2,12 +2,22 @@ import { ChevronDown, ChevronUp, CornerDownLeft, MousePointerClick, Pin, X } fro
 import { Button } from '@/components/ui/button'
 import type { PickerStatus } from '@/hooks/usePagePicker'
 
+/**
+ * The refine actions a picker understands.
+ *
+ * Exported so every call site names the same union. `Unpin` was added here for
+ * the pinning fix and the two wizard steps kept a three-key copy of this type,
+ * which failed `tsc -b` -- and `npm run build` runs `tsc -b` first, so the SPA
+ * could not be built at all while that drifted.
+ */
+export type RefineKey = 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin'
+
 interface Props {
   status: PickerStatus
   label: string
   onStart: () => void
   onCancel: () => void
-  onRefine: (key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') => void
+  onRefine: (key: RefineKey) => void
   disabled?: boolean
 }
 

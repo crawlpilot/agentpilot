@@ -56,6 +56,7 @@ from agentpilot.jobs.cache import (
     ScrapeCacheProtocol,
     cache_key,
     is_cacheable,
+    is_cacheable_result,
 )
 from agentpilot.jobs.limiter import (
     RETRY_STATUS_CODES,
@@ -241,10 +242,9 @@ class CrawlWorkerLoop:
                 warm_pool=self._warm_pool,
             )
             self._record_host_response(domain, document)
-            if key is not None and policy.may_write and document.error is None:
-                # Never cache a failure. An error document is a statement about
-                # one attempt, not about the page, and storing it would turn a
-                # transient blip into an hour of confidently-served failures.
+            if key is not None and policy.may_write and is_cacheable_result(document):
+                # Covers a failed LLM extraction as well as a failed page load --
+                # see `cache.is_cacheable_result`.
                 await self._cache.put(
                     key, tenant=job.tenant, url=task.url, document=document
                 )

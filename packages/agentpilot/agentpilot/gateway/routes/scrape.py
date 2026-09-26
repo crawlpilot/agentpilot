@@ -26,7 +26,12 @@ from agentpilot.gateway.schemas import (
     ScrapeResponse,
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
-from agentpilot.jobs.cache import CachePolicy, cache_key, is_cacheable
+from agentpilot.jobs.cache import (
+    CachePolicy,
+    cache_key,
+    is_cacheable,
+    is_cacheable_result,
+)
 from agentpilot.llm.structured import extract_structured
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
@@ -171,10 +176,11 @@ async def scrape(
             burn_tracker=wiring.burn_tracker,
         )
 
-    if key is not None and policy.may_write and document.error is None:
-        # Never for an error document: an error
-        # describes one attempt, not the page, and caching it would turn a
-        # transient failure into an hour of confidently-served failures.
+    if key is not None and policy.may_write and is_cacheable_result(document):
+        # `is_cacheable_result`, not `document.error is None`: a scrape whose LLM
+        # extraction failed returns a *successful* document with `extract_error`
+        # set, and storing that serves the failure back for the whole TTL without
+        # ever retrying the model. See that function's docstring.
         await wiring.scrape_cache.put(
             key, tenant=req.tenant, url=req.url, document=document
         )
