@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from urllib.robotparser import RobotFileParser
 
-from agentpilot.crawl import dedup, filters, link_extractor
+from agentpilot.crawl import dedup, filters, link_extractor, nonsense, scorers
 from agentpilot.crawl.types import CrawlOptions
 
 
@@ -59,6 +59,15 @@ def expand_frontier(
         )
         if not decision.allowed:
             continue
+        if nonsense.is_nonsense(normalized):
+            continue
         seen.add(normalized)
         out.append(normalized)
+
+    if options.score_urls:
+        # The caller's `limit` is spent on whatever this returns first, and the
+        # worker enqueues in order -- so this ordering *is* which pages a bounded
+        # crawl comes back with. In DOM order that means the navigation and the
+        # footer, since those are the first links on nearly every page.
+        out = scorers.rank_urls(out, query=options.query)
     return out

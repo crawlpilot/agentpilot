@@ -301,7 +301,7 @@ export interface PreviewStep {
    *
    * Typed `unknown` rather than `PickPayload` so this module stays usable by
    * the studio without dragging the picker's payload shape into it; the two
-   * consumers that care (`StepRecorder`, `fromPick`) narrow it themselves.
+   * consumers that care (`assistRoute`, `RouteEditor`) narrow it themselves.
    */
   pick?: unknown
   /**

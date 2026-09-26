@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from agentpilot.crawl.sources import DEFAULT_SOURCES, SourceName
 from crawlpilot.spi.scrape import ScrapeOptions
 
 SitemapMode = Literal["skip", "include", "only"]
@@ -52,6 +53,16 @@ class CrawlOptions:
     `None` takes the deployment's default (`jobs.cache.DEFAULT_MAX_AGE_MS`).
     Job-level rather than per-page, alongside `delay_ms`: freshness is a
     property of why the caller is crawling, not of any one URL in it."""
+    query: str | None = None
+    """What the crawl is looking for, used to prioritise the frontier
+    (`crawl.scorers.relevance`). Not a filter -- nothing is excluded for failing
+    to match; matching URLs are simply fetched first, which is what decides
+    *which* `limit` pages a bounded crawl of a large site comes back with."""
+    score_urls: bool = True
+    """Order the frontier by `crawl.scorers.composite` instead of the order links
+    appeared in the DOM. On by default: DOM order means a `limit` of 500 against a
+    50,000-page site returns that site's navigation and footer, which is nobody's
+    intent. Set `False` for the previous first-seen behaviour."""
     scrape_options: ScrapeOptions = field(default_factory=ScrapeOptions)
 
 
@@ -90,6 +101,27 @@ class MapOptions:
     max_crawl_pages: int = 500
     """Hard cap on pages the recursive fallback fetches, independent of
     `limit` (which caps returned URLs) -- guards against runaway fan-out."""
+    sources: tuple[SourceName, ...] = DEFAULT_SOURCES
+    """Which discovery sources to run (`crawl.sources`). The default four only
+    ever talk to the target site. `cc`/`wayback`/`crt` send the target domain to a
+    third-party index and `probe` sends speculative requests to the site -- both
+    are opt-in for that reason, not because they are less useful."""
+    source_timeout: float = 30.0
+    """Per-source deadline. One slow source cannot set the latency of the whole
+    request; it just contributes nothing and is reported."""
+    detect_soft_404: bool = True
+    """Fingerprint the site's not-found page and drop results that match it. Costs
+    one request per origin and is what keeps an SPA from reporting every probed
+    path as a real page."""
+    include_metadata: bool = False
+    """Fetch each result's `<title>` and description (`crawl.head`). Off by
+    default because it costs one bounded request per URL -- worth it for a
+    hundred-link map a human will read, wasteful for a hundred-thousand-link one
+    feeding a pipeline."""
+    filter_nonsense: bool = True
+    """Drop site machinery -- assets, webpack chunks, `robots.txt`, archived
+    sitemaps (`crawl.nonsense`). Mostly matters once `wayback` or `cc` are on;
+    they return a great deal of it."""
     timeout_ms: int | None = None
 
 
@@ -98,3 +130,7 @@ class MapLink:
     url: str
     title: str | None = None
     description: str | None = None
+    score: float | None = None
+    """The ranking score (`crawl.scorers.composite`) when `search` was given, so a
+    caller can see *why* the order is what it is rather than having to trust it.
+    `None` when no query was supplied and the set is unranked."""

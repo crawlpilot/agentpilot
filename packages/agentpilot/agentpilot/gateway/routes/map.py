@@ -91,6 +91,11 @@ async def map_urls(
         allow_external_links=req.allow_external_links,
         filter_by_path=req.filter_by_path,
         max_discovery_depth=req.max_discovery_depth,
+        sources=tuple(req.sources),
+        source_timeout=req.source_timeout,
+        detect_soft_404=req.detect_soft_404,
+        include_metadata=req.include_metadata,
+        filter_nonsense=req.filter_nonsense,
         timeout_ms=req.timeout,
     )
 
@@ -118,7 +123,12 @@ async def map_urls(
     return MapResponse(
         success=True,
         links=[
-            MapLinkOut(url=link.url, title=link.title, description=link.description)
+            MapLinkOut(
+                url=link.url,
+                title=link.title,
+                description=link.description,
+                score=link.score,
+            )
             for link in links
         ],
         warning=warning,

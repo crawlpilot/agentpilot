@@ -72,6 +72,8 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
         max_concurrency=req.max_concurrency,
         cache_mode=req.cache_mode,
         max_age_ms=req.max_age_ms,
+        query=req.query,
+        score_urls=req.score_urls,
         scrape_options=ScrapeOptions(
             formats=tuple(req.scrape_options.formats),
             only_main_content=req.scrape_options.only_main_content,

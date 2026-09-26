@@ -87,6 +87,8 @@ def dump_crawl_options(options: CrawlOptions) -> dict[str, Any]:
         "delay_ms": options.delay_ms,
         "cache_mode": options.cache_mode,
         "max_age_ms": options.max_age_ms,
+        "query": options.query,
+        "score_urls": options.score_urls,
         "max_concurrency": options.max_concurrency,
         "scrape_options": dump_scrape_options(options.scrape_options),
     }
@@ -109,6 +111,8 @@ def load_crawl_options(data: dict[str, Any]) -> CrawlOptions:
         delay_ms=data.get("delay_ms"),
         cache_mode=data.get("cache_mode", "enabled"),
         max_age_ms=data.get("max_age_ms"),
+        query=data.get("query"),
+        score_urls=data.get("score_urls", True),
         max_concurrency=data.get("max_concurrency", 10),
         scrape_options=load_scrape_options(data.get("scrape_options")),
     )

@@ -1,15 +1,19 @@
-"""`agentpilot.crawl.seed.discover_for_map` + `agentpilot.crawl.rank` -- the
-richer discovery ported from Firecrawl: robots.txt-declared sitemaps, the
-bounded recursive-crawl fallback, `filter_by_path`, and cosine `search`
-ranking. Driver-free, exercised over `pytest_httpserver` like the existing
-sitemap tests."""
+"""`agentpilot.crawl.seed.discover_for_map` -- the richer discovery ported from
+Firecrawl: robots.txt-declared sitemaps, the bounded recursive-crawl fallback,
+`filter_by_path`, and `search` ranking. Driver-free, exercised over
+`pytest_httpserver` like the existing sitemap tests.
+
+The two `rank.cosine_rank` tests that used to live here moved to
+`test_crawl_scorers.py` as ranking assertions against `scorers.rank_urls`, which
+replaced that module -- same property (the URL matching the query comes first),
+now checked against the function that actually runs."""
 
 from __future__ import annotations
 
 from pytest_httpserver import HTTPServer
 
-from agentpilot.crawl import rank, seed
-from agentpilot.crawl.types import MapLink, MapOptions
+from agentpilot.crawl import seed
+from agentpilot.crawl.types import MapOptions
 from crawlpilot.spi.egress import EgressPolicy
 
 POLICY = EgressPolicy()
@@ -22,24 +26,6 @@ def _urlset(*locs: str) -> str:
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
         f"{body}</urlset>"
     )
-
-
-# --- cosine ranking (rank.py) ---
-
-
-def test_cosine_rank_orders_by_url_relevance() -> None:
-    links = [
-        MapLink("https://x.test/about"),
-        MapLink("https://x.test/team"),
-        MapLink("https://x.test/pricing"),
-    ]
-    ranked = rank.cosine_rank(links, "pricing")
-    assert ranked[0].url == "https://x.test/pricing"
-
-
-def test_cosine_rank_all_punctuation_query_leaves_order_unchanged() -> None:
-    links = [MapLink("https://x.test/a"), MapLink("https://x.test/b")]
-    assert rank.cosine_rank(links, "!!!") == links
 
 
 # --- robots.txt-declared sitemaps ---
@@ -133,3 +119,145 @@ async def test_filter_by_path_disabled_keeps_off_path_links(httpserver: HTTPServ
     options = MapOptions(url=httpserver.url_for("/docs"), sitemap="only", filter_by_path=False)
     urls = [link.url for link in await seed.discover_for_map(options, POLICY)]
     assert httpserver.url_for("/blog/post") in urls
+
+
+# --- Phase 3: source selection, ranking, metadata, nonsense filtering ---
+
+
+async def test_source_selection_narrows_what_runs(httpserver: HTTPServer) -> None:
+    """`sources=["sitemap"]` must not also fetch the homepage. Discovery cost is
+    the point of the parameter."""
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/from-sitemap")), content_type="application/xml"
+    )
+    options = MapOptions(url=httpserver.url_for("/"), sources=("sitemap",), limit=10)
+    links = await seed.discover_for_map(options, POLICY)
+    assert [link.url for link in links] == [httpserver.url_for("/from-sitemap")]
+
+
+async def test_the_sitemap_flag_still_masks_the_source_list(
+    httpserver: HTTPServer,
+) -> None:
+    """`sitemap="skip"` predates `sources` and callers use it, so it has to keep
+    working as a mask over whatever sources are named."""
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/from-sitemap")), content_type="application/xml"
+    )
+    httpserver.expect_request("/").respond_with_data(
+        f'<html><body><a href="{httpserver.url_for("/from-homepage")}">x</a></body></html>',
+        content_type="text/html",
+    )
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap", "homepage"),
+        sitemap="skip",
+        limit=10,
+        max_discovery_depth=0,
+    )
+    urls = [link.url for link in await seed.discover_for_map(options, POLICY)]
+    assert httpserver.url_for("/from-homepage") in urls
+    assert httpserver.url_for("/from-sitemap") not in urls
+
+
+async def test_search_ranks_the_whole_set_not_an_arbitrary_slice(
+    httpserver: HTTPServer,
+) -> None:
+    """The bug this fixes: the cap used to be applied during collection, so
+    ranking only ever reordered the first `limit` URLs discovery happened to
+    find. With `limit=2` the pricing page was simply never in the candidate set."""
+
+    locs = [httpserver.url_for(f"/filler-{n}") for n in range(8)]
+    locs.append(httpserver.url_for("/pricing"))
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(*locs), content_type="application/xml"
+    )
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap",),
+        search="pricing",
+        limit=2,
+    )
+    links = await seed.discover_for_map(options, POLICY)
+    assert links[0].url == httpserver.url_for("/pricing")
+    assert links[0].score is not None
+
+
+async def test_no_search_leaves_the_score_unset(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/a")), content_type="application/xml"
+    )
+    options = MapOptions(url=httpserver.url_for("/"), sources=("sitemap",), limit=5)
+    links = await seed.discover_for_map(options, POLICY)
+    assert links[0].score is None
+
+
+async def test_nonsense_is_filtered_out_of_the_results(httpserver: HTTPServer) -> None:
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(
+            httpserver.url_for("/real-page"),
+            httpserver.url_for("/static/app.js"),
+            httpserver.url_for("/favicon.ico"),
+        ),
+        content_type="application/xml",
+    )
+    options = MapOptions(url=httpserver.url_for("/"), sources=("sitemap",), limit=10)
+    urls = [link.url for link in await seed.discover_for_map(options, POLICY)]
+    assert urls == [httpserver.url_for("/real-page")]
+
+
+async def test_nonsense_filtering_can_be_turned_off(httpserver: HTTPServer) -> None:
+    """Uses a `.well-known` path rather than a `.js` one on purpose: assets are
+    dropped by `filters.deny_files` regardless of this flag, so a test asserting
+    `.js` comes back with `filter_nonsense=False` would be asserting something the
+    pipeline never does. `/.well-known/...` has no extension, so `nonsense` is the
+    only thing standing between it and the result set."""
+
+    only_nonsense_catches_this = httpserver.url_for("/.well-known/change-password")
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/real-page"), only_nonsense_catches_this),
+        content_type="application/xml",
+    )
+
+    on = MapOptions(url=httpserver.url_for("/"), sources=("sitemap",), limit=10)
+    assert only_nonsense_catches_this not in [
+        link.url for link in await seed.discover_for_map(on, POLICY)
+    ]
+
+    off = MapOptions(
+        url=httpserver.url_for("/"), sources=("sitemap",), limit=10, filter_nonsense=False
+    )
+    assert only_nonsense_catches_this in [
+        link.url for link in await seed.discover_for_map(off, POLICY)
+    ]
+
+
+async def test_include_metadata_fills_titles_and_drops_dead_urls(
+    httpserver: HTTPServer,
+) -> None:
+    """The head fetch doubles as the liveness check -- a URL an index remembers and
+    the site no longer serves is not a result."""
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/alive"), httpserver.url_for("/dead")),
+        content_type="application/xml",
+    )
+    httpserver.expect_request("/alive").respond_with_data(
+        "<html><head><title>Alive</title>"
+        '<meta name="description" content="Still here"></head><body>x</body></html>',
+        content_type="text/html",
+    )
+    httpserver.expect_request("/dead").respond_with_data("", status=404)
+
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap",),
+        limit=10,
+        include_metadata=True,
+        detect_soft_404=False,
+    )
+    links = await seed.discover_for_map(options, POLICY)
+    assert [link.url for link in links] == [httpserver.url_for("/alive")]
+    assert links[0].title == "Alive"
+    assert links[0].description == "Still here"

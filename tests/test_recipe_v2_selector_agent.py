@@ -1464,6 +1464,51 @@ def test_a_single_word_needle_does_not_escape_either() -> None:
     assert tautological_read(loc, "COMPOSITION, CARE & ORIGIN", "origin") is not None
 
 
+def test_a_caption_is_refused_however_it_was_reached() -> None:
+    """The regression that let the Zara `care` bug back in through another door.
+
+    Both checks used to sit behind `if not needle: return None`, so a locator
+    that reached the caption by CSS rather than by its text was never examined.
+    `focus_snapshot` then made exactly that the likely proposal: once the
+    snapshot budget followed the field's own vocabulary, the model was shown
+    the region around the word "care" on a collapsed Zara page -- where the
+    nearest element is the CleverCare badge -- and proposed
+    `.product-detail-actions__clevercare` instead of an `ax_role` name match.
+    Same caption, same freeze, same field lost for ever.
+
+    Reading back your own search term needs a search term. *Being a caption* is
+    a property of the value, not of how it was found.
+    """
+
+    css = Locator(kind="css", selector=".product-detail-actions__clevercare")
+    why = tautological_read(css, "CLEVER CARE", "care")
+    assert why is not None
+    assert "caption" in why
+
+    # And by xpath, which has no needle either.
+    xpath = Locator(kind="xpath", selector="//div[@class='care']")
+    assert tautological_read(xpath, "Care", "care") is not None
+
+
+def test_a_needleless_locator_reading_real_content_still_binds() -> None:
+    """The other half of the same change, and the one that keeps Ulta working.
+
+    Widening the caption check to every locator kind must not start refusing
+    CSS selectors that read actual content. An Ulta how-to-use panel is prose:
+    it is past the caption length, so it is a value, not a label -- which is
+    the whole reason length is the guard.
+    """
+
+    css = Locator(kind="css", selector=".pdp-how-to-use")
+    prose = (
+        "Apply an adequate amount to damp hair, massage gently into the scalp "
+        "and rinse thoroughly. Repeat if necessary and follow with conditioner."
+    )
+    assert tautological_read(css, prose, "how_to_use") is None
+    # Short, but it answers the field rather than naming it.
+    assert tautological_read(css, "Made in China", "origin") is None
+
+
 def test_a_caption_is_matched_on_word_boundaries() -> None:
     """`origin` must match "Composition, care & origin" but not "original
     price"; `care` must match "CARE" but not "careful"."""

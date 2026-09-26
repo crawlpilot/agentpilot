@@ -24,7 +24,18 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
-from agentpilot.crawl import dedup, filters, link_extractor, rank, robots, sitemap
+from agentpilot.crawl import (
+    dedup,
+    filters,
+    head,
+    link_extractor,
+    nonsense,
+    robots,
+    scorers,
+    sitemap,
+    soft404,
+    sources,
+)
 from agentpilot.crawl.types import CrawlOptions, MapLink, MapOptions
 from crawlpilot.egress.httpx_guard import guarded_get
 from crawlpilot.spi.egress import EgressPolicy
@@ -155,6 +166,24 @@ async def _discover_via_crawl(
     return discovered
 
 
+def _selected_sources(options: MapOptions) -> tuple[sources.SourceName, ...]:
+    """`options.sources` narrowed by the older `sitemap` flag.
+
+    Both exist because `sitemap` came first and callers use it: `"only"` means
+    sitemap-derived sources alone, `"skip"` means everything except those. Keeping
+    the flag as a mask over the source list means an existing request behaves
+    exactly as it did while a new one can name sources directly.
+    """
+
+    selected = tuple(dict.fromkeys(options.sources))
+    sitemap_derived = {"sitemap", "robots"}
+    if options.sitemap == "only":
+        return tuple(name for name in selected if name in sitemap_derived)
+    if options.sitemap == "skip":
+        return tuple(name for name in selected if name not in sitemap_derived)
+    return selected
+
+
 async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[MapLink]:
     policy_filter = filters.FilterPolicy(
         include_paths=options.include_paths,
@@ -165,11 +194,46 @@ async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[Ma
         deny_files=True,
     )
 
-    candidates: list[str] = []
-    if options.sitemap != "skip":
-        candidates.extend(await _gather_sitemap_urls(options.url, policy))
-    if options.sitemap != "only":
+    origin = _origin(options.url)
+    base_domain = urlparse(options.url).hostname or ""
+
+    # Before the sources, because `probe` needs it and because a site that
+    # answers 200 for everything makes every other source's output suspect too.
+    fingerprint = None
+    if options.detect_soft_404:
+        fingerprint = await soft404.fingerprint(origin, policy)
+
+    selected = _selected_sources(options)
+    report = await sources.gather(
+        selected,
+        sources.SourceContext(
+            base_domain=base_domain,
+            origin=origin,
+            seed_url=options.url,
+            policy=policy,
+            max_urls_per_source=options.limit,
+            include_subdomains=options.include_subdomains,
+            source_timeout=options.source_timeout,
+            fingerprint=fingerprint,
+        ),
+    )
+
+    candidates: list[str] = list(report.urls)
+    # The recursive crawl stays, as the fallback it always was: on a site with no
+    # sitemap, no feed and nothing in any index, following links from the seed
+    # page is the only thing that finds anything. Skipped when the sources
+    # already produced plenty, since it is by far the most expensive of them.
+    if options.sitemap != "only" and len(candidates) < options.limit:
         candidates.extend(await _discover_via_crawl(options, policy, policy_filter))
+
+    published = {
+        entry.url: entry.published
+        for entry in report.feed_entries
+        if entry.published is not None
+    }
+    feed_titles = {
+        entry.url: entry.title for entry in report.feed_entries if entry.title
+    }
 
     # Firecrawl's `filterByPath`: mapping `example.com/blog` should return
     # blog URLs, not the whole site. Only meaningful for a non-root seed path,
@@ -181,11 +245,13 @@ async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[Ma
         and seed_path not in ("", "/")
     )
 
+    # Normalize and filter first, keeping every survivor -- the cap is applied
+    # after ranking now, not during collection. Taking the first `limit` and then
+    # ordering them would rank an arbitrary slice, which is the bug that made the
+    # old `search` parameter much less useful than it looked.
     seen: set[str] = set()
-    out: list[MapLink] = []
+    kept: list[str] = []
     for raw in candidates:
-        if len(out) >= options.limit:
-            break
         normalized = dedup.normalize_url(
             raw,
             ignore_query_parameters=options.ignore_query_parameters,
@@ -193,17 +259,57 @@ async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[Ma
         )
         if normalized is None or normalized in seen:
             continue
+        if options.filter_nonsense and nonsense.is_nonsense(normalized):
+            continue
         if not filters.evaluate(normalized, seed_url=options.url, policy=policy_filter).allowed:
             continue
         if apply_path_filter and not (urlparse(normalized).path or "/").startswith(seed_path):
             continue
         seen.add(normalized)
-        out.append(MapLink(url=normalized))
+        kept.append(normalized)
 
-    # Rank within the already-capped set (matches Firecrawl applying its
-    # `min(MAX_MAP_LIMIT, limit)` cutoff *before* cosine similarity).
     if options.search:
-        out = rank.cosine_rank(out, options.search)
+        # Replaces the `rank.cosine_rank` port that used to live here. That
+        # compared the query against the URL *string* with a bag-of-words cosine,
+        # which is the same signal `scorers.relevance` computes -- URLs rarely
+        # repeat a term, so term frequency bought nothing -- and `composite` adds
+        # depth, shape and the publication dates feeds now supply. `rank.py` had
+        # no other caller and is deleted rather than left as dead code.
+        ordered = scorers.rank_urls(kept, query=options.search, published=published)
+    else:
+        ordered = kept
+
+    ordered = ordered[: options.limit]
+
+    metadata: dict[str, head.HeadMetadata] = {}
+    if options.include_metadata and ordered:
+        # After the cap: fetching heads for a hundred thousand candidates in order
+        # to return a hundred of them would be the most expensive possible way to
+        # answer this.
+        metadata = await head.fetch_many(ordered, policy)
+
+    query_terms = scorers.tokenize(options.search) if options.search else []
+    out: list[MapLink] = []
+    for url in ordered:
+        meta = metadata.get(url)
+        if meta is not None and not meta.alive:
+            # The head fetch doubles as the liveness check. A URL that came from an
+            # index months out of date and no longer answers is not a result.
+            continue
+        out.append(
+            MapLink(
+                url=url,
+                title=(meta.title if meta else None) or feed_titles.get(url),
+                description=meta.description if meta else None,
+                score=(
+                    scorers.composite(
+                        url, query_terms=query_terms, published=published.get(url)
+                    )
+                    if options.search
+                    else None
+                ),
+            )
+        )
     return out
 
 

@@ -294,6 +294,41 @@ class MapRequest(BaseModel):
     allow_external_links: bool = False
     filter_by_path: bool = True
     max_discovery_depth: int = Field(default=2, ge=0, le=10)
+    sources: list[
+        Literal["sitemap", "robots", "homepage", "feed", "cc", "wayback", "crt", "probe"]
+    ] = Field(default_factory=lambda: ["sitemap", "robots", "homepage", "feed"])
+    """Which discovery sources to run.
+
+    The four defaults only ever talk to the target site: its sitemap, the
+    sitemaps its `robots.txt` declares, its homepage's links, and its RSS/Atom
+    feeds.
+
+    The rest are opt-in because each changes what the request *does*, not just
+    how well it works. `cc` (Common Crawl), `wayback` (Internet Archive) and
+    `crt` (Certificate Transparency) send the target domain to a third-party
+    index — which is how they find URLs the site never linked, and also a
+    disclosure the caller should be making deliberately. `probe` sends dozens of
+    speculative requests to the site itself.
+
+    `crt` finds subdomains no sitemap mentions and is usually the largest single
+    win on a domain-wide map; `wayback` is the richest source for a long-lived
+    site and by far the noisiest."""
+    source_timeout: float = Field(default=30.0, gt=0, le=120)
+    """Per-source deadline in seconds. One slow source cannot set the latency of
+    the request -- it contributes nothing and is reported. Distinct from
+    `timeout`, which bounds the whole call."""
+    detect_soft_404: bool = True
+    """Fingerprint the site's not-found page and drop results matching it. Single-
+    page apps answer 200 for every path, so without this a `probe` run reports
+    every path it tried as a real page."""
+    include_metadata: bool = False
+    """Fill each result's `title`/`description` with a bounded head fetch. Costs
+    one request per returned URL, and doubles as a liveness check -- URLs that no
+    longer answer are dropped. Worth it for a map a human reads; wasteful for a
+    hundred-thousand-URL one feeding a pipeline."""
+    filter_nonsense: bool = True
+    """Drop site machinery: assets, webpack chunks, archived `sitemap.xml`s.
+    Mostly matters with `wayback`/`cc` on, which return a great deal of it."""
     timeout: int | None = Field(default=None, gt=0)
     """Overall discovery deadline in milliseconds; on expiry the route
     returns HTTP 408 (mirrors Firecrawl's `MapTimeoutError`)."""
@@ -303,7 +338,12 @@ class MapLinkOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str
     title: str | None = None
+    """Filled only when `include_metadata` was set, or when the URL came from a
+    feed (which supplies entry titles for free)."""
     description: str | None = None
+    score: float | None = None
+    """The 0..1 ranking score behind this result's position, when `search` was
+    given. Returned so a caller can see why the order is what it is."""
 
 
 class MapResponse(BaseModel):
@@ -379,6 +419,14 @@ class CrawlRequest(BaseModel):
     """Minimum gap between requests to one host. The effective delay is the
     larger of this and the host's robots.txt `Crawl-delay`."""
     max_concurrency: int = 10
+    query: str | None = None
+    """What this crawl is looking for. Not a filter -- nothing is excluded for
+    failing to match. It orders the frontier, which decides *which* `limit` pages
+    a bounded crawl of a large site returns."""
+    score_urls: bool = True
+    """Order the frontier by relevance, path depth and URL shape instead of the
+    order links appeared in the page. On by default: in DOM order a `limit` of 500
+    against a 50,000-page site returns that site's navigation and footer."""
     cache_mode: Literal["enabled", "bypass", "read_only", "write_only", "disabled"] = "enabled"
     """`enabled` reads and writes the scrape cache. `bypass` always fetches but
     still refreshes the entry -- the way to force one URL. `read_only` serves a
