@@ -70,6 +70,29 @@ def test_crawl_options_roundtrip_carries_the_cache_policy() -> None:
     assert loaded.delay_ms == 2_000
 
 
+def test_crawl_options_roundtrip_carries_the_adaptive_settings() -> None:
+    """The worker reconstructs these from `jobs.options`, so a field that does not
+    survive means a crawl asked to stop adaptively silently runs to `limit`."""
+
+    original = CrawlOptions(
+        url="https://example.com",
+        query="refund policy",
+        confidence_threshold=0.75,
+        score_urls=False,
+    )
+    loaded = load_crawl_options(_roundtrip(dump_crawl_options(original)))
+    assert loaded.query == "refund policy"
+    assert loaded.confidence_threshold == 0.75
+    assert loaded.score_urls is False
+
+
+def test_crawl_options_load_defaults_the_adaptive_settings_off() -> None:
+    loaded = load_crawl_options({"url": "https://example.com"})
+    assert loaded.query is None
+    assert loaded.confidence_threshold is None
+    assert loaded.score_urls is True
+
+
 def test_crawl_options_load_defaults_the_cache_policy() -> None:
     """Rows written before these fields existed must load as "cache on, default
     freshness" rather than raising -- there are `jobs.options` rows in flight."""

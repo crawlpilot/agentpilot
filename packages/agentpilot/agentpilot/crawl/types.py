@@ -116,6 +116,17 @@ class MapOptions:
     source_timeout: float = 30.0
     """Per-source deadline. One slow source cannot set the latency of the whole
     request; it just contributes nothing and is reported."""
+    max_subdomains: int = 10
+    """How many discovered subdomains to scan for their own URLs.
+
+    `crt`/`wayback` report *hosts*; without this they only widened the URL set
+    indirectly, through URLs those sources already happened to hold. Scanning each
+    confirmed host's own sitemap and homepage is what turns "map example.com" into
+    something that actually covers the domain rather than just `www`.
+
+    Bounded because it is a fan-out: each host costs a DNS lookup and two requests.
+    `0` disables the pass. Only runs when `include_subdomains` is set and a source
+    that reports hosts was enabled."""
     detect_soft_404: bool = True
     """Fingerprint the site's not-found page and drop results that match it. Costs
     one request per origin and is what keeps an SPA from reporting every probed

@@ -132,20 +132,40 @@ def stabilize_action(
 
 
 def _to_step(action: spi_actions.Action, target: Locator | None) -> Step | None:
+    """One action as a step, always `optional` with `on_error: continue`.
+
+    **Not the dataclass defaults, which are `on_error="fail"`.** Those were what
+    these steps carried, and it contradicted the rule the rest of this system
+    states and follows: `_route_for` says "every step is `optional`/`on_error:
+    continue`, so a redundant one costs seconds where a missing one costs the
+    field", and `dismiss_step_for` and `wait_step_for` both honour it. Only the
+    steps captured from the agent did not, and the difference is not small --
+    `replay._replay_group` treats a failed non-optional step as fatal for the
+    WHOLE group, so a single click whose control has since moved took every
+    field in that group down with it rather than costing its own reveal.
+
+    Observed on a Zara product page: a group's route ended with a captured
+    click on a "close" control, that control was not there on the next run, and
+    the group returned nothing at all -- not a degraded read, nothing.
+    """
+
+    common = {"on_error": "continue", "optional": True}
     if isinstance(action, spi_actions.ClickAction):
-        return Step(op="click", target=target)
+        return Step(op="click", target=target, **common)
     if isinstance(action, spi_actions.FillAction):
-        return Step(op="fill", target=target, args={"text": action.text})
+        return Step(op="fill", target=target, args={"text": action.text}, **common)
     if isinstance(action, spi_actions.HoverAction):
-        return Step(op="hover", target=target)
+        return Step(op="hover", target=target, **common)
     if isinstance(action, spi_actions.SelectOptionAction):
-        return Step(op="select_option", target=target, args={"values": list(action.values)})
+        return Step(
+            op="select_option", target=target, args={"values": list(action.values)}, **common
+        )
     if isinstance(action, spi_actions.ScrollAction):
-        return Step(op="scroll", target=target, args={"direction": action.direction})
+        return Step(op="scroll", target=target, args={"direction": action.direction}, **common)
     if isinstance(action, spi_actions.WaitAction):
-        return Step(op="wait", args={"ms": action.ms} if action.ms else {})
+        return Step(op="wait", args={"ms": action.ms} if action.ms else {}, **common)
     if isinstance(action, spi_actions.PressAction):
-        return Step(op="press", args={"key": action.key})
+        return Step(op="press", args={"key": action.key}, **common)
     return None
 
 
@@ -266,6 +286,62 @@ def dismiss_step_for(overlay: dict[str, Any]) -> Step | None:
         optional=True,
         label="close the dialog",
     )
+
+
+#: How a step added by `dismiss_step_for` announces itself, so a route can be
+#: told from the tidying that happened to be interleaved with it.
+DISMISS_LABEL_PREFIX = "close the dialog"
+
+#: What a control is called when its job is to make something go away. Matched
+#: against an `ax_role` target's `name_contains`, which is the agent's own
+#: click, and deliberately narrow: mislabelling a reveal as cleanup drops it
+#: from the route and costs the field, which is the expensive direction.
+_CLEANUP_NAMES = ("close", "dismiss", "cerrar", "×", "✕")
+
+
+def is_cleanup(step: Step) -> bool:
+    """Whether this step's job is to put something away rather than reveal it."""
+
+    if step.label and step.label.startswith(DISMISS_LABEL_PREFIX):
+        return True
+    if step.op == "press" and str(step.args.get("key", "")).lower() == "escape":
+        return True
+    if step.op != "click" or step.target is None:
+        return False
+    name = (step.target.name_contains or "").strip().casefold()
+    if not name:
+        return False
+    # Whole-name only. "Close" is cleanup; "Close fit" is a product attribute,
+    # and a substring test would drop the click that reveals it.
+    return name in _CLEANUP_NAMES
+
+
+def trim_trailing_cleanup(steps: list[Step]) -> list[Step]:
+    """A route, with the tidying that follows its last reveal removed.
+
+    A group runs its steps and *then* reads, so a route that ends by closing
+    something cannot be what put the field on screen -- it is what took it off.
+    `_route_for` hands out the whole path since the page loaded, which is right
+    for reveals and wrong here: a dismissal dispatched mid-exploration
+    (`_close_any_dialog`) and the agent's own clicks on close controls both land
+    in that path, so every group frozen afterwards inherited them.
+
+    Observed on a Zara product page. The `origin` group's route read *open
+    COMPOSITION, CARE & ORIGIN → wait → close the dialog → close → wait for the
+    composition panel to be visible* — it opened the drawer, shut it twice, and
+    then waited for content inside it. The binding verified anyway, because the
+    panel's text stays in the DOM once rendered and the reader walks
+    `textContent`, so nothing objected until the recipe ran.
+
+    Only TRAILING cleanup goes. A dismissal in the middle was followed by a
+    reveal that must have worked from the closed state, so it is load-bearing
+    and stays.
+    """
+
+    end = len(steps)
+    while end > 0 and is_cleanup(steps[end - 1]):
+        end -= 1
+    return steps[:end]
 
 
 def generalize_option_locator(

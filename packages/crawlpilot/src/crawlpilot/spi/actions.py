@@ -22,14 +22,17 @@ if TYPE_CHECKING:
     from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode, Snapshot, SnapshotView
 
 ExtractFormat = Literal[
-    "markdown", "text", "html", "structured_data", "fit_markdown", "entities"
+    "markdown", "text", "html", "structured_data", "fit_markdown", "entities", "tables"
 ]
 """`fit_markdown` is `markdown` with `extraction.prune`'s density scoring and,
 when a `relevance_query` is given, `extraction.relevance`'s BM25 ranking
 applied -- a deliberately separate format rather than a flag on `markdown`, so
 a caller can ask for both and see what the filter threw away. `entities` is
 deterministic regex extraction (`extraction.entities`) returned as a JSON
-object, same as `structured_data`."""
+object, same as `structured_data`. `tables` is each data table's rows, headers,
+caption and summary with `colspan`/`rowspan` resolved
+(`extraction.tables`) -- the markdown formats render tables as pipe text, which
+flattens all four of those."""
 
 # When `page.goto` considers a navigation "done". `"load"` (Playwright's own
 # default) waits for every subresource, which heavy retail SPAs (Walmart,

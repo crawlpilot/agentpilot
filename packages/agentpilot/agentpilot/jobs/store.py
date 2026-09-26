@@ -152,6 +152,7 @@ def _document_from_row(row: dict[str, Any]) -> Document:
         html=row["html"],
         structured_data=row["structured_data"],
         entities=row["entities"],
+        tables=row["tables"],
         raw_html=row["raw_html"],
         links=tuple(row["links"] or ()),
         screenshot_artifact_id=row["screenshot_artifact_id"],
@@ -171,6 +172,7 @@ _JOB_COLUMNS = (
 _DOCUMENT_COLUMNS = (
     "document_id, url, status_code, title, markdown, fit_markdown, text, html, raw_html, links, "
     "screenshot_artifact_id, tier_used, node_id, duration_ms, error, structured_data, entities, "
+    "tables, "
     "extract, extract_error, extract_warning"
 )
 
@@ -633,6 +635,7 @@ class PostgresJobStore:
                         document.error,
                         Jsonb(document.structured_data) if document.structured_data else None,
                         Jsonb(document.entities) if document.entities else None,
+                        Jsonb(document.tables) if document.tables else None,
                         Jsonb(document.extract) if document.extract else None,
                         document.extract_error,
                         document.extract_warning,

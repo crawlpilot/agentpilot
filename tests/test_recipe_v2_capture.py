@@ -15,7 +15,8 @@ from pathlib import Path
 from fusion_fixtures import fnode
 
 from agentpilot.recipe.v2 import capture
-from agentpilot.recipe.v2.models import Candidate, Locator, RepeatSpec
+from agentpilot.recipe.v2.models import Candidate, Locator, RepeatSpec, Step
+from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
 
 _FROMPICK = (
@@ -322,3 +323,87 @@ def test_a_scroll_lock_with_no_visible_dialog_still_gets_a_dismissal() -> None:
 
 def test_a_clear_page_gets_no_step() -> None:
     assert capture.dismiss_step_for(_overlay()) is None
+
+
+# --- the route must not replay the tidying that follows it -------------------
+#
+# Both of these come from one observed Zara build. The `origin` group's route
+# read: open COMPOSITION, CARE & ORIGIN -> wait -> close the dialog -> close ->
+# wait for the composition panel. It opened the drawer, shut it twice, and then
+# waited for content inside it. The binding verified anyway, because the panel's
+# text stays in the DOM once rendered and the reader walks `textContent`, so
+# nothing objected until the recipe ran and returned nothing at all.
+
+
+def _click(name: str, label: str | None = None) -> Step:
+    return Step(
+        op="click",
+        target=Locator(kind="ax_role", role="button", name_contains=name),
+        label=label,
+    )
+
+
+def test_tidying_after_the_last_reveal_is_dropped() -> None:
+    """A group runs its steps and THEN reads, so a route ending in a close
+    cannot be what put the field on screen -- it is what took it off."""
+
+    route = [
+        _click("COMPOSITION, CARE & ORIGIN"),
+        Step(op="wait", args={"ms": 1500}),
+        Step(
+            op="click",
+            target=Locator(kind="css", selector='button[aria-label="close"]'),
+            label="close the dialog (close)",
+            on_error="continue",
+            optional=True,
+        ),
+        _click("close"),
+    ]
+    kept = capture.trim_trailing_cleanup(route)
+    assert [s.op for s in kept] == ["click", "wait"]
+    assert kept[0].target is not None
+    assert kept[0].target.name_contains == "COMPOSITION, CARE & ORIGIN"
+
+
+def test_a_dismissal_in_the_middle_is_load_bearing_and_stays() -> None:
+    """It was followed by a reveal, which therefore worked from the closed
+    state. Only trailing cleanup is not how the field got on screen."""
+
+    route = [_click("close"), _click("Specifications")]
+    assert capture.trim_trailing_cleanup(route) == route
+
+
+def test_escape_counts_as_tidying() -> None:
+    """`dismiss_step_for` falls back to Escape when a dialog has no close
+    control, and that step closes just as effectively."""
+
+    route = [_click("Specifications"), Step(op="press", args={"key": "Escape"})]
+    assert [s.op for s in capture.trim_trailing_cleanup(route)] == ["click"]
+
+
+def test_a_control_merely_named_like_one_is_not_tidying() -> None:
+    """Whole-name only. "Close" is cleanup; "Close fit" is a product attribute,
+    and dropping the click that reveals it costs the field -- which is the
+    expensive direction to be wrong in."""
+
+    assert capture.is_cleanup(_click("close")) is True
+    assert capture.is_cleanup(_click("Close fit")) is False
+    assert capture.is_cleanup(_click("Disclosures")) is False
+
+
+def test_a_captured_step_never_fails_its_whole_group() -> None:
+    """The invariant `_route_for` states and every other reveal step follows:
+    "every step is `optional`/`on_error: continue`, so a redundant one costs
+    seconds where a missing one costs the field".
+
+    It was false for exactly these -- the dataclass defaults are
+    `on_error="fail"` -- and `replay._replay_group` treats a failed
+    non-optional step as fatal for the WHOLE group. One click whose control had
+    moved returned nothing at all, rather than a degraded read.
+    """
+
+    snapshot = fnode("button", "COMPOSITION, CARE & ORIGIN", "e1")
+    step = capture.stabilize_action(spi_actions.ClickAction(ref="e1"), snapshot)
+    assert step is not None
+    assert step.optional is True
+    assert step.effective_on_error == "continue"

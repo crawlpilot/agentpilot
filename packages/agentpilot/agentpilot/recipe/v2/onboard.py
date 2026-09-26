@@ -1492,7 +1492,13 @@ class ExplorationState:
         repeat: RepeatSpec | None,
         group_id: str | None = None,
     ) -> FieldGroup:
-        steps = list(steps)
+        # Tidying that happened after the last reveal is not how the field got
+        # on screen -- it is how it came off. The route is the whole path since
+        # the page loaded, so a dismissal dispatched mid-exploration and the
+        # agent's own clicks on close controls both reach here; replaying them
+        # shuts the drawer the group is about to read from. See
+        # `capture.trim_trailing_cleanup`.
+        steps = capture.trim_trailing_cleanup(list(steps))
         # The reveal has to have landed before the group reads. The driver
         # returns from a click as soon as it is dispatched, so without this the
         # group reads the page as it was before the drawer opened.

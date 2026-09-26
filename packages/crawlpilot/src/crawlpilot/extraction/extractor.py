@@ -32,6 +32,11 @@ whole main content", and is never silently narrowed by a query.
 unfiltered markdown -- unfiltered because an email address in a footer is
 exactly the kind of thing both filters above are designed to discard, and a
 caller asking for entities wants all of them.
+
+`tables` (see `tables.py`) returns each data table as a grid rather than as the
+pipe-markdown the markdown formats render. It runs on the sanitized tree, so
+`main_content`/`include_tags`/`exclude_tags` scope it the same way they scope
+everything else.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ from crawlpilot.extraction import (
     relevance,
     sanitizer,
     structured_data,
+    tables,
 )
 from crawlpilot.spi.actions import ExtractFormat
 
@@ -72,6 +78,28 @@ def extract(
         if live_hydration:
             data["hydration"] = {**data["hydration"], **live_hydration}
         return json.dumps(data)
+
+    if format == "tables":
+        root = sanitizer.sanitize(
+            html,
+            only_main_content=main_content,
+            include_tags=include_tags,
+            exclude_tags=exclude_tags,
+            base_url=base_url,
+        )
+        found = [table.to_json() for table in tables.extract_tables(root)]
+        if not found and main_content:
+            # Same empty-content fallback the markdown path gets: a boilerplate
+            # selector that swallowed the page also swallowed its tables.
+            root = sanitizer.sanitize(
+                html,
+                only_main_content=False,
+                include_tags=include_tags,
+                exclude_tags=exclude_tags,
+                base_url=base_url,
+            )
+            found = [table.to_json() for table in tables.extract_tables(root)]
+        return json.dumps(found)
 
     if format == "entities":
         markdown = _render(

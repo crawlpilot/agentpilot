@@ -345,7 +345,8 @@
             "html",
             "structured_data",
             "fit_markdown",
-            "entities"
+            "entities",
+            "tables"
           ],
           "title": "Format",
           "type": "string"

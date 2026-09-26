@@ -10,6 +10,7 @@ now checked against the function that actually runs."""
 
 from __future__ import annotations
 
+import pytest
 from pytest_httpserver import HTTPServer
 
 from agentpilot.crawl import seed
@@ -261,3 +262,138 @@ async def test_include_metadata_fills_titles_and_drops_dead_urls(
     assert [link.url for link in links] == [httpserver.url_for("/alive")]
     assert links[0].title == "Alive"
     assert links[0].description == "Still here"
+
+
+# --- Phase 4: per-subdomain scanning ---
+
+
+async def test_discovered_subdomains_are_scanned_for_their_own_urls(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What makes `crt`/`wayback` worth enabling. They report *hostnames*; without
+    this pass a certificate covering `docs.example.com` widened the result set only
+    through URLs those sources already happened to hold."""
+
+    from agentpilot.crawl import probe, sources
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/apex-page")), content_type="application/xml"
+    )
+
+    # Stand in for DNS and for the per-host pass: both would otherwise reach the
+    # real network, and what is under test is the orchestration between them.
+    async def fake_resolve(candidates: set[str], **kwargs: object) -> set[str]:
+        return {host for host in candidates if host.startswith(("docs.", "api."))}
+
+    real_gather = sources.gather
+
+    async def fake_gather(names: tuple[str, ...], ctx: sources.SourceContext):
+        if ctx.base_domain.startswith(("docs.", "api.")):
+            report = sources.SourceReport()
+            report.outcomes["sitemap"] = sources.SourceOutcome(
+                urls=[f"https://{ctx.base_domain}/from-subdomain"]
+            )
+            return report
+        report = await real_gather(names, ctx)
+        report.outcomes["crt"] = sources.SourceOutcome(
+            hosts={"docs.localhost", "api.localhost", "dead.localhost"}
+        )
+        return report
+
+    monkeypatch.setattr(probe, "resolve_hosts", fake_resolve)
+    monkeypatch.setattr(sources, "gather", fake_gather)
+
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap",),
+        include_subdomains=True,
+        limit=50,
+        detect_soft_404=False,
+        allow_external_links=True,
+    )
+    urls = [link.url for link in await seed.discover_for_map(options, POLICY)]
+
+    assert "https://docs.localhost/from-subdomain" in urls
+    assert "https://api.localhost/from-subdomain" in urls
+    # `dead.localhost` did not resolve, so it was never scanned.
+    assert not any("dead.localhost" in url for url in urls)
+
+
+async def test_the_subdomain_scan_is_bounded(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each host costs a DNS lookup and two requests, so an unbounded pass turns one
+    map into fifty."""
+
+    from agentpilot.crawl import probe, sources
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/apex")), content_type="application/xml"
+    )
+    many = {f"h{n}.localhost" for n in range(30)}
+    scanned: list[str] = []
+
+    async def fake_resolve(candidates: set[str], **kwargs: object) -> set[str]:
+        return set(candidates)
+
+    real_gather = sources.gather
+
+    async def fake_gather(names: tuple[str, ...], ctx: sources.SourceContext):
+        if ctx.base_domain.endswith(".localhost"):
+            scanned.append(ctx.base_domain)
+            return sources.SourceReport()
+        report = await real_gather(names, ctx)
+        report.outcomes["crt"] = sources.SourceOutcome(hosts=many)
+        return report
+
+    monkeypatch.setattr(probe, "resolve_hosts", fake_resolve)
+    monkeypatch.setattr(sources, "gather", fake_gather)
+
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap",),
+        include_subdomains=True,
+        max_subdomains=4,
+        limit=50,
+        detect_soft_404=False,
+    )
+    await seed.discover_for_map(options, POLICY)
+    assert len(scanned) == 4
+    # Sorted selection, so which four is deterministic rather than set-order luck.
+    assert scanned == sorted(scanned)
+
+
+async def test_no_subdomain_scan_without_include_subdomains(
+    httpserver: HTTPServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agentpilot.crawl import probe, sources
+
+    httpserver.expect_request("/sitemap.xml").respond_with_data(
+        _urlset(httpserver.url_for("/apex")), content_type="application/xml"
+    )
+    resolved_called = False
+
+    async def fake_resolve(candidates: set[str], **kwargs: object) -> set[str]:
+        nonlocal resolved_called
+        resolved_called = True
+        return set()
+
+    real_gather = sources.gather
+
+    async def fake_gather(names: tuple[str, ...], ctx: sources.SourceContext):
+        report = await real_gather(names, ctx)
+        report.outcomes["crt"] = sources.SourceOutcome(hosts={"docs.localhost"})
+        return report
+
+    monkeypatch.setattr(probe, "resolve_hosts", fake_resolve)
+    monkeypatch.setattr(sources, "gather", fake_gather)
+
+    options = MapOptions(
+        url=httpserver.url_for("/"),
+        sources=("sitemap",),
+        include_subdomains=False,
+        limit=50,
+        detect_soft_404=False,
+    )
+    await seed.discover_for_map(options, POLICY)
+    assert not resolved_called

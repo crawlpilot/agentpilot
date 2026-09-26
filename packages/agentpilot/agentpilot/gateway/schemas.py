@@ -147,7 +147,10 @@ class ScrapeRequest(BaseModel):
     takes the same full-Patchright path today regardless of this value; see
     that model's field for the reasoning."""
     formats: list[
-        Literal["markdown", "text", "html", "structured_data", "fit_markdown", "entities"]
+        Literal[
+            "markdown", "text", "html", "structured_data", "fit_markdown", "entities",
+            "tables",
+        ]
     ] = Field(default=["markdown"])
     """`"fit_markdown"` is the filtered markdown -- density-pruned, and
     BM25-ranked against `relevance_query` when one is given. `"entities"` is the
@@ -244,6 +247,11 @@ class DocumentOut(BaseModel):
     text: str | None = None
     html: str | None = None
     structured_data: dict[str, Any] | None = None
+    tables: list[dict[str, Any]] | None = None
+    """Set when `"tables"` was among the requested formats: one object per data
+    table with `headers`, `rows`, `caption`, `summary` and counts, with
+    `colspan`/`rowspan` resolved. Layout tables are scored out rather than
+    returned."""
     entities: dict[str, list[str]] | None = None
     """Set when `"entities"` was among the requested formats: regex-extracted
     emails, phones, prices, dates and identifiers, each deduplicated and in
@@ -317,6 +325,13 @@ class MapRequest(BaseModel):
     """Per-source deadline in seconds. One slow source cannot set the latency of
     the request -- it contributes nothing and is reported. Distinct from
     `timeout`, which bounds the whole call."""
+    max_subdomains: int = Field(default=10, ge=0, le=50)
+    """How many discovered subdomains to scan for their own URLs.
+
+    `crt` and `wayback` report hostnames; this is what makes them worth enabling.
+    Each confirmed subdomain gets its own sitemap and homepage pass, so a
+    certificate covering `docs.example.com` yields that site's pages rather than
+    just the name. Requires `include_subdomains`; `0` disables it."""
     detect_soft_404: bool = True
     """Fingerprint the site's not-found page and drop results matching it. Single-
     page apps answer 200 for every path, so without this a `probe` run reports
@@ -366,7 +381,10 @@ class ScrapeOptionsIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     formats: list[
-        Literal["markdown", "text", "html", "structured_data", "fit_markdown", "entities"]
+        Literal[
+            "markdown", "text", "html", "structured_data", "fit_markdown", "entities",
+            "tables",
+        ]
     ] = Field(default=["markdown"])
     """`"fit_markdown"` is the filtered markdown -- density-pruned, and
     BM25-ranked against `relevance_query` when one is given. `"entities"` is the

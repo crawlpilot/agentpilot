@@ -101,6 +101,11 @@ class Document:
     only way to tune a threshold whose job is discarding content."""
     text: str | None = None
     html: str | None = None
+    tables: list[dict[str, Any]] | None = None
+    """Each data table's `headers`, `rows`, `caption` and `summary`, with
+    `colspan`/`rowspan` resolved into the cells they cover -- set when `formats`
+    includes `"tables"`. Layout tables are scored out (`crawlpilot.extraction
+    .tables.is_data_table`) rather than returned as data."""
     entities: dict[str, list[str]] | None = None
     """Regex-extracted emails, phones, prices, dates and identifiers
     (`crawlpilot.extraction.entities`), set when `formats` includes

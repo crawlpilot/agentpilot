@@ -93,6 +93,7 @@ async def map_urls(
         max_discovery_depth=req.max_discovery_depth,
         sources=tuple(req.sources),
         source_timeout=req.source_timeout,
+        max_subdomains=req.max_subdomains,
         detect_soft_404=req.detect_soft_404,
         include_metadata=req.include_metadata,
         filter_nonsense=req.filter_nonsense,

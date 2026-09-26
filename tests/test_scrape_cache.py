@@ -177,6 +177,7 @@ def _document() -> Document:
         document_id="original-id",
         url="https://example.com/a",
         markdown="# page",
+        tables=[{"headers": ["A"], "rows": [["1"]], "caption": None, "summary": None}],
         fit_markdown="# page, filtered",
         text="page",
         html="<h1>page</h1>",
@@ -209,6 +210,7 @@ def test_the_document_round_trips_through_json() -> None:
     assert restored.text == original.text
     assert restored.html == original.html
     assert restored.entities == original.entities
+    assert restored.tables == original.tables
     assert restored.structured_data == original.structured_data
     assert restored.links == original.links
     assert restored.extract == original.extract

@@ -16,6 +16,6 @@ knowledge -- `agentpilot.control.retail_extension` builds on its
 
 from __future__ import annotations
 
-from crawlpilot.extraction import block_detect, entities, extractor, structured_data
+from crawlpilot.extraction import block_detect, entities, extractor, structured_data, tables
 
-__all__ = ["block_detect", "entities", "extractor", "structured_data"]
+__all__ = ["block_detect", "entities", "extractor", "structured_data", "tables"]

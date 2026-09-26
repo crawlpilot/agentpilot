@@ -107,6 +107,7 @@ def _document_out(document: Document) -> DocumentOut:
         text=document.text,
         html=document.html,
         structured_data=document.structured_data,
+        tables=document.tables,
         entities=document.entities,
         links=list(document.links),
         # Not persisted inline for job-backed results -- see

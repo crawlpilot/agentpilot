@@ -30,6 +30,7 @@ from agentpilot.crawl import (
     head,
     link_extractor,
     nonsense,
+    probe,
     robots,
     scorers,
     sitemap,
@@ -184,6 +185,56 @@ def _selected_sources(options: MapOptions) -> tuple[sources.SourceName, ...]:
     return selected
 
 
+async def _scan_subdomains(
+    hosts: set[str],
+    *,
+    base_domain: str,
+    options: MapOptions,
+    policy: EgressPolicy,
+) -> list[str]:
+    """URLs from each discovered subdomain's own sitemap and homepage.
+
+    DNS-validated first: a certificate log names every host ever put on a
+    certificate, including internal ones that were never public and ones
+    decommissioned years ago, so resolving is what separates candidates from hosts.
+
+    Only the two cheapest sources run per host. Recursing the full source list --
+    another crt.sh query, another Common Crawl fetch, per subdomain -- would turn
+    one map into fifty, and those sources are domain-wide anyway: they already
+    returned whatever they knew about these hosts.
+    """
+
+    candidates = {host for host in hosts if host != base_domain}
+    if not candidates:
+        return []
+
+    resolved = await probe.resolve_hosts(candidates)
+    # Sorted, so which subdomains get scanned under the cap is deterministic rather
+    # than dependent on set iteration order.
+    selected = sorted(resolved)[: options.max_subdomains]
+    if not selected:
+        return []
+
+    async def scan(host: str) -> list[str]:
+        origin = f"https://{host}"
+        sub_report = await sources.gather(
+            ("sitemap", "homepage"),
+            sources.SourceContext(
+                base_domain=host,
+                origin=origin,
+                seed_url=f"{origin}/",
+                policy=policy,
+                max_urls_per_source=options.limit,
+                include_subdomains=False,
+                source_timeout=options.source_timeout,
+            ),
+        )
+        return sub_report.urls
+
+    results = await asyncio.gather(*(scan(host) for host in selected))
+    return [url for host_urls in results for url in host_urls]
+
+
 async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[MapLink]:
     policy_filter = filters.FilterPolicy(
         include_paths=options.include_paths,
@@ -219,6 +270,16 @@ async def discover_for_map(options: MapOptions, policy: EgressPolicy) -> list[Ma
     )
 
     candidates: list[str] = list(report.urls)
+
+    # Subdomain expansion. `crt` and `wayback` name hosts; this is what makes those
+    # names worth having -- each confirmed host gets its own cheap source pass, so a
+    # certificate covering `docs.example.com` actually yields that site's pages.
+    if options.include_subdomains and options.max_subdomains > 0:
+        candidates.extend(
+            await _scan_subdomains(
+                report.hosts, base_domain=base_domain, options=options, policy=policy
+            )
+        )
     # The recursive crawl stays, as the fallback it always was: on a site with no
     # sitemap, no feed and nothing in any index, following links from the seed
     # page is the only thing that finds anything. Skipped when the sources

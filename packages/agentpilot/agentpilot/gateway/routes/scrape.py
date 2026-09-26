@@ -209,6 +209,7 @@ def _document_out(
         text=document.text,
         html=document.html,
         structured_data=document.structured_data,
+        tables=document.tables,
         entities=document.entities,
         links=list(document.links),
         screenshot=base64.b64encode(screenshot_bytes).decode("ascii")

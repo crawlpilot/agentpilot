@@ -129,13 +129,29 @@ ranges, not hostnames — `index.commoncrawl.org`, `crt.sh` and
 
 ---
 
+## Subdomains
+
+`crt` and `wayback` report *hostnames*, which on their own only widen the result
+set indirectly. `max_subdomains` (default 10) closes that: each host they name is
+DNS-validated, then the survivors get their own sitemap-and-homepage pass. That is
+what turns "map example.com" into something covering the domain rather than just
+`www`.
+
+Only those two cheap sources run per host. Recursing the full list — another
+crt.sh query, another Common Crawl fetch, per subdomain — would turn one map into
+fifty, and those sources are domain-wide anyway: they already returned what they
+knew about these hosts.
+
+DNS validation is the step that matters. A certificate log names every host ever
+put on a certificate, including internal ones that were never public and ones
+decommissioned years ago; resolving separates candidates from hosts. Requires
+`include_subdomains`; selection under the cap is sorted, so which subdomains get
+scanned is deterministic rather than set-iteration luck.
+
+---
+
 ## Known limits
 
-- **Subdomain hosts are discovered but not yet scanned.** `crt` and `wayback`
-  report hosts, and `probe.resolve_hosts` confirms which resolve, but `/v1/map`
-  does not yet run a per-subdomain sitemap/homepage pass. So `crt` currently
-  widens the *URL* set only through what `wayback`/`cc` already knew about those
-  hosts.
 - **Documents are still dropped.** `nonsense` deliberately keeps `.pdf`,
   `.docx` and `.csv`, but `crawl.filters._DENIED_EXTENSIONS` drops them
   independently, with its own "no pdf/document engine yet" note. Both lists have

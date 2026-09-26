@@ -105,6 +105,7 @@ def document_from_wire(payload: dict[str, Any]) -> Document:
         text=payload.get("text"),
         html=payload.get("html"),
         structured_data=payload.get("structured_data"),
+        tables=payload.get("tables"),
         entities=payload.get("entities"),
         links=tuple(payload.get("links") or ()),
         screenshot_artifact_id=payload.get("screenshot"),

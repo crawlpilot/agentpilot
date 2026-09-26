@@ -62,7 +62,7 @@ def test_the_wire_schema_matches_its_golden() -> None:
     Then for the crawl4ai content-filter port, which is the first time an
     existing verb's schema *did* change: `ExtractActionIn` gained
     `relevance_query` and `citations`, and its `format` enum gained
-    `fit_markdown` and `entities`. All four are additive -- the two new fields
+    `fit_markdown` and `entities` -- later `tables` as well. All four are additive -- the two new fields
     default to the previous behaviour and the enum only grew -- so every request
     that validated before still validates and still behaves identically.
     `test_the_port_only_added_to_the_pre_existing_wire_verbs` is what proves
@@ -138,7 +138,7 @@ _DELIBERATELY_WIDENED_ENUMS = {
     # before still validates -- which is why this is allowed at all and why the
     # check below is one-directional. A member *removed* from an enum breaks an
     # integrator's existing request, so `old - new` must still be empty.
-    ("ExtractActionIn", "format"): {"fit_markdown", "entities"},
+    ("ExtractActionIn", "format"): {"fit_markdown", "entities", "tables"},
 }
 
 

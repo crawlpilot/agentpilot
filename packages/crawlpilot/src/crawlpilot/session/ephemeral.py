@@ -582,6 +582,7 @@ async def run_ephemeral_scrape(
 
     structured_data_raw = extracted.get("structured_data")
     entities_raw = extracted.get("entities")
+    tables_raw = extracted.get("tables")
     internal_markdown = extracted.get("markdown")
     # `internal_markdown` may exist only to feed `options.extract` below --
     # don't leak it into the response unless the caller actually asked for
@@ -617,6 +618,7 @@ async def run_ephemeral_scrape(
         html=extracted.get("html"),
         structured_data=json.loads(structured_data_raw) if structured_data_raw else None,
         entities=json.loads(entities_raw) if entities_raw else None,
+        tables=json.loads(tables_raw) if tables_raw else None,
         links=(),
         screenshot_artifact_id=None,
         metadata=DocumentMetadata(
