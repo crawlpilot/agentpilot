@@ -98,16 +98,29 @@ def _retry_delay_s(attempt: int, verdict: str | None, base: float) -> float:
 
 
 def _effective_formats(options: ScrapeOptions) -> tuple[ExtractFormat, ...]:
-    """`options.formats` plus an internal `"markdown"` request when
-    `options.extract` needs input the caller didn't otherwise ask for --
+    """`options.formats` plus the internal formats `options.extract` needs --
     mirrors Firecrawl's "json format requires markdown" derivation
-    (`deriveMarkdownFromHTML`). The internal markdown never leaks into
-    `Document.markdown` unless the caller actually requested it -- see
-    `run_ephemeral_scrape`."""
+    (`deriveMarkdownFromHTML`). Neither internal format leaks into the
+    `Document` unless the caller actually requested it -- see
+    `run_ephemeral_scrape`.
 
-    if options.extract is not None and "markdown" not in options.formats:
-        return (*options.formats, "markdown")
-    return options.formats
+    Both `markdown` and `fit_markdown` are derived, because the extractor picks
+    between them by size: a page whose full markdown overflows the model's input
+    budget extracts far better from the *filtered* rendering than from the first
+    40k characters of the raw one. On a large retail product page the difference
+    is decisive -- the ingredient and how-to-use accordions sit below the reviews,
+    so truncation removes exactly the fields a caller asked for while pruning
+    removes the navigation and keeps them. Deriving `fit_markdown` costs one extra
+    pass over an HTML document already in memory; no additional browser work.
+    """
+
+    if options.extract is None:
+        return options.formats
+    derived = list(options.formats)
+    for needed in ("markdown", "fit_markdown"):
+        if needed not in derived:
+            derived.append(needed)
+    return tuple(derived)
 
 
 def _search_engine_referer(url: str) -> str | None:
@@ -588,6 +601,13 @@ async def run_ephemeral_scrape(
     # don't leak it into the response unless the caller actually asked for
     # the `"markdown"` format themselves.
     document_markdown = internal_markdown if "markdown" in options.formats else None
+    # Same gating, for the same reason: `_effective_formats` now derives
+    # `fit_markdown` internally to feed `options.extract`, and a caller who never
+    # asked for the format must not start receiving it.
+    internal_fit_markdown = extracted.get("fit_markdown")
+    document_fit_markdown = (
+        internal_fit_markdown if "fit_markdown" in options.formats else None
+    )
 
     extract_result = None
     extract_error = None
@@ -603,6 +623,7 @@ async def run_ephemeral_scrape(
             try:
                 extract_result, extract_warning = await structured_extractor(
                     internal_markdown,
+                    fit_markdown=internal_fit_markdown,
                     json_schema=options.extract.json_schema,
                     prompt=options.extract.prompt,
                 )
@@ -613,7 +634,7 @@ async def run_ephemeral_scrape(
         document_id=str(uuid.uuid4()),
         url=url,
         markdown=document_markdown,
-        fit_markdown=extracted.get("fit_markdown"),
+        fit_markdown=document_fit_markdown,
         text=extracted.get("text"),
         html=extracted.get("html"),
         structured_data=json.loads(structured_data_raw) if structured_data_raw else None,
