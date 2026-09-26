@@ -42,55 +42,19 @@ import {
 } from './protocol'
 import { enrich } from './enrich'
 import { runPreview, runPreviewRows, runSteps } from './preview'
-import { Recorder } from './record'
 
 const TEST_HIGHLIGHT_CLASS = 'crawlpilot-test-highlight'
-
-/**
- * Recording lives outside `picker`, and must.
- *
- * The two are opposites -- one swallows events to choose an element, the other
- * lets them through so the page reacts -- and they are used at different
- * moments in the same session. Tying the recorder's lifetime to the picker's
- * would mean a `start()` silently ended a recording, or a completed pick
- * (which calls `deactivate`) did.
- *
- * They do now *cooperate*, which is not the same thing: `pickInRecording`
- * pauses this and resumes it around a pick, so a selection can be one entry of
- * a route rather than a separate answer beside it.
- */
-const recorder = new Recorder()
 
 let picker: VisualElementPicker | null = null
 let highlights: SelectionHighlightManager | null = null
 let pending: PickMessage | null = null
-/**
- * Set while a pick is running *inside* a recording.
- *
- * The sink is one global callback shared by every pick, so the only way it can
- * tell "this result belongs in the route" from "this result is the studio's to
- * collect" is a flag set by the call that started it.
- */
-let pickingIntoRecording = false
 
 // Enrich here rather than in the studio: `enrich` answers questions that only
 // the live DOM can answer (which element holds a column's value, what the full
 // candidate chain for a picked node is), and by the time the payload reaches
 // the studio that DOM is a screencast frame. See `enrich.ts`.
 setPickerSink((msg) => {
-  const enriched = enrich(msg as PickMessage)
-  if (pickingIntoRecording) {
-    pickingIntoRecording = false
-    // A cancelled pick leaves the route exactly as it was -- backing out of
-    // choosing an element is not an edit to the steps around it.
-    if (enriched.type === 'ELEMENT_SELECTED') recorder.pushSelect(enriched.payload)
-    recorder.resume()
-    // Deliberately NOT parked on `pending`: the studio is polling
-    // `takeRecording`, not `take`, and leaving it here would also resolve an
-    // unrelated `pick()` that happened to be in flight.
-    return
-  }
-  pending = enriched
+  pending = enrich(msg as PickMessage)
 })
 
 function makeStrategy(mode: PickerMode): ISelectionStrategy {
@@ -114,16 +78,6 @@ function start(mode: PickerMode = 'list', action: 'extract' | 'click' = 'extract
   // the studio's poll loop has exactly one thing to watch and can always
   // distinguish "user backed out" from "still picking".
   picker.activate(strategy, () => {
-    // Escape during a mid-recording pick must hand the page back to the
-    // recorder. Routed here rather than parked on `pending`, because the
-    // studio is polling `takeRecording` and would never collect it -- the
-    // recording would stay paused for ever, quietly ignoring everything the
-    // person did next.
-    if (pickingIntoRecording) {
-      pickingIntoRecording = false
-      recorder.resume()
-      return
-    }
     pending = { type: 'PICKER_CANCELLED' }
   })
 }
@@ -132,12 +86,6 @@ function cancel() {
   if (picker) {
     picker.deactivate()
     picker = null
-  }
-  // `deactivate` does not fire the cancel callback, so a pick abandoned from
-  // the studio's Cancel button lands here and nowhere else.
-  if (pickingIntoRecording) {
-    pickingIntoRecording = false
-    recorder.resume()
   }
 }
 
@@ -148,84 +96,6 @@ function action(key: 'ArrowUp' | 'ArrowDown' | 'Enter' | 'Unpin') {
 
 function selection() {
   return picker?.selection ?? null
-}
-
-function startRecording(seed: unknown[] = []) {
-  cancel()
-  // `seed` continues a route the panel already holds, rather than starting a
-  // new one. Its copy is the authority: it is the one that has been edited.
-  recorder.start((seed as Parameters<Recorder['start']>[0]) ?? [])
-}
-
-function stopRecording() {
-  // A pick left in flight when the person presses Stop would otherwise keep
-  // its overlay up over a page nobody is recording any more, and resume a
-  // closed recorder on commit.
-  if (pickingIntoRecording) {
-    pickingIntoRecording = false
-    cancel()
-  }
-  return recorder.stop()
-}
-
-function takeRecording() {
-  return recorder.take()
-}
-
-function isRecording(): boolean {
-  return recorder.isRecording
-}
-
-function isRecordingPaused(): boolean {
-  return recorder.isPaused
-}
-
-/**
- * Stop observing without ending the recording.
- *
- * Distinct from the pause `pickInRecording` takes, and needed for a different
- * reason: finding the thing you want to record often means clicking around
- * first, and without this every one of those exploratory clicks lands in the
- * route to be deleted afterwards.
- */
-function pauseRecording() {
-  // A pick owns the pause while it is in flight; releasing it here would
-  // resume the recorder under the picker's overlay and file the pick's own
-  // click as a step.
-  if (pickingIntoRecording) return
-  recorder.pause()
-}
-
-function resumeRecording() {
-  if (pickingIntoRecording) return
-  recorder.resume()
-}
-
-function didNavigate(): boolean {
-  return recorder.didNavigate
-}
-
-function recordingFull(): boolean {
-  return recorder.isFull
-}
-
-/**
- * Pick an element without ending the recording it belongs to.
- *
- * The pause is not an optimisation. The picker draws an overlay and swallows
- * the click that lands on it, and a recorder still listening would file the
- * person's *choosing* of an element as an interaction with the page -- a click
- * on the overlay, or on whatever sat underneath it -- so the route would
- * replay a click nobody made.
- */
-function pickInRecording(action: 'extract' | 'click' = 'extract') {
-  if (!recorder.isRecording) return
-  recorder.pause()
-  // After `start`, never before: it opens with a `cancel()`, which resumes the
-  // recorder when this flag is already set -- so arming it first would undo
-  // the pause on the very call that needs it.
-  start('detail', action)
-  pickingIntoRecording = true
 }
 
 /** Destructive read -- a result is handed to the studio exactly once. */
@@ -357,16 +227,6 @@ const api: PickerApi = {
   selection,
   take,
   isPicking,
-  startRecording,
-  stopRecording,
-  takeRecording,
-  isRecording,
-  pickInRecording,
-  pauseRecording,
-  resumeRecording,
-  isRecordingPaused,
-  didNavigate,
-  recordingFull,
   showHighlights,
   clearHighlights,
   testSelector,

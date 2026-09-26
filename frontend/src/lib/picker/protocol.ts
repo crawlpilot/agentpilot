@@ -12,7 +12,7 @@
  */
 
 /** Bumped when the injected contract changes, so a stale page re-installs. */
-export const PICKER_VERSION = 4
+export const PICKER_VERSION = 5
 
 /** The global the IIFE installs itself on inside the remote page. */
 export const PICKER_GLOBAL = '__cpPicker'
@@ -190,52 +190,6 @@ export interface PickerApi {
   selection(): { tag: string; text: string; pinned: boolean } | null
   take(): PickMessage | null
   isPicking(): boolean
-  /**
-   * Watch what the person does to the page and hand it back as reveal steps.
-   *
-   * Not a picker: nothing is swallowed and no overlay is drawn, because the
-   * page has to actually react or there is nothing to record. See `record.ts`.
-   */
-  startRecording(seed?: unknown[]): void
-  stopRecording(): unknown[]
-  takeRecording(): unknown[]
-  isRecording(): boolean
-  /**
-   * Pick an element *during* a recording, and fold it into the route in order.
-   *
-   * The second interaction, and the one the panel had no way to express: a
-   * route could say how to get to a field or which element it was, never both
-   * in sequence. Pauses the recorder (the picker swallows the clicks it draws
-   * over, and those are not the person's), runs an ordinary `detail` pick, and
-   * pushes the result as a `select` entry before resuming.
-   *
-   * `action: 'click'` is the extension's other half -- the picked element
-   * becomes a reveal step rather than a binding. Reachable only from here;
-   * `pick()` has always defaulted `detail` to `'extract'`.
-   */
-  pickInRecording(action?: 'extract' | 'click'): void
-  /**
-   * Stop and restart observing, without ending the recording.
-   *
-   * Separate from the pause a pick takes, and for a different reason: finding
-   * the thing worth recording usually means clicking around first, and every
-   * one of those clicks would otherwise land in the route.
-   */
-  pauseRecording(): void
-  resumeRecording(): void
-  /** Open but not observing -- paused by hand, or a pick is in flight. */
-  isRecordingPaused(): boolean
-  /**
-   * Whether the page changed under the recording.
-   *
-   * Every step after a navigation targets a different document, and because
-   * reveal steps replay `on_error: continue` the route then fails in total
-   * silence. `Recorder` has tracked this since it was written; until now
-   * nothing could ask.
-   */
-  didNavigate(): boolean
-  /** Whether the step cap has been hit and events are being discarded. */
-  recordingFull(): boolean
   showHighlights(elements: HighlightField[]): void
   clearHighlights(): void
   testSelector(selector: string): number

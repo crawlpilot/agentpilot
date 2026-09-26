@@ -23,7 +23,6 @@ import { RouteEditor } from './RouteEditor'
 import { READ_ATTRIBUTES, attributeHint } from '@/lib/recipe/attributes'
 import { readAttribute } from '@/lib/recipe/fromPick'
 import { splitAtRead, type AskMode, type AskState } from '@/lib/recipe/assistRoute'
-import type { PreviewStep } from '@/lib/picker/preview'
 import type { PendingAsk } from '@/lib/api/types'
 import type { usePagePicker } from '@/hooks/usePagePicker'
 
