@@ -175,6 +175,36 @@ describe('Recorder', () => {
     expect(recorder.take()).toEqual([])
   })
 
+  it('continues a stopped route from what the panel holds', () => {
+    // Stopping used to be final: noticing one missed click meant Record again,
+    // which wiped the route -- including every row deleted, relabelled or
+    // reordered since. Seeding from the PANEL's copy rather than keeping the
+    // old buffer is what makes those edits survive the continue.
+    html('<button id="a">A</button><button id="b">B</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    document.getElementById('a')!.click()
+    const first = recorder.stop()
+    expect(first).toHaveLength(1)
+
+    // The panel relabelled the row while it was stopped.
+    const edited = [{ ...first[0], label: 'open the specs' }]
+    recorder.start(edited)
+    document.getElementById('b')!.click()
+
+    const steps = recorder.stop()
+    expect(steps).toHaveLength(2)
+    expect(steps[0].label).toBe('open the specs')
+    expect(steps[1].text).toBe('B')
+  })
+
+  it('will not seed a route past the cap', () => {
+    const recorder = new Recorder()
+    recorder.start(Array.from({ length: 80 }, () => ({ op: 'click' })))
+    expect(recorder.take()).toHaveLength(60)
+    expect(recorder.isFull).toBe(true)
+  })
+
   it('marks a click it could not give a selector, rather than dropping it', async () => {
     // Dropping it was silent in the worst possible place: the person clicks,
     // nothing appears in the list, and there is no way to tell a missed
@@ -276,6 +306,43 @@ describe('Recorder', () => {
     recorder.resume()
     document.getElementById('b')!.click()
     expect(recorder.take()).toHaveLength(2)
+  })
+
+  it('resumes from a hand pause exactly where it left off', () => {
+    // Distinct from the pause a pick takes, and needed for a different reason:
+    // finding the thing worth recording usually means clicking around first,
+    // and every one of those clicks would otherwise land in the route.
+    html('<button id="a">A</button><button id="b">B</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    document.getElementById('a')!.click()
+
+    recorder.pause()
+    for (let i = 0; i < 5; i++) document.getElementById('b')!.click()
+    expect(recorder.take()).toHaveLength(1)
+
+    recorder.resume()
+    document.getElementById('b')!.click()
+
+    const steps = recorder.stop()
+    expect(steps).toHaveLength(2)
+    expect(steps[1].text).toBe('B')
+  })
+
+  it('will not resume a recording that was stopped', () => {
+    // `resume` is about a session that is still open. Reviving a stopped one
+    // would reattach listeners feeding a buffer the panel has already taken
+    // and submitted.
+    html('<button id="a">A</button>')
+    const recorder = new Recorder()
+    recorder.start()
+    recorder.stop()
+
+    recorder.resume()
+    document.getElementById('a')!.click()
+
+    expect(recorder.isRecording).toBe(false)
+    expect(recorder.take()).toEqual([])
   })
 
   it('folds a pick into the route in the order it was made', () => {

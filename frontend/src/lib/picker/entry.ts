@@ -150,9 +150,11 @@ function selection() {
   return picker?.selection ?? null
 }
 
-function startRecording() {
+function startRecording(seed: unknown[] = []) {
   cancel()
-  recorder.start()
+  // `seed` continues a route the panel already holds, rather than starting a
+  // new one. Its copy is the authority: it is the one that has been edited.
+  recorder.start((seed as Parameters<Recorder['start']>[0]) ?? [])
 }
 
 function stopRecording() {
@@ -176,6 +178,27 @@ function isRecording(): boolean {
 
 function isRecordingPaused(): boolean {
   return recorder.isPaused
+}
+
+/**
+ * Stop observing without ending the recording.
+ *
+ * Distinct from the pause `pickInRecording` takes, and needed for a different
+ * reason: finding the thing you want to record often means clicking around
+ * first, and without this every one of those exploratory clicks lands in the
+ * route to be deleted afterwards.
+ */
+function pauseRecording() {
+  // A pick owns the pause while it is in flight; releasing it here would
+  // resume the recorder under the picker's overlay and file the pick's own
+  // click as a step.
+  if (pickingIntoRecording) return
+  recorder.pause()
+}
+
+function resumeRecording() {
+  if (pickingIntoRecording) return
+  recorder.resume()
 }
 
 function didNavigate(): boolean {
@@ -339,6 +362,8 @@ const api: PickerApi = {
   takeRecording,
   isRecording,
   pickInRecording,
+  pauseRecording,
+  resumeRecording,
   isRecordingPaused,
   didNavigate,
   recordingFull,

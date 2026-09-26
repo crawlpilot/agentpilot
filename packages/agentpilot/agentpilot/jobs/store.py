@@ -57,6 +57,35 @@ class ClaimedTask:
 
 
 @dataclass
+class TaskFailure:
+    """One failed task, for the sample `TaskStats` carries. `attempts` is the
+    part that distinguishes "this URL is broken" from "we gave up after three
+    tries at a host that was rate-limiting us" -- the same error string means
+    different things at 1 attempt and at `max_attempts`."""
+
+    url: str
+    error: str | None
+    attempts: int
+
+
+@dataclass
+class TaskStats:
+    """Per-status task counts for one crawl, for `GET /v1/crawl/{id}`.
+
+    Distinct from the counters on the `jobs` row, which answer "how far along"
+    (`completed`/`failed` out of `total`). These answer "what is it doing right
+    now" -- a job with 900 queued and 0 active is being paced or starved, a job
+    with 0 queued and 5 active is finishing, and the job row cannot tell those
+    apart."""
+
+    queued: int
+    active: int
+    completed: int
+    failed: int
+    recent_failures: list[TaskFailure]
+
+
+@dataclass
 class JobForWorker:
     """The worker-facing view of a job -- distinct from `jobs.types.Job` (the
     tenant-facing `/v1/crawl` polling shape), which deliberately excludes
@@ -532,6 +561,59 @@ class PostgresJobStore:
                 )
 
     # --- results ---
+
+    async def task_stats(self, job_id: str, tenant: str) -> TaskStats:
+        """Per-status task counts for one job, plus a sample of failures.
+
+        `jobs.total/completed/failed` already say how big the job is and how much
+        of it is done, but not the thing an operator actually asks when a crawl
+        looks stuck: is it still discovering, is it working, or is everything
+        sitting queued behind a rate limit? Those three states are all
+        "in progress" in the job row and distinct here.
+
+        The failure sample is capped at ten and carries the URL and error. A
+        crawl that fails 4,000 pages fails them for two or three reasons, and ten
+        examples is enough to see which -- returning all of them would make the
+        status response unboundedly large for no extra insight.
+        """
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT t.status, count(*) AS n
+                    FROM crawl_tasks t JOIN jobs j ON j.job_id = t.job_id
+                    WHERE t.job_id = %s AND j.tenant = %s
+                    GROUP BY t.status
+                    """,
+                    (job_id, tenant),
+                )
+                counts = {row["status"]: row["n"] for row in await cur.fetchall()}
+                await cur.execute(
+                    """
+                    SELECT t.url, t.error, t.attempts
+                    FROM crawl_tasks t JOIN jobs j ON j.job_id = t.job_id
+                    WHERE t.job_id = %s AND j.tenant = %s AND t.status = 'failed'
+                    ORDER BY t.finished_at DESC NULLS LAST
+                    LIMIT 10
+                    """,
+                    (job_id, tenant),
+                )
+                failures = [
+                    TaskFailure(
+                        url=row["url"], error=row["error"], attempts=row["attempts"]
+                    )
+                    for row in await cur.fetchall()
+                ]
+        return TaskStats(
+            queued=counts.get("queued", 0),
+            active=counts.get("active", 0),
+            completed=counts.get("completed", 0),
+            failed=counts.get("failed", 0),
+            recent_failures=failures,
+        )
 
     async def list_documents(
         self, job_id: str, tenant: str, after: str | None, limit: int = 100

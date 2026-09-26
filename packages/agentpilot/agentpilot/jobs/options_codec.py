@@ -85,6 +85,8 @@ def dump_crawl_options(options: CrawlOptions) -> dict[str, Any]:
         "deduplicate_similar_urls": options.deduplicate_similar_urls,
         "ignore_query_parameters": options.ignore_query_parameters,
         "delay_ms": options.delay_ms,
+        "cache_mode": options.cache_mode,
+        "max_age_ms": options.max_age_ms,
         "max_concurrency": options.max_concurrency,
         "scrape_options": dump_scrape_options(options.scrape_options),
     }
@@ -105,6 +107,8 @@ def load_crawl_options(data: dict[str, Any]) -> CrawlOptions:
         deduplicate_similar_urls=data.get("deduplicate_similar_urls", True),
         ignore_query_parameters=data.get("ignore_query_parameters", False),
         delay_ms=data.get("delay_ms"),
+        cache_mode=data.get("cache_mode", "enabled"),
+        max_age_ms=data.get("max_age_ms"),
         max_concurrency=data.get("max_concurrency", 10),
         scrape_options=load_scrape_options(data.get("scrape_options")),
     )
@@ -113,6 +117,8 @@ def load_crawl_options(data: dict[str, Any]) -> CrawlOptions:
 def dump_batch_scrape_options(options: BatchScrapeOptions) -> dict[str, Any]:
     return {
         "urls": list(options.urls),
+        "cache_mode": options.cache_mode,
+        "max_age_ms": options.max_age_ms,
         "scrape_options": dump_scrape_options(options.scrape_options),
     }
 
@@ -120,5 +126,7 @@ def dump_batch_scrape_options(options: BatchScrapeOptions) -> dict[str, Any]:
 def load_batch_scrape_options(data: dict[str, Any]) -> BatchScrapeOptions:
     return BatchScrapeOptions(
         urls=tuple(data["urls"]),
+        cache_mode=data.get("cache_mode", "enabled"),
+        max_age_ms=data.get("max_age_ms"),
         scrape_options=load_scrape_options(data.get("scrape_options")),
     )

@@ -176,6 +176,19 @@ class ScrapeRequest(BaseModel):
     screenshot: bool = False
     full_page_screenshot: bool = False
     extract: ExtractConfigIn | None = None
+    cache_mode: Literal["enabled", "bypass", "read_only", "write_only", "disabled"] = "enabled"
+    """`enabled` reads and writes the scrape cache. `bypass` always fetches but
+    still refreshes the entry -- the way to force one URL. `read_only` serves a
+    hit but stores nothing, `write_only` always fetches and always stores (cache
+    warming), `disabled` ignores the cache entirely.
+
+    A request is never cached at all when it carries pre-extract `actions`, a
+    `session_name`, or `screenshot` -- each makes the result depend on something
+    the key cannot capture, so serving a hit would be wrong rather than stale.
+    See `agentpilot.jobs.cache.is_cacheable`."""
+    max_age_ms: int | None = None
+    """How old a cached page may be and still be served. `None` takes the
+    deployment default (one hour)."""
     session_name: str | None = None
     """Anti-detection: opt into a warm, persistent browser profile for this
     `(tenant, domain, session_name)` instead of the default throwaway
@@ -243,6 +256,11 @@ class DocumentOut(BaseModel):
     `/v1/crawl`/`/v1/batch/scrape` result instead carries a
     `screenshot_artifact_id` once an artifact store exists to upload to."""
     metadata: ScrapeMetadataOut | None = None
+    cached: bool = False
+    """True when this document came from the scrape cache rather than a fresh
+    browser run. Worth returning explicitly: `metadata.duration_ms` on a hit is
+    the cache lookup's duration, not the page's, and without this field a caller
+    comparing timings has no way to know that."""
     error: str | None = None
     extract: dict[str, Any] | list[Any] | None = None
     """A list when the caller's `extract.json_schema` had an array at its root
@@ -358,7 +376,22 @@ class CrawlRequest(BaseModel):
     deduplicate_similar_urls: bool = True
     ignore_query_parameters: bool = False
     delay_ms: int | None = None
+    """Minimum gap between requests to one host. The effective delay is the
+    larger of this and the host's robots.txt `Crawl-delay`."""
     max_concurrency: int = 10
+    cache_mode: Literal["enabled", "bypass", "read_only", "write_only", "disabled"] = "enabled"
+    """`enabled` reads and writes the scrape cache. `bypass` always fetches but
+    still refreshes the entry -- the way to force one URL. `read_only` serves a
+    hit but stores nothing, `write_only` always fetches and always stores (cache
+    warming), `disabled` ignores the cache entirely.
+
+    A request is never cached at all when it carries pre-extract `actions`, a
+    `session_name`, or `screenshot` -- each makes the result depend on something
+    the key cannot capture, so serving a hit would be wrong rather than stale.
+    See `agentpilot.jobs.cache.is_cacheable`."""
+    max_age_ms: int | None = None
+    """How old a cached page may be and still be served. `None` takes the
+    deployment default (one hour)."""
     scrape_options: ScrapeOptionsIn = Field(default_factory=ScrapeOptionsIn)
     webhook: WebhookIn | None = None
 
@@ -376,6 +409,33 @@ class CrawlCreateResponse(BaseModel):
     API key's plaintext (`ApiKeyCreateOut.api_key`)."""
 
 
+class TaskFailureOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str
+    error: str | None = None
+    attempts: int
+
+
+class CrawlProgressOut(BaseModel):
+    """What the crawl is doing *now*, as opposed to how far along it is.
+
+    `total`/`completed`/`failed` on the response already give progress. These
+    give state: a job sitting at 900 queued with 0 active is being paced or
+    starved of workers, and one at 0 queued with 5 active is finishing -- both
+    look identical in the progress counters, and the difference is the whole
+    question when someone asks why a crawl is slow."""
+
+    model_config = ConfigDict(extra="forbid")
+    queued: int
+    active: int
+    completed: int
+    failed: int
+    recent_failures: list[TaskFailureOut] = Field(default_factory=list)
+    """At most ten, newest first. A crawl that fails four thousand pages fails
+    them for two or three reasons; ten examples show which, and returning all of
+    them would make this response unboundedly large for no extra insight."""
+
+
 class CrawlStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
@@ -383,6 +443,9 @@ class CrawlStatusResponse(BaseModel):
     total: int
     completed: int
     failed: int
+    progress: CrawlProgressOut | None = None
+    """Per-task state. `None` only if the counts could not be read; a running
+    crawl always has some."""
     data: list[DocumentOut]
     next: str | None
     """Opaque keyset-pagination cursor -- pass back as `?after=` to fetch the

@@ -25,10 +25,12 @@ from agentpilot.crawl.types import CrawlOptions
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.schemas import (
     CrawlCreateResponse,
+    CrawlProgressOut,
     CrawlRequest,
     CrawlStatusResponse,
     DocumentOut,
     ScrapeMetadataOut,
+    TaskFailureOut,
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
 from agentpilot.jobs.options_codec import dump_crawl_options
@@ -68,6 +70,8 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
         ignore_query_parameters=req.ignore_query_parameters,
         delay_ms=req.delay_ms,
         max_concurrency=req.max_concurrency,
+        cache_mode=req.cache_mode,
+        max_age_ms=req.max_age_ms,
         scrape_options=ScrapeOptions(
             formats=tuple(req.scrape_options.formats),
             only_main_content=req.scrape_options.only_main_content,
@@ -192,12 +196,23 @@ async def get_crawl(
     if job is None:
         raise JobNotFound(job_id)
     docs, next_cursor = await store.list_documents(job_id, authed.tenant, after, limit)
+    stats = await store.task_stats(job_id, authed.tenant)
     return CrawlStatusResponse(
         success=True,
         status=job.status,
         total=job.total,
         completed=job.completed,
         failed=job.failed,
+        progress=CrawlProgressOut(
+            queued=stats.queued,
+            active=stats.active,
+            completed=stats.completed,
+            failed=stats.failed,
+            recent_failures=[
+                TaskFailureOut(url=f.url, error=f.error, attempts=f.attempts)
+                for f in stats.recent_failures
+            ],
+        ),
         data=[_document_out(d) for d in docs],
         next=next_cursor,
     )

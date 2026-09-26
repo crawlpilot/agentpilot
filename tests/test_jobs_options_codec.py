@@ -31,6 +31,63 @@ def test_scrape_options_roundtrip_defaults() -> None:
     assert loaded.timeout_ms == original.timeout_ms
 
 
+def test_scrape_options_roundtrip_carries_the_content_filter_options() -> None:
+    """`relevance_query`/`citations` must survive the JSONB round trip, or a
+    crawl would silently scrape every page with filtering off -- the worker
+    reconstructs its options from this column, nowhere else."""
+
+    original = ScrapeOptions(
+        formats=("markdown", "fit_markdown", "entities"),
+        relevance_query="warranty claim receipt",
+        citations=True,
+    )
+    loaded = load_scrape_options(_roundtrip(dump_scrape_options(original)))
+    assert loaded.formats == ("markdown", "fit_markdown", "entities")
+    assert loaded.relevance_query == "warranty claim receipt"
+    assert loaded.citations is True
+
+
+def test_scrape_options_load_defaults_the_content_filter_options_off() -> None:
+    """Rows written before the two fields existed must load as "filtering
+    off", not raise -- there are already `jobs.options` rows in flight."""
+
+    loaded = load_scrape_options({"formats": ["markdown"]})
+    assert loaded.relevance_query is None
+    assert loaded.citations is False
+
+
+def test_crawl_options_roundtrip_carries_the_cache_policy() -> None:
+    """The worker reconstructs its cache policy from `jobs.options` and nowhere
+    else, so a field that does not survive this means a crawl silently runs with
+    the deployment default instead of what the caller asked for."""
+
+    original = CrawlOptions(
+        url="https://example.com", cache_mode="bypass", max_age_ms=60_000, delay_ms=2_000
+    )
+    loaded = load_crawl_options(_roundtrip(dump_crawl_options(original)))
+    assert loaded.cache_mode == "bypass"
+    assert loaded.max_age_ms == 60_000
+    assert loaded.delay_ms == 2_000
+
+
+def test_crawl_options_load_defaults_the_cache_policy() -> None:
+    """Rows written before these fields existed must load as "cache on, default
+    freshness" rather than raising -- there are `jobs.options` rows in flight."""
+
+    loaded = load_crawl_options({"url": "https://example.com"})
+    assert loaded.cache_mode == "enabled"
+    assert loaded.max_age_ms is None
+
+
+def test_batch_scrape_options_roundtrip_carries_the_cache_policy() -> None:
+    original = BatchScrapeOptions(
+        urls=("https://example.com/a",), cache_mode="read_only", max_age_ms=120_000
+    )
+    loaded = load_batch_scrape_options(_roundtrip(dump_batch_scrape_options(original)))
+    assert loaded.cache_mode == "read_only"
+    assert loaded.max_age_ms == 120_000
+
+
 def test_scrape_options_roundtrip_non_defaults() -> None:
     original = ScrapeOptions(
         formats=("markdown", "html"),

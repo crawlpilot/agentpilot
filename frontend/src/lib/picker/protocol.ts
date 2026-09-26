@@ -196,7 +196,7 @@ export interface PickerApi {
    * Not a picker: nothing is swallowed and no overlay is drawn, because the
    * page has to actually react or there is nothing to record. See `record.ts`.
    */
-  startRecording(): void
+  startRecording(seed?: unknown[]): void
   stopRecording(): unknown[]
   takeRecording(): unknown[]
   isRecording(): boolean
@@ -214,7 +214,16 @@ export interface PickerApi {
    * `pick()` has always defaulted `detail` to `'extract'`.
    */
   pickInRecording(action?: 'extract' | 'click'): void
-  /** Open but not observing -- a pick is in flight. */
+  /**
+   * Stop and restart observing, without ending the recording.
+   *
+   * Separate from the pause a pick takes, and for a different reason: finding
+   * the thing worth recording usually means clicking around first, and every
+   * one of those clicks would otherwise land in the route.
+   */
+  pauseRecording(): void
+  resumeRecording(): void
+  /** Open but not observing -- paused by hand, or a pick is in flight. */
   isRecordingPaused(): boolean
   /**
    * Whether the page changed under the recording.

@@ -3,10 +3,14 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
+  Crosshair,
   MousePointerClick,
   Pause,
+  Play,
   PlayCircle,
+  RotateCcw,
   Square,
+  Timer,
   Trash2,
   TriangleAlert,
 } from 'lucide-react'
@@ -14,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/toast'
 import type { PreviewStep, StepOutcome } from '@/lib/picker/preview'
+import { stepForPick } from '@/lib/picker/record'
 import type { StepIntent } from '@/lib/picker/protocol'
 import { READ_ATTRIBUTES } from '@/lib/recipe/attributes'
 import type { usePagePicker } from '@/hooks/usePagePicker'
@@ -39,9 +44,11 @@ import type { usePagePicker } from '@/hooks/usePagePicker'
  * - **The page must respond normally.** Unlike picking, nothing is swallowed
  *   and no overlay is drawn, so the person just works the page in the live view
  *   as they would anywhere. The panel polls for what has arrived so they can
- *   see it accumulating rather than trusting that it is. The one exception is
- *   *Pick element*, which pauses the recording precisely because the picker
- *   does swallow clicks — see `pickInRecording`.
+ *   see it accumulating rather than trusting that it is. There are two ways
+ *   to stop it watching: *Pause*, for the clicks it takes to FIND the thing
+ *   worth recording, which are not the route to it; and picking, which pauses
+ *   on its own because the picker does swallow clicks — see `pickInRecording`.
+ *   The page cannot tell those apart, so `picking` here does.
  * - **"Try these" exists because a recording is a claim.** It replays the steps
  *   in the page, which is a rehearsal rather than replay (`preview.ts::runSteps`
  *   dispatches from page script, not the trusted CDP click) — so a step that
@@ -120,6 +127,15 @@ export function StepRecorder({
   const [outcomes, setOutcomes] = useState<Record<number, StepOutcome> | null>(null)
   const [trying, setTrying] = useState(false)
   const [paused, setPaused] = useState(false)
+  /**
+   * A pick is in flight, as opposed to a pause somebody took by hand.
+   *
+   * The page cannot tell the two apart — `isRecordingPaused` reports only that
+   * the recorder is not listening — but the panel can, because it is the one
+   * that asked. The difference matters: a hand pause is resumable from here,
+   * and one held by a picker is released by the picker.
+   */
+  const [picking, setPicking] = useState(false)
   const [navigated, setNavigated] = useState(false)
   const [full, setFull] = useState(false)
   // Read by the interval, which must see a stop that happened after it started.
@@ -144,6 +160,10 @@ export function StepRecorder({
         .then((state) => {
           if (!live.current) return
           setPaused(state.paused)
+          // The page resuming is how a pick reports that it finished — or
+          // that it was cancelled with Escape, which produces no result and
+          // would otherwise leave the toolbar locked out for good.
+          if (!state.paused) setPicking(false)
           setNavigated(state.navigated)
           setFull(state.full)
           if (state.steps.length) onChangeRef.current(field, state.steps)
@@ -158,13 +178,24 @@ export function StepRecorder({
     }
   }, [recording, field])
 
-  const start = useCallback(async () => {
+  /**
+   * Open a recording session, fresh or continuing the route already here.
+   *
+   * Continuing is the difference between a route you can correct and one you
+   * can only redo. Stopping used to be final: noticing a missed click meant
+   * Record again, which wiped everything -- including every row deleted,
+   * relabelled or reordered since -- so the cost of one mistake was the whole
+   * route. The panel's copy is what gets seeded, precisely because it is the
+   * edited one.
+   */
+  const start = useCallback(async (seed: PreviewStep[] = []) => {
     setOutcomes(null)
     setNavigated(false)
     setFull(false)
     setPaused(false)
+    setPicking(false)
     try {
-      await picker.startRecording()
+      await picker.startRecording(seed)
     } catch (err) {
       // Reported BEFORE the old route is discarded. Clearing first meant an
       // expired session -- which is exactly when `startRecording` rejects --
@@ -177,7 +208,7 @@ export function StepRecorder({
       })
       return
     }
-    onChange(field, [])
+    onChange(field, seed)
     onRecordingChange(field)
   }, [picker, field, onChange, onRecordingChange, toast])
 
@@ -185,6 +216,7 @@ export function StepRecorder({
     live.current = false
     onRecordingChange(null)
     setPaused(false)
+    setPicking(false)
     try {
       const state = await picker.stopRecording()
       setNavigated(state.navigated)
@@ -201,11 +233,63 @@ export function StepRecorder({
 
   async function pickInto(action: 'extract' | 'click') {
     try {
+      setPicking(true)
       await picker.pickInRecording(action)
       setPaused(true)
     } catch (err) {
+      setPicking(false)
       toast({
         title: 'Could not start picking',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    }
+  }
+
+  /**
+   * Append a pick to a route that is no longer recording.
+   *
+   * Uses the ordinary `pick`, not `pickInRecording`: there is no session to
+   * fold into, and reopening one just to add a row would restart the page
+   * watching for clicks nobody asked to record. The entry it produces is the
+   * same either way — `stepForPick` is shared so the two paths cannot drift.
+   */
+  async function appendPick(action: 'extract' | 'click') {
+    try {
+      setPicking(true)
+      const payload = await picker.pick('detail', action)
+      if (payload) onChange(field, [...steps, stepForPick(payload)])
+    } catch (err) {
+      toast({
+        title: 'Could not pick on the page',
+        description: err instanceof Error ? err.message : String(err),
+        variant: 'destructive',
+      })
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  function appendWait() {
+    // Targetless, because a wait somebody adds by hand is for the case the
+    // recorder could not see -- a section that appears with no dialog and no
+    // `aria-expanded` to notice. `armSettle` writes the targeted kind when it
+    // can, and this is the fallback for when it could not.
+    onChange(field, [...steps, { op: 'wait', intent: 'settle', ms: 1000 }])
+  }
+
+  async function togglePause() {
+    const next = !paused
+    // Set first, so the button reports the state being asked for rather than
+    // sitting unchanged for up to a poll interval. The poll corrects it if the
+    // page disagrees.
+    setPaused(next)
+    try {
+      await (next ? picker.pauseRecording() : picker.resumeRecording())
+    } catch (err) {
+      setPaused(!next)
+      toast({
+        title: next ? 'Could not pause' : 'Could not resume',
         description: err instanceof Error ? err.message : String(err),
         variant: 'destructive',
       })
@@ -279,10 +363,14 @@ export function StepRecorder({
         <span className="text-[11px] font-medium">…or show it how to get there</span>
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {paused
-          ? 'Paused — click the element you want in the view on the left. Recording picks back up straight after.'
-          : recording
+        {picking
+          ? 'Click the element you want in the view on the left. Recording picks back up straight after.'
+          : paused
+            ? 'Paused — nothing you do to the page is being recorded. Press Resume when you are back where you want to be.'
+            : recording
             ? 'Recording — work the page in the view on the left. Use Pick element when you reach the value itself.'
+            : steps.length
+            ? 'Continue adds to this route where it left off; the buttons beside it add one step without recording. Nothing here throws it away except Start over.'
             : 'Record the clicks that reveal the field, and pick the value where it appears. The recipe replays the whole route on every run.'}
       </p>
 
@@ -297,8 +385,25 @@ export function StepRecorder({
               size="sm"
               variant="outline"
               className="h-6 px-2 text-[11px]"
-              disabled={paused}
-              title="Pause and point at the value this route leads to"
+              // Only a pick locks this out. Pausing by hand is exactly when
+              // somebody may want to carry on picking.
+              disabled={picking}
+              title={
+                paused
+                  ? 'Start recording what you do again'
+                  : 'Stop recording for a moment — click around without it landing in the route'
+              }
+              onClick={() => void togglePause()}
+            >
+              {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+              {paused ? 'Resume' : 'Pause'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              disabled={picking}
+              title="Point at the value this route leads to. Recording pauses while you do, and picks back up after."
               onClick={() => void pickInto('extract')}
             >
               <MousePointerClick className="size-3" />
@@ -308,39 +413,91 @@ export function StepRecorder({
               size="sm"
               variant="outline"
               className="h-6 px-2 text-[11px]"
-              disabled={paused}
-              title="Pause and point at a control to click — a close button, a tab, a Show more"
+              disabled={picking}
+              title="Point at a control to click — a close button, a tab, a Show more"
               onClick={() => void pickInto('click')}
             >
-              <Pause className="size-3" />
+              <Crosshair className="size-3" />
               Pick a click
             </Button>
           </>
         ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 px-2 text-[11px]"
-            disabled={disabled || busyElsewhere}
-            title={busyElsewhere ? `Stop the recording on ${recordingField} first` : undefined}
-            onClick={() => void start()}
-          >
-            <Circle className="size-3" />
-            {steps.length ? 'Record again' : 'Record'}
-          </Button>
-        )}
-        {steps.length > 0 && !recording && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 px-2 text-[11px]"
-            disabled={disabled || trying}
-            onClick={() => void tryThese()}
-            title="Replay them in the page now, so a step that does not work is visible before you send it"
-          >
-            <PlayCircle className="size-3" />
-            {trying ? 'Trying…' : 'Try these'}
-          </Button>
+          // Stopping is not the end of the route. Everything here also works
+          // on a route that has already been recorded, because the alternative
+          // -- Record again, which discards it -- made one forgotten click
+          // cost the whole thing.
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              disabled={disabled || busyElsewhere || picking}
+              title={busyElsewhere ? `Stop the recording on ${recordingField} first` : undefined}
+              onClick={() => void start(steps.length ? steps : [])}
+            >
+              <Circle className="size-3" />
+              {steps.length ? 'Continue' : 'Record'}
+            </Button>
+            {steps.length > 0 && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={disabled || busyElsewhere || picking}
+                  title="Point at the value this route leads to, and add it to the end"
+                  onClick={() => void appendPick('extract')}
+                >
+                  <MousePointerClick className="size-3" />
+                  Pick value
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={disabled || busyElsewhere || picking}
+                  title="Point at a control to click — a close button, a tab, a Show more"
+                  onClick={() => void appendPick('click')}
+                >
+                  <Crosshair className="size-3" />
+                  Pick a click
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={disabled}
+                  title="Add a pause, for a section that takes a moment to appear"
+                  onClick={appendWait}
+                >
+                  <Timer className="size-3" />
+                  Add a wait
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={disabled || trying || picking}
+                  onClick={() => void tryThese()}
+                  title="Replay them in the page now, so a step that does not work is visible before you send it"
+                >
+                  <PlayCircle className="size-3" />
+                  {trying ? 'Trying…' : 'Try these'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px] text-muted-foreground"
+                  disabled={disabled || busyElsewhere || picking}
+                  title="Throw this route away and record it from the top"
+                  onClick={() => void start()}
+                >
+                  <RotateCcw className="size-3" />
+                  Start over
+                </Button>
+              </>
+            )}
+          </>
         )}
       </div>
 

@@ -592,16 +592,31 @@ class SessionVerbs:
 
     # --------------------------------------------------------------- content
 
-    async def extract(self, fmt: str = "markdown", *, main_content: bool = True) -> str:
+    async def extract(
+        self,
+        fmt: str = "markdown",
+        *,
+        main_content: bool = True,
+        relevance_query: str | None = None,
+        citations: bool = False,
+    ) -> str:
         """One extraction, returned directly rather than as an index into
         `ActionResult.extracts` -- the positional correlation that made content
-        awkward to reach before (plan D6)."""
+        awkward to reach before (plan D6).
+
+        `relevance_query` and `citations` are here rather than only on the
+        scrape path because the wire `extract` verb already accepts both: a
+        remote caller driving a session over HTTP could ask for a BM25-filtered
+        `fit_markdown` while a local one holding the same session could not.
+        """
 
         result = await self.execute(
             [
                 spi_actions.ExtractAction(
                     format=fmt,  # type: ignore[arg-type]
                     main_content=main_content,
+                    relevance_query=relevance_query,
+                    citations=citations,
                 )
             ]
         )

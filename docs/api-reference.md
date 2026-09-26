@@ -40,12 +40,37 @@ Any other keyword is passed through to `Browser`.
 | `close()` | `None` | Also called by `__exit__` |
 
 `options` are `ScrapeOptions` fields: `only_main_content`, `timeout_ms`,
-`wait_for_ms`, `actions`, `screenshot`, `block_images`, `block_hosts`.
+`wait_for_ms`, `actions`, `screenshot`, `block_images`, `block_hosts`,
+`relevance_query`, `citations`.
+
+`formats` selects what the `Document` carries:
+
+| Format | Field | What it is |
+|---|---|---|
+| `markdown` | `markdown` | The whole main content. Never narrowed by `relevance_query`. |
+| `fit_markdown` | `fit_markdown` | The filtered markdown: low-scoring blocks dropped by text/link density, and ranked against `relevance_query` when one is given. Ask for both to see what the filter discarded. |
+| `text` | `text` | Plain text, no markup. |
+| `html` | `html` | The document as served. |
+| `structured_data` | `structured_data` | What the page declares about itself: JSON-LD, OG/Twitter/DC meta, hydration state. No LLM. |
+| `entities` | `entities` | Regex-found emails, phones, prices, dates and identifiers. No LLM. |
+
+`citations=True` rewrites inline links in the markdown formats as numbered
+references with a trailing `## References` block, which collapses a repeated
+link onto one entry and cuts the token cost of a link-dense page.
 
 ```python
 with Crawlpilot(proxy="http://gw:8080") as cp:
     doc = cp.scrape("https://example.com", formats=("markdown", "structured_data"))
     print(doc.metadata.tier_used, len(doc.markdown))
+
+    # Just the part of a long support page that answers one question.
+    policy = cp.scrape(
+        "https://example.com/support",
+        formats=("fit_markdown",),
+        relevance_query="warranty claim receipt",
+        citations=True,
+    )
+    print(policy.fit_markdown)
 ```
 
 ### `proxy_endpoint(url, *, tier="residential", country=None)`

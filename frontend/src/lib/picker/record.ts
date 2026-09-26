@@ -124,6 +124,30 @@ export function classifyClick(el: HTMLElement): 'reveal' | 'dismiss' {
   return 'reveal'
 }
 
+/**
+ * One route entry for a finished pick.
+ *
+ * Shared rather than a method, because a pick reaches the route two ways and
+ * both must produce the same entry: `Recorder.pushSelect`, when the pick was
+ * made mid-recording, and the panel appending to a route it has already
+ * stopped. Two conversions would drift, and the one that drifted would be the
+ * rarer path nobody looks at.
+ *
+ * An `extract` pick becomes the `select` the binding is read from; a `click`
+ * pick becomes an ordinary reveal targeting that element. That is the
+ * extension's two interactions -- `ElementDefinition.action` -- with the
+ * ordering a recording adds on top.
+ */
+export function stepForPick(payload: PickPayload): PreviewStep {
+  const selector = payload.itemSelector || payload.containerSelector || ''
+  const text = (payload.previewValue || payload.value || '').trim().slice(0, 60)
+  const target = selector ? { kind: 'css' as const, selector } : {}
+  if (payload.action === 'click') {
+    return { op: 'click', intent: 'reveal', ...target, text }
+  }
+  return { op: 'select', intent: 'select', ...target, text, pick: payload }
+}
+
 export class Recorder {
   private steps: PreviewStep[] = []
   private scrollTimer: ReturnType<typeof setTimeout> | null = null
@@ -155,9 +179,22 @@ export class Recorder {
     this.onUnload = this.onUnload.bind(this)
   }
 
-  start(): void {
+  /**
+   * Begin a recording, optionally continuing one the panel already holds.
+   *
+   * `seed` is what makes a stopped route resumable. Without it the only way
+   * back into a recording was to start a fresh one, which discarded the whole
+   * route -- so noticing one missing click after pressing Stop meant recording
+   * the entire thing again, and any rows that had been deleted, relabelled or
+   * reordered in between were lost with it.
+   *
+   * The panel's copy is the authority, not this one: it is the version that
+   * has been edited. Seeding from it rather than keeping the old buffer is
+   * what makes Continue preserve those edits.
+   */
+  start(seed: PreviewStep[] = []): void {
     if (this.running) return
-    this.steps = []
+    this.steps = seed.slice(0, MAX_STEPS)
     this.navigated = false
     this.open = true
     this.listen()
@@ -255,24 +292,7 @@ export class Recorder {
    * ordering a recording adds on top.
    */
   pushSelect(payload: PickPayload): void {
-    const selector = payload.itemSelector || payload.containerSelector || ''
-    const text = (payload.previewValue || payload.value || '').trim().slice(0, 60)
-    if (payload.action === 'click') {
-      this.push({
-        op: 'click',
-        intent: 'reveal',
-        ...(selector ? { kind: 'css' as const, selector } : {}),
-        text,
-      })
-      return
-    }
-    this.push({
-      op: 'select',
-      intent: 'select',
-      ...(selector ? { kind: 'css' as const, selector } : {}),
-      text,
-      pick: payload,
-    })
+    this.push(stepForPick(payload))
   }
 
   private push(step: PreviewStep): void {

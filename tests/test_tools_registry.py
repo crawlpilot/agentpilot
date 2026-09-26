@@ -50,13 +50,23 @@ def test_the_wire_schema_matches_its_golden() -> None:
     """The published OpenAPI is pinned: a verb's shape must never drift by
     accident, only by an edit to `tools/catalog.py` that also updates this.
 
-    Updated once deliberately, when `ExtensionActionIn` was added: the union
-    went from a bare discriminated `oneOf` to an `anyOf` of that same
-    discriminated union plus a passthrough branch, so that a verb contributed by
-    a `ToolMount` extension can be dispatched over HTTP at all (it could not
-    before -- the union was built from `CATALOG` at import, before any
-    `ExtensionRegistry` exists). **No existing verb's schema changed**, which is
-    the property that mattered and the one this file is here to prove.
+    Updated deliberately twice.
+
+    First when `ExtensionActionIn` was added: the union went from a bare
+    discriminated `oneOf` to an `anyOf` of that same discriminated union plus a
+    passthrough branch, so that a verb contributed by a `ToolMount` extension
+    can be dispatched over HTTP at all (it could not before -- the union was
+    built from `CATALOG` at import, before any `ExtensionRegistry` exists). No
+    existing verb's schema changed.
+
+    Then for the crawl4ai content-filter port, which is the first time an
+    existing verb's schema *did* change: `ExtractActionIn` gained
+    `relevance_query` and `citations`, and its `format` enum gained
+    `fit_markdown` and `entities`. All four are additive -- the two new fields
+    default to the previous behaviour and the enum only grew -- so every request
+    that validated before still validates and still behaves identically.
+    `test_the_port_only_added_to_the_pre_existing_wire_verbs` is what proves
+    that, field by field; this test only pins the result.
     """
 
     golden = json.loads((GOLDEN / "wire_action_schema.json").read_text())
@@ -114,6 +124,21 @@ _DELIBERATELY_EXTENDED = {
     # The agent-browser port. Both are new *filters*: absent, a snapshot behaves
     # exactly as before, so an integrator's existing request is unaffected.
     "SnapshotActionIn": {"selector", "depth"},
+    # The crawl4ai content-filter port. Both are optional with defaults that
+    # reproduce the previous behaviour exactly: `relevance_query=None` means no
+    # BM25 pass (and is ignored by every format except `fit_markdown`), and
+    # `citations=False` leaves links inline. An integrator's existing extract
+    # request validates and behaves identically.
+    "ExtractActionIn": {"relevance_query", "citations"},
+}
+
+_DELIBERATELY_WIDENED_ENUMS = {
+    # Same port: `format` gained `fit_markdown` and `entities`. A *widened* enum
+    # is compatible in the direction that matters -- every value that validated
+    # before still validates -- which is why this is allowed at all and why the
+    # check below is one-directional. A member *removed* from an enum breaks an
+    # integrator's existing request, so `old - new` must still be empty.
+    ("ExtractActionIn", "format"): {"fit_markdown", "entities"},
 }
 
 
@@ -124,9 +149,12 @@ def test_the_port_only_added_to_the_pre_existing_wire_verbs() -> None:
     The port added seven verbs and widened two; `wire_action_schema.json` was
     regenerated to match. That regeneration is the moment a real API break could
     hide, so this checks the new schema against a snapshot of the old one taken
-    before it: pre-existing verbs must be byte-identical, except the two named
-    above, which may only have gained the field named there. An integrator's
-    existing request keeps validating.
+    before it: pre-existing verbs must be byte-identical, except for the two
+    declared allowances above -- a named field a verb may have gained
+    (`_DELIBERATELY_EXTENDED`), and a named enum member a field may have gained
+    (`_DELIBERATELY_WIDENED_ENUMS`). Both are additive by construction, so an
+    integrator's existing request keeps validating; anything else here is a
+    break.
     """
 
     before = json.loads((GOLDEN / "wire_action_schema.pre_port.json").read_text())["$defs"]
@@ -143,7 +171,17 @@ def test_the_port_only_added_to_the_pre_existing_wire_verbs() -> None:
             f"{name} lost wire fields"
         )
         for field, schema in old["properties"].items():
-            assert new["properties"][field] == schema, f"{name}.{field} changed shape"
+            new_schema = new["properties"][field]
+            widened = _DELIBERATELY_WIDENED_ENUMS.get((name, field))
+            if widened is not None:
+                old_enum, new_enum = set(schema["enum"]), set(new_schema["enum"])
+                assert new_enum - old_enum == widened, (
+                    f"{name}.{field} gained unexpected enum members"
+                )
+                assert not old_enum - new_enum, f"{name}.{field} lost enum members"
+                # Everything except the enum must still match byte for byte.
+                schema = {**schema, "enum": new_schema["enum"]}
+            assert new_schema == schema, f"{name}.{field} changed shape"
         assert new.get("required", []) == old.get("required", []), (
             f"{name} changed which fields are required"
         )

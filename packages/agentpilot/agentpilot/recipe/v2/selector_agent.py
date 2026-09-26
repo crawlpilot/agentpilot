@@ -733,15 +733,36 @@ def tautological_read(loc: Locator, raw: Any, field_name: str = "") -> str | Non
     A strict superset is fine and must stay fine: matching on "Made in" and
     reading "Made in China" is a real reading of the page. Only an exact
     round-trip is refused.
+
+    **The two checks below answer different questions, and only the first one
+    needs a needle.** That distinction was wrong here for a while, and it let
+    the very bug this function is named after come back through another door.
+    Both checks sat behind `if not needle: return None`, so a locator that
+    found the caption by CSS rather than by its text was never examined at all
+    -- and `focus_snapshot` made exactly that the likely proposal. Once the
+    snapshot budget followed the field's own vocabulary, the model was reliably
+    shown the region around the word "care" on a collapsed Zara page, where the
+    nearest element is the CleverCare badge; it stopped needing
+    `name_contains="Composition, care & origin"` to reach the caption and
+    started proposing `.product-detail-actions__clevercare` instead. Same
+    caption, same freeze, same field lost -- through a selector this refused to
+    look at.
+
+    So: reading back your own search term is only possible when you searched
+    for a term, but *being a caption* is a property of the value, not of how
+    you got to it. The second check runs for every locator kind.
     """
 
-    needle = (loc.name_contains or loc.text or "").strip()
-    if not needle or not isinstance(raw, str):
+    if not isinstance(raw, str):
         return None
     value = " ".join(raw.split())
+    if not value:
+        return None
+
+    needle = " ".join((loc.name_contains or loc.text or "").split())
     matcher = "name_contains" if loc.name_contains else "text"
 
-    if value.casefold() == " ".join(needle.split()).casefold():
+    if needle and value.casefold() == needle.casefold():
         return (
             f"this reads back exactly the {matcher} it searched for ({needle!r}), so "
             f"it is the label of the element you matched rather than anything on the "
@@ -764,9 +785,9 @@ def tautological_read(loc: Locator, raw: Any, field_name: str = "") -> str | Non
     if len(value) <= _MAX_CAPTION_CHARS and _names_the_field(field_name, value):
         return (
             f"this reads {value!r}, which is a caption NAMING {field_name!r} rather "
-            f"than a value for it -- you matched the control that leads to the "
-            f"content, not the content. Open it and read what it reveals, or point "
-            f"at the text inside the revealed panel"
+            f"than a value for it -- you matched the control or heading that leads "
+            f"to the content, not the content. Open it and read what it reveals, or "
+            f"point at the text inside the revealed panel"
         )
     return None
 

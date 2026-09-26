@@ -56,6 +56,14 @@ from agentpilot.control.redis_store import RedisStateStore
 from agentpilot.control.retail_extension import RetailExtension
 from agentpilot.gateway.role import Role, get_role
 from agentpilot.jobs.agent_store import PostgresAgentStore
+from agentpilot.jobs.cache import (
+    DEFAULT_MAX_AGE_MS,
+    CachePolicy,
+    NullScrapeCache,
+    PostgresScrapeCache,
+    ScrapeCacheProtocol,
+)
+from agentpilot.jobs.limiter import HostLimiter, InProcessHostLimiter, RedisHostLimiter
 from agentpilot.jobs.recipe_store import PostgresRecipeStore
 from agentpilot.jobs.store import PostgresJobStore
 from agentpilot.observability.metrics import PrometheusRecorder
@@ -116,6 +124,28 @@ class Wiring:
         """Same connect/role rules as `jobs_store`/`agent_store` -- see
         `_connect_recipe_store()`."""
 
+        self.scrape_cache: ScrapeCacheProtocol = NullScrapeCache()
+        """Replaced by a `PostgresScrapeCache` in `_connect_scrape_cache()` when
+        a database is configured. A always-missing default rather than `None`
+        so `routes/scrape.py` and `CrawlWorkerLoop` can hold one
+        unconditionally -- a cache that is absent behaves exactly like a cache
+        that always misses, and branching on which one you have at every call
+        site only creates places to forget."""
+        self.cache_policy = CachePolicy(
+            max_age_ms=int(
+                os.environ.get("AGENTPILOT_CACHE_MAX_AGE_MS", str(DEFAULT_MAX_AGE_MS))
+            )
+        )
+        """The deployment's default freshness, filling in a request that did not
+        state its own `max_age_ms`. The *mode* is never taken from here -- a
+        caller asking for `bypass` means it (see `CrawlWorkerLoop._policy_for`)."""
+        self.host_limiter: HostLimiter = InProcessHostLimiter()
+        """Redis-backed in `_build_host_limiter()` when Redis is available.
+        Per-host politeness enforced per process is politeness divided by the
+        worker count, so the Redis one is strongly preferred and the in-process
+        one is the honest single-worker fallback -- see `agentpilot.jobs
+        .limiter`."""
+
         # Every environment-derived browser knob, resolved once here. Leaf
         # modules take values as arguments now (Phase 2 of the browserpilot
         # extraction) -- `identity.fingerprint` used to read the pinned Chrome
@@ -165,6 +195,7 @@ class Wiring:
         )
 
         self._assert_shared_state_for_worker()
+        self._build_host_limiter()
 
         if self.role == "gateway":
             self._init_gateway()
@@ -250,6 +281,27 @@ class Wiring:
 
         if self._database_url:
             self.jobs_store = await PostgresJobStore.connect(self._database_url)
+
+    async def _connect_scrape_cache(self) -> None:
+        """Both roles: `gateway` serves `/v1/scrape` hits from it (via the
+        worker it proxies to), `worker` reads and writes it per crawl task.
+
+        Its own small pool rather than sharing `jobs_store`'s, matching every
+        other store here (`PostgresApiKeyStore`, `PostgresAgentStore`,
+        `PostgresRecipeStore` all connect independently). A cache lookup is a
+        single indexed primary-key read, so it does not need the job queue's
+        connection budget and should not be able to exhaust it."""
+
+        if self._database_url:
+            self.scrape_cache = await PostgresScrapeCache.connect(self._database_url)
+
+    def _build_host_limiter(self) -> None:
+        """Redis when there is Redis. Called from `__init__`'s tail rather than
+        `get_wiring()` because `register_script` needs no `await` -- it only
+        hashes the script; the `EVALSHA` happens on first use."""
+
+        if self.redis is not None:
+            self.host_limiter = RedisHostLimiter(self.redis)
 
     async def _connect_agent_store(self) -> None:
         """Same rules as `_connect_jobs_store()`: `gateway` serves
@@ -479,6 +531,9 @@ class Wiring:
             browser_config=self.browser_config,
             prototype_provider=self.prototype_provider,
             block_hooks=self.extensions.blocks,
+            scrape_cache=self.scrape_cache,
+            host_limiter=self.host_limiter,
+            cache_policy=self.cache_policy,
         )
         self.crawl_worker_loop.start()
 
@@ -618,6 +673,8 @@ class Wiring:
             await self.agent_store.close()
         if self.recipe_store is not None:
             await self.recipe_store.close()
+        if isinstance(self.scrape_cache, PostgresScrapeCache):
+            await self.scrape_cache.close()
         if self.redis is not None:
             await self.redis.aclose()
 
@@ -645,6 +702,10 @@ async def get_wiring() -> Wiring:
         try:
             await wiring._connect_api_keys()
             await wiring._connect_jobs_store()
+            # Before `_start_crawl_worker_loop()`, which is handed the cache by
+            # value -- started first, the worker would keep the always-missing
+            # default for the life of the process.
+            await wiring._connect_scrape_cache()
             await wiring._start_crawl_worker_loop()
             await wiring._connect_agent_store()
             await wiring._start_agent_worker_loop()

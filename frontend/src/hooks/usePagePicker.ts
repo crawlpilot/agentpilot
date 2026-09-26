@@ -180,7 +180,7 @@ export interface UsePagePicker {
   /** What the selection is on right now, for showing it back to the user. */
   selection: () => Promise<{ tag: string; text: string; pinned: boolean } | null>
   /** Watch what the user does to the page; resolves with the recorded steps. */
-  startRecording: () => Promise<void>
+  startRecording: (seed?: PreviewStep[]) => Promise<void>
   stopRecording: () => Promise<RecordingState>
   /** Where the recording is up to, without ending it. */
   pollRecording: () => Promise<RecordingState>
@@ -191,6 +191,15 @@ export interface UsePagePicker {
    * coming back here, and the panel sees it arrive through `pollRecording`.
    */
   pickInRecording: (action: 'extract' | 'click') => Promise<void>
+  /**
+   * Stop and restart observing, without ending the recording.
+   *
+   * Not the same pause a pick takes. This one is for getting to the thing
+   * worth recording — the clicks it takes to find a field are not the route to
+   * it, and without this they all land in the list to be deleted afterwards.
+   */
+  pauseRecording: () => Promise<void>
+  resumeRecording: () => Promise<void>
   /** Flash a selector's matches in the page; resolves with the match count. */
   testSelector: (selector: string) => Promise<number>
   /** A region's markup, for handing the model something to search inside. */
@@ -263,9 +272,15 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     }
   }, [run])
 
-  const startRecording = useCallback(async () => {
-    await run(`window.${PICKER_GLOBAL}.startRecording()`)
-  }, [run])
+  const startRecording = useCallback(
+    async (seed: PreviewStep[] = []) => {
+      // Sent whole rather than resumed in the page, because the panel's copy
+      // is the edited one -- rows deleted, relabelled and reordered since the
+      // recorder last saw them.
+      await run(`window.${PICKER_GLOBAL}.startRecording(${JSON.stringify(seed)})`)
+    },
+    [run],
+  )
 
   const stopRecording = useCallback(async (): Promise<RecordingState> => {
     return asRecordingState(await run(RECORDING_STATE('stopRecording()')))
@@ -280,6 +295,14 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     } catch {
       return { steps: [], paused: false, navigated: false, full: false }
     }
+  }, [run])
+
+  const pauseRecording = useCallback(async () => {
+    await run(`window.${PICKER_GLOBAL}.pauseRecording()`)
+  }, [run])
+
+  const resumeRecording = useCallback(async () => {
+    await run(`window.${PICKER_GLOBAL}.resumeRecording()`)
   }, [run])
 
   const pickInRecording = useCallback(
@@ -422,5 +445,6 @@ export function usePagePicker(sessionId: string | null): UsePagePicker {
     status, error, pick, cancel, refine, selection, testSelector, outerHtml,
     preview, previewRows, applySteps, showHighlights,
     startRecording, stopRecording, pollRecording, pickInRecording,
+    pauseRecording, resumeRecording,
   }
 }

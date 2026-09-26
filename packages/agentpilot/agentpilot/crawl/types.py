@@ -19,6 +19,13 @@ from crawlpilot.spi.scrape import ScrapeOptions
 
 SitemapMode = Literal["skip", "include", "only"]
 
+CacheMode = Literal["enabled", "bypass", "read_only", "write_only", "disabled"]
+"""Re-exported from `agentpilot.jobs.cache` rather than imported, to keep this
+module a leaf: `crawl.types` is loaded by the gateway's request mapping and by
+`jobs.options_codec`, and neither should acquire a dependency on the cache
+implementation just to name a mode. `jobs.cache.CacheMode` is the same
+`Literal`, and a test asserts the two stay identical."""
+
 
 @dataclass
 class CrawlOptions:
@@ -35,13 +42,24 @@ class CrawlOptions:
     deduplicate_similar_urls: bool = True
     ignore_query_parameters: bool = False
     delay_ms: int | None = None
+    """Minimum gap between requests to one host. Honoured by `jobs.limiter`,
+    which takes the larger of this and the host's robots.txt `Crawl-delay` --
+    a caller's smaller number cannot override what a host published."""
     max_concurrency: int = 10
+    cache_mode: CacheMode = "enabled"
+    max_age_ms: int | None = None
+    """How old a cached page may be and still be served, in milliseconds.
+    `None` takes the deployment's default (`jobs.cache.DEFAULT_MAX_AGE_MS`).
+    Job-level rather than per-page, alongside `delay_ms`: freshness is a
+    property of why the caller is crawling, not of any one URL in it."""
     scrape_options: ScrapeOptions = field(default_factory=ScrapeOptions)
 
 
 @dataclass
 class BatchScrapeOptions:
     urls: tuple[str, ...]
+    cache_mode: CacheMode = "enabled"
+    max_age_ms: int | None = None
     scrape_options: ScrapeOptions = field(default_factory=ScrapeOptions)
 
 

@@ -26,10 +26,11 @@ from agentpilot.gateway.schemas import (
     ScrapeResponse,
 )
 from agentpilot.gateway.wiring import Wiring, get_wiring
+from agentpilot.jobs.cache import CachePolicy, cache_key, is_cacheable
 from agentpilot.llm.structured import extract_structured
 from agentpilot.observability.metrics import requests_total, scrape_duration_seconds
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
-from crawlpilot.spi.scrape import ExtractConfig, ScrapeOptions
+from crawlpilot.spi.scrape import Document, ExtractConfig, ScrapeOptions
 
 log = structlog.get_logger(__name__)
 
@@ -116,6 +117,37 @@ async def scrape(
         else None,
     )
 
+    # `variant` carries the request-level fields that change what the server
+    # returns but do not live on `ScrapeOptions` -- without them a scrape asking
+    # for `locale="ja-JP"` could be served the `en-US` page a previous caller
+    # cached. `tier` is included even though every tier currently takes the same
+    # path: it is *documented* as future routing, and a key that omits it would
+    # start silently mixing tiers the moment that lands.
+    policy = CachePolicy(
+        mode=req.cache_mode,
+        **({"max_age_ms": req.max_age_ms} if req.max_age_ms is not None else {}),
+    )
+    key = (
+        cache_key(
+            tenant=req.tenant,
+            url=req.url,
+            options=options,
+            variant={
+                "locale": req.locale,
+                "timezone_id": req.timezone_id,
+                "tier": req.tier,
+                "extensions": sorted(req.extensions) if req.extensions is not None else None,
+            },
+        )
+        if is_cacheable(options, session_name=req.session_name)
+        else None
+    )
+    if key is not None and policy.may_read:
+        cached = await wiring.scrape_cache.get(key, max_age_ms=policy.max_age_ms)
+        if cached is not None:
+            log.info("scrape.cache_hit", url=req.url, tenant=req.tenant)
+            return ScrapeResponse(success=True, data=_document_out(cached, cached_hit=True))
+
     with scrape_duration_seconds.time():
         document, screenshot_bytes = await run_ephemeral_scrape(
             browser_config=wiring.browser_config,
@@ -139,33 +171,60 @@ async def scrape(
             burn_tracker=wiring.burn_tracker,
         )
 
-    meta = document.metadata
+    if key is not None and policy.may_write and document.error is None:
+        # Never for an error document: an error
+        # describes one attempt, not the page, and caching it would turn a
+        # transient failure into an hour of confidently-served failures.
+        await wiring.scrape_cache.put(
+            key, tenant=req.tenant, url=req.url, document=document
+        )
+
     return ScrapeResponse(
         success=True,
-        data=DocumentOut(
-            document_id=document.document_id,
-            url=document.url,
-            markdown=document.markdown,
-            fit_markdown=document.fit_markdown,
-            text=document.text,
-            html=document.html,
-            structured_data=document.structured_data,
-            entities=document.entities,
-            links=list(document.links),
-            screenshot=base64.b64encode(screenshot_bytes).decode("ascii")
-            if screenshot_bytes
-            else None,
-            metadata=ScrapeMetadataOut(
-                title=meta.title if meta else None,
-                status_code=meta.status_code if meta else None,
-                tier_used=meta.tier_used if meta else req.tier,
-                node_id=meta.node_id if meta else "",
-                duration_ms=meta.duration_ms if meta else 0.0,
-                source_url=document.url,
-            ),
-            error=document.error,
-            extract=document.extract,
-            extract_error=document.extract_error,
-            extract_warning=document.extract_warning,
+        data=_document_out(
+            document,
+            screenshot_bytes=screenshot_bytes,
+            fallback_tier=req.tier,
         ),
+    )
+
+
+def _document_out(
+    document: Document,
+    *,
+    screenshot_bytes: bytes | None = None,
+    cached_hit: bool = False,
+    fallback_tier: str = "auto",
+) -> DocumentOut:
+    """One mapper for both paths, so a cache hit and a fresh scrape cannot drift
+    into returning different shapes -- which is exactly the bug a caller would
+    report as "the cache loses my entities"."""
+
+    meta = document.metadata
+    return DocumentOut(
+        document_id=document.document_id,
+        url=document.url,
+        markdown=document.markdown,
+        fit_markdown=document.fit_markdown,
+        text=document.text,
+        html=document.html,
+        structured_data=document.structured_data,
+        entities=document.entities,
+        links=list(document.links),
+        screenshot=base64.b64encode(screenshot_bytes).decode("ascii")
+        if screenshot_bytes
+        else None,
+        metadata=ScrapeMetadataOut(
+            title=meta.title if meta else None,
+            status_code=meta.status_code if meta else None,
+            tier_used=meta.tier_used if meta else fallback_tier,
+            node_id=meta.node_id if meta else "",
+            duration_ms=meta.duration_ms if meta else 0.0,
+            source_url=document.url,
+        ),
+        cached=cached_hit,
+        error=document.error,
+        extract=document.extract,
+        extract_error=document.extract_error,
+        extract_warning=document.extract_warning,
     )

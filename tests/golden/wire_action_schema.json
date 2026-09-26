@@ -325,6 +325,11 @@
     "ExtractActionIn": {
       "additionalProperties": false,
       "properties": {
+        "citations": {
+          "default": false,
+          "title": "Citations",
+          "type": "boolean"
+        },
         "exclude_tags": {
           "items": {
             "type": "string"
@@ -338,7 +343,9 @@
             "markdown",
             "text",
             "html",
-            "structured_data"
+            "structured_data",
+            "fit_markdown",
+            "entities"
           ],
           "title": "Format",
           "type": "string"
@@ -354,6 +361,18 @@
           "default": true,
           "title": "Main Content",
           "type": "boolean"
+        },
+        "relevance_query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relevance Query"
         },
         "type": {
           "const": "extract",
