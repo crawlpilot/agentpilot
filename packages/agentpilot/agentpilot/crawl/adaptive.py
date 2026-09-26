@@ -136,9 +136,11 @@ class AdaptiveState:
 
     @property
     def _vocab(self) -> set[str]:
-        if getattr(self, "_vocabulary_index", None) is None:
-            self._vocabulary_index = set(self.vocabulary)
-        return self._vocabulary_index
+        index = getattr(self, "_vocabulary_index", None)
+        if index is None:
+            index = set(self.vocabulary)
+            self._vocabulary_index = index
+        return index
 
     def _add_terms(self, terms: set[str]) -> int:
         """Add `terms` to the vocabulary; return how many were new.
@@ -275,24 +277,30 @@ class AdaptiveState:
     def saturation(self) -> float:
         """How far the new-term discovery rate has fallen from its early level.
 
-        Upstream compares the single latest count against the single first one,
-        which makes the whole signal hostage to two pages -- one unusually long
-        page early on permanently suppresses it. This averages over the ends of
-        the history window instead.
+        Two deviations from upstream, both found by watching the metric misbehave:
+
+        1. **The first document is excluded from the baseline.** Its new-term count
+           is not a discovery *rate* -- it is the whole starting vocabulary, since
+           every term on page one is new by definition. Including it makes
+           `early_rate` enormous and saturation reads ~0.7 by page four of a crawl
+           that is still discovering plenty. Upstream compares the latest count
+           against exactly that first one, so it has this effect at full strength.
+        2. **Both ends are averaged, and more history is required.** Upstream's
+           single-latest-against-single-first makes the whole signal hostage to two
+           pages; one unusually long page anywhere near either end distorts it.
         """
 
         history = self.new_terms_history
-        if len(history) < 4:
-            # Too early to say anything. Zero rather than a guess: saturation is a
-            # *stopping* signal, and inventing one from two data points would stop
-            # crawls on their second page.
+        if len(history) < 6:
+            # Too early to say anything. Zero rather than a guess: this is a
+            # *stopping* signal, and inventing one from a handful of points would
+            # end crawls on their second page.
             return 0.0
 
-        window = max(2, len(history) // 4)
-        early = history[:window]
-        recent = history[-window:]
-        early_rate = sum(early) / len(early)
-        recent_rate = sum(recent) / len(recent)
+        baseline = history[1:]
+        window = max(2, len(baseline) // 4)
+        early_rate = sum(baseline[:window]) / window
+        recent_rate = sum(baseline[-window:]) / window
         if early_rate <= 0:
             return 0.0
         return max(0.0, min(1.0, 1 - (recent_rate / early_rate)))

@@ -89,6 +89,7 @@ def dump_crawl_options(options: CrawlOptions) -> dict[str, Any]:
         "max_age_ms": options.max_age_ms,
         "query": options.query,
         "score_urls": options.score_urls,
+        "confidence_threshold": options.confidence_threshold,
         "max_concurrency": options.max_concurrency,
         "scrape_options": dump_scrape_options(options.scrape_options),
     }
@@ -113,6 +114,7 @@ def load_crawl_options(data: dict[str, Any]) -> CrawlOptions:
         max_age_ms=data.get("max_age_ms"),
         query=data.get("query"),
         score_urls=data.get("score_urls", True),
+        confidence_threshold=data.get("confidence_threshold"),
         max_concurrency=data.get("max_concurrency", 10),
         scrape_options=load_scrape_options(data.get("scrape_options")),
     )

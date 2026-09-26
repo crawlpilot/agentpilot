@@ -24,6 +24,7 @@ from agentpilot.crawl.seed import discover_for_crawl
 from agentpilot.crawl.types import CrawlOptions
 from agentpilot.gateway.auth_deps import require_tenant_auth
 from agentpilot.gateway.schemas import (
+    AdaptiveProgressOut,
     CrawlCreateResponse,
     CrawlProgressOut,
     CrawlRequest,
@@ -74,6 +75,7 @@ def _to_crawl_options(req: CrawlRequest) -> CrawlOptions:
         max_age_ms=req.max_age_ms,
         query=req.query,
         score_urls=req.score_urls,
+        confidence_threshold=req.confidence_threshold,
         scrape_options=ScrapeOptions(
             formats=tuple(req.scrape_options.formats),
             only_main_content=req.scrape_options.only_main_content,
@@ -199,6 +201,18 @@ async def get_crawl(
         raise JobNotFound(job_id)
     docs, next_cursor = await store.list_documents(job_id, authed.tenant, after, limit)
     stats = await store.task_stats(job_id, authed.tenant)
+    adaptive_state = await store.get_adaptive_state(job_id, authed.tenant)
+    adaptive = None
+    if adaptive_state is not None:
+        metrics = adaptive_state.metrics()
+        adaptive = AdaptiveProgressOut(
+            confidence=float(metrics["confidence"]),
+            coverage=float(metrics["coverage"]),
+            consistency=float(metrics["consistency"]),
+            saturation=float(metrics["saturation"]),
+            documents=int(metrics["documents"]),
+            vocabulary=int(metrics["vocabulary"]),
+        )
     return CrawlStatusResponse(
         success=True,
         status=job.status,
@@ -215,6 +229,8 @@ async def get_crawl(
                 for f in stats.recent_failures
             ],
         ),
+        adaptive=adaptive,
+        stop_reason=job.stop_reason,
         data=[_document_out(d) for d in docs],
         next=next_cursor,
     )

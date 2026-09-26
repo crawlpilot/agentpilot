@@ -427,6 +427,14 @@ class CrawlRequest(BaseModel):
     """Order the frontier by relevance, path depth and URL shape instead of the
     order links appeared in the page. On by default: in DOM order a `limit` of 500
     against a 50,000-page site returns that site's navigation and footer."""
+    confidence_threshold: float | None = Field(default=None, gt=0, le=1)
+    """Stop once the crawl has learned enough about `query` instead of running to
+    `limit`. Around `0.7` is a reasonable starting point.
+
+    Requires `query`; ignored without one, since there is nothing to be confident
+    about. `limit` remains the ceiling -- this only ever ends a crawl sooner. The
+    crawl's status response reports the confidence, the three signals behind it,
+    and `stop_reason` in words."""
     cache_mode: Literal["enabled", "bypass", "read_only", "write_only", "disabled"] = "enabled"
     """`enabled` reads and writes the scrape cache. `bypass` always fetches but
     still refreshes the entry -- the way to force one URL. `read_only` serves a
@@ -484,6 +492,27 @@ class CrawlProgressOut(BaseModel):
     them would make this response unboundedly large for no extra insight."""
 
 
+class AdaptiveProgressOut(BaseModel):
+    """What the crawl has learned, when `confidence_threshold` was set.
+
+    Every signal is returned, not just the confidence: a crawl that stopped at 40
+    of a permitted 500 pages needs to show *which* number crossed, or the
+    behaviour is indistinguishable from a bug."""
+
+    model_config = ConfigDict(extra="forbid")
+    confidence: float
+    coverage: float
+    """Whether the query's terms appear across the pages read, and how densely."""
+    consistency: float
+    """Vocabulary overlap between pages. High means the crawl is circling one
+    coherent topic; low means it is wandering."""
+    saturation: float
+    """How far the rate of new-vocabulary discovery has fallen from its early
+    level. This is the signal that usually says "enough"."""
+    documents: int
+    vocabulary: int
+
+
 class CrawlStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     success: bool
@@ -494,6 +523,11 @@ class CrawlStatusResponse(BaseModel):
     progress: CrawlProgressOut | None = None
     """Per-task state. `None` only if the counts could not be read; a running
     crawl always has some."""
+    adaptive: AdaptiveProgressOut | None = None
+    """`None` unless the crawl was created with a `confidence_threshold`."""
+    stop_reason: str | None = None
+    """Why the crawl ended, when it ended for a reason other than exhausting its
+    budget -- today, that it reached its confidence threshold or saturated."""
     data: list[DocumentOut]
     next: str | None
     """Opaque keyset-pagination cursor -- pass back as `?after=` to fetch the

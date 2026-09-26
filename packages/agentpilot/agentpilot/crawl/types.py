@@ -63,6 +63,13 @@ class CrawlOptions:
     appeared in the DOM. On by default: DOM order means a `limit` of 500 against a
     50,000-page site returns that site's navigation and footer, which is nobody's
     intent. Set `False` for the previous first-seen behaviour."""
+    confidence_threshold: float | None = None
+    """Stop the crawl once it has learned enough about `query`, rather than when it
+    exhausts `limit` (`crawl.adaptive`). `0.7` is a reasonable starting point.
+
+    Requires `query` -- there is nothing to be confident *about* otherwise, and a
+    threshold without one is ignored rather than guessed at. `limit` stays in force
+    as the ceiling: adaptive stopping only ever ends a crawl earlier."""
     scrape_options: ScrapeOptions = field(default_factory=ScrapeOptions)
 
 

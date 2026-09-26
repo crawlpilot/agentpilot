@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from agentpilot.crawl.adaptive import AdaptiveState
 from agentpilot.jobs.types import Job, JobId, JobStatus, JobType
 from agentpilot.jobs.webhook import WebhookConfig
 from crawlpilot.spi.scrape import Document, DocumentMetadata
@@ -127,6 +128,7 @@ def _job_from_row(row: dict[str, Any]) -> Job:
         started_at=row["started_at"],
         finished_at=row["finished_at"],
         error=row["error"],
+        stop_reason=row.get("stop_reason"),
     )
 
 
@@ -163,7 +165,7 @@ def _document_from_row(row: dict[str, Any]) -> Document:
 
 _JOB_COLUMNS = (
     "job_id, tenant, job_type, status, url, total, completed, failed, "
-    "discovery_done, created_at, started_at, finished_at, error"
+    "discovery_done, created_at, started_at, finished_at, error, stop_reason"
 )
 
 _DOCUMENT_COLUMNS = (
@@ -339,6 +341,122 @@ class PostgresJobStore:
             await conn.execute(
                 "UPDATE jobs SET discovery_done = TRUE WHERE job_id = %s", (job_id,)
             )
+
+    async def observe_adaptive(
+        self, job_id: str, *, query: str, content: str
+    ) -> AdaptiveState:
+        """Fold one page's content into this job's adaptive state, atomically.
+
+        `SELECT ... FOR UPDATE` then `UPDATE`, in one transaction. The lock is the
+        whole point: N workers complete pages of the same job concurrently, and a
+        read-modify-write without it loses every update but the last -- so the
+        crawl's measured knowledge would grow at 1/N the true rate and it would
+        never reach its threshold.
+
+        Serializing on this row costs one short transaction per completed page,
+        which is nothing next to the scrape that produced it.
+        """
+
+        from psycopg.rows import dict_row
+        from psycopg.types.json import Jsonb
+
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor(row_factory=dict_row) as cur:
+                    await cur.execute(
+                        "SELECT adaptive_state FROM jobs WHERE job_id = %s FOR UPDATE",
+                        (job_id,),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        # The job vanished mid-flight. Return a throwaway state so
+                        # the caller's stop check simply says "keep going"; the
+                        # task it is processing will fail on its own.
+                        return AdaptiveState.for_query(query)
+
+                    stored = row["adaptive_state"]
+                    state = (
+                        AdaptiveState.from_json(stored)
+                        if stored
+                        else AdaptiveState.for_query(query)
+                    )
+                    state.observe(content)
+                    await cur.execute(
+                        "UPDATE jobs SET adaptive_state = %s WHERE job_id = %s",
+                        (Jsonb(state.to_json()), job_id),
+                    )
+        return state
+
+    async def stop_crawl_early(self, job_id: str, reason: str) -> bool:
+        """End a crawl that has learned enough, without cancelling it.
+
+        Three things in one transaction, and the order does not matter because it
+        is one transaction -- but each is necessary:
+
+        * `discovery_done = true`, or `try_finalize_job` never fires.
+        * Queued tasks are deleted. Leaving them would drain the rest of the
+          budget, which is precisely what adaptive stopping exists to avoid.
+        * `total` is rewritten to what will actually be processed. It has to move
+          in lockstep with that delete, since `try_finalize_job` compares
+          `completed + failed >= total` -- leaving the old total would wedge the job
+          in `scraping` forever.
+
+        Tasks already `active` are left to finish: a worker is mid-scrape on them,
+        and their results are paid for either way. Distinct from `cancel_job`,
+        which is a caller saying "throw this away"; this is the crawl saying "I am
+        done", and it finalizes as `completed` with everything it found.
+
+        `False` if the job was not still running, so a second worker crossing the
+        threshold in the same moment is a no-op rather than a double-stop.
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT 1 FROM jobs WHERE job_id = %s AND status = 'scraping' "
+                        "AND stop_reason IS NULL FOR UPDATE",
+                        (job_id,),
+                    )
+                    if await cur.fetchone() is None:
+                        return False
+
+                    await cur.execute(
+                        "DELETE FROM crawl_tasks WHERE job_id = %s AND status = 'queued'",
+                        (job_id,),
+                    )
+                    await cur.execute(
+                        """
+                        UPDATE jobs SET
+                            discovery_done = TRUE,
+                            stop_reason = %s,
+                            total = completed + failed + (
+                                SELECT count(*) FROM crawl_tasks
+                                WHERE job_id = %s AND status = 'active'
+                            )
+                        WHERE job_id = %s
+                        """,
+                        (reason, job_id, job_id),
+                    )
+        return True
+
+    async def get_adaptive_state(self, job_id: str, tenant: str) -> AdaptiveState | None:
+        """The job's adaptive state for the status response. Tenant-scoped, unlike
+        `observe_adaptive` -- that one is the trusted worker acting on a claimed
+        task, this one answers an HTTP request."""
+
+        from psycopg.rows import dict_row
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    "SELECT adaptive_state FROM jobs WHERE job_id = %s AND tenant = %s",
+                    (job_id, tenant),
+                )
+                row = await cur.fetchone()
+        if row is None or not row["adaptive_state"]:
+            return None
+        return AdaptiveState.from_json(row["adaptive_state"])
 
     async def try_finalize_job(self, job_id: str) -> JobStatus | None:
         """Idempotent terminal-status flip via a `RETURNING`-guarded

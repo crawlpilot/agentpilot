@@ -51,3 +51,8 @@ class Job:
     started_at: datetime | None
     finished_at: datetime | None
     error: str | None
+    stop_reason: str | None = None
+    """Why the crawl ended, when it ended for a reason other than exhausting its
+    budget -- today, that adaptive stopping judged it had learned enough. Distinct
+    from `error`, which means the job failed: a crawl that stops early has
+    *succeeded*, just sooner than its `limit` allowed for."""

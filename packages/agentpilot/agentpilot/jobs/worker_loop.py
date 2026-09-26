@@ -18,7 +18,9 @@ Pacing and admission are handled by two collaborators rather than inline here:
 when a host starts returning 429/503), and `jobs.dispatch` decides how many
 tasks this batch may admit given how much memory is actually left.
 `jobs.cache` is consulted before each scrape, so an unchanged page does not open
-a browser twice.
+a browser twice. And `jobs.adaptive` -- via `store.observe_adaptive` /
+`store.stop_crawl_early` -- can end a crawl once it has learned enough about the
+caller's `query`, rather than when it exhausts `limit`.
 
 **Known simplifications**, both named rather than silently wrong:
 - Concurrency is bounded globally per worker process (`max_concurrent`, further
@@ -42,6 +44,7 @@ from urllib.robotparser import RobotFileParser
 
 import structlog
 
+from agentpilot.crawl import adaptive
 from agentpilot.crawl.frontier import expand_frontier
 from agentpilot.crawl.robots import crawl_delay as robots_crawl_delay
 from agentpilot.crawl.robots import fetch as fetch_robots
@@ -276,6 +279,12 @@ class CrawlWorkerLoop:
 
         await self._store.complete_task(task.task_id, task.lock, document)
 
+        # After `complete_task`, so this page is already counted in `completed` by
+        # the time `stop_crawl_early` rewrites `total` from it -- the other order
+        # would leave the job one task short of finalizing forever.
+        if crawl_options is not None:
+            await self._maybe_stop_adaptively(task, job, crawl_options, document)
+
     def _policy_for(self, mode: str, max_age_ms: int | None) -> CachePolicy:
         """The job's own cache mode, with the deployment's default filling in an
         unset `max_age_ms`. The *mode* always comes from the job: a caller who
@@ -288,6 +297,55 @@ class CrawlWorkerLoop:
             if max_age_ms is not None
             else self._cache_policy.max_age_ms,
         )
+
+    async def _maybe_stop_adaptively(
+        self,
+        task: ClaimedTask,
+        job: JobForWorker,
+        options: CrawlOptions,
+        document: Document,
+    ) -> None:
+        """Fold this page into the job's knowledge and end the crawl if it has
+        enough.
+
+        Wrapped so nothing here can lose a successful scrape: the page is already
+        persisted by the time this runs, and a failure to *measure* it must not
+        turn a completed task into a failed one. Same reasoning as
+        `_expand_frontier`'s guard.
+        """
+
+        if options.confidence_threshold is None or not options.query:
+            return
+
+        content = document.markdown or document.fit_markdown or document.text
+        if not content:
+            # A page with no text tells the metrics nothing. Skipping it rather
+            # than observing an empty string keeps `total_documents` honest -- it
+            # is the denominator of coverage.
+            return
+
+        try:
+            state = await self._store.observe_adaptive(
+                job.job_id, query=options.query, content=content
+            )
+            decision = adaptive.should_stop(
+                state, confidence_threshold=options.confidence_threshold
+            )
+            if decision.stop and decision.reason is not None:
+                stopped = await self._store.stop_crawl_early(job.job_id, decision.reason)
+                if stopped:
+                    log.info(
+                        "crawl_worker_loop.stopped_adaptively",
+                        job_id=job.job_id,
+                        reason=decision.reason,
+                        **state.metrics(),
+                    )
+        except Exception:
+            log.warning(
+                "crawl_worker_loop.adaptive_update_failed",
+                task_id=task.task_id,
+                job_id=job.job_id,
+            )
 
     async def _pace(self, host: str, options: CrawlOptions | None) -> None:
         """Wait out this host's interval before making a request to it.
