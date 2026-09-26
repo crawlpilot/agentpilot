@@ -31,8 +31,11 @@ _DENIED_EXTENSIONS = frozenset(
         "zip", "tar", "gz", "rar", "7z", "exe", "dmg", "apk", "iso",
         # media
         "mp3", "mp4", "avi", "mov", "wav", "webm", "ogg", "flac",
-        # documents (no pdf/document engine yet)
-        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "odt",
+        # documents. `pdf` is *not* here: `crawlpilot.extraction.pdf` reads PDFs
+        # now (via the HTTP tier -- Chrome's viewer never exposes the text), so a
+        # linked datasheet, filing or price list is a page a crawl can actually
+        # return. The rest stay denied until something can read them.
+        "doc", "docx", "xls", "xlsx", "ppt", "pptx", "rtf", "odt",
         # data
         "xml", "json", "csv", "rss", "atom",
     }

@@ -41,10 +41,17 @@ dependencies = [
 engine = ["patchright>=1.61.2", "re-cdp-patches>=0.9.1"]
 # Encryption-at-rest for saved browser profiles.
 vault = ["cryptography>=43.0"]
+# PDF text extraction (`extraction/pdf.py`). Optional and genuinely so: the import
+# is guarded, and a deployment that never scrapes a PDF gets a descriptive
+# `Document.error` rather than an ImportError at startup. Kept out of the base
+# install because the base install's promise is "no browser, no framework" and a
+# document parser is neither.
+pdf = ["pypdf>=5.1"]
 all = [
     "patchright>=1.61.2",
     "re-cdp-patches>=0.9.1",
     "cryptography>=43.0",
+    "pypdf>=5.1",
 ]
 
 [build-system]

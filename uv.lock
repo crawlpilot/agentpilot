@@ -20,6 +20,7 @@ dev = [
     { name = "lupa", specifier = ">=2.1" },
     { name = "lxml-stubs", specifier = ">=0.5" },
     { name = "mypy", specifier = ">=1.13" },
+    { name = "pypdf", specifier = ">=5.1" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-httpserver", specifier = ">=1.1" },
@@ -466,11 +467,15 @@ dependencies = [
 all = [
     { name = "cryptography" },
     { name = "patchright" },
+    { name = "pypdf" },
     { name = "re-cdp-patches" },
 ]
 engine = [
     { name = "patchright" },
     { name = "re-cdp-patches" },
+]
+pdf = [
+    { name = "pypdf" },
 ]
 vault = [
     { name = "cryptography" },
@@ -487,12 +492,14 @@ requires-dist = [
     { name = "patchright", marker = "extra == 'all'", specifier = ">=1.61.2" },
     { name = "patchright", marker = "extra == 'engine'", specifier = ">=1.61.2" },
     { name = "pydantic", specifier = ">=2.9" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=5.1" },
+    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=5.1" },
     { name = "re-cdp-patches", marker = "extra == 'all'", specifier = ">=0.9.1" },
     { name = "re-cdp-patches", marker = "extra == 'engine'", specifier = ">=0.9.1" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "zstandard", specifier = ">=0.22" },
 ]
-provides-extras = ["engine", "vault", "all"]
+provides-extras = ["engine", "vault", "pdf", "all"]
 
 [[package]]
 name = "cryptography"
@@ -1630,6 +1637,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
+]
+
+[[package]]
+name = "pypdf"
+version = "6.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/ac/63d71aaedb59acbcdef491e6ca6469165e3771c9c74358204818fd9bc5a6/pypdf-6.19.0.tar.gz", hash = "sha256:bbc43aca292369ccc6cbc8a921991ecf2538a3587ab5a116eff06c321d647155", size = 7033266, upload-time = "2026-09-16T09:32:05.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl", hash = "sha256:7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14", size = 395480, upload-time = "2026-09-16T09:32:04.087Z" },
 ]
 
 [[package]]

@@ -16,13 +16,14 @@ network or a real proxy.
 
 from __future__ import annotations
 
+import json
 import re
 
 import httpx
 
 from crawlpilot.egress.httpx_guard import assert_host_allowed
 from crawlpilot.extensions.mounts import BlockHooks
-from crawlpilot.extraction import block_detect
+from crawlpilot.extraction import block_detect, entities, pdf
 from crawlpilot.extraction.extractor import extract
 from crawlpilot.spi.actions import ActionResult, ExtractFormat
 from crawlpilot.spi.egress import EgressPolicy
@@ -99,9 +100,17 @@ async def fetch_via_http(
         if owns_client:
             await client.aclose()
 
-    html = resp.text
     status = resp.status_code
     final_url = str(resp.url)
+
+    if pdf.is_pdf(content_type=resp.headers.get("content-type"), body=resp.content):
+        # Short-circuit before block detection and the HTML pipeline, both of
+        # which are meaningless for a binary document: `classify_page` would be
+        # reading PDF bytes for wall markers, and `sanitize` would hand lxml a
+        # file it cannot parse.
+        return _pdf_result(resp.content, formats=formats, status=status)
+
+    html = resp.text
 
     verdict = block_detect.classify_page(
         html=html, url=final_url, status=status, hooks=block_hooks
@@ -133,4 +142,57 @@ async def fetch_via_http(
                 citations=options.citations,
             )
         )
+    return result
+
+
+def _pdf_result(
+    body: bytes, *, formats: tuple[ExtractFormat, ...], status: int
+) -> ActionResult:
+    """An `ActionResult` for a PDF, shaped exactly like the HTML path's.
+
+    `extracts` stays index-correlated with `formats` -- every requested format
+    gets a slot, even the ones a PDF cannot answer. A caller who asked for
+    `["markdown", "structured_data"]` gets the text and an empty JSON object,
+    rather than a short list that would silently misalign every format after the
+    missing one.
+    """
+
+    metadata = pdf.pdf_metadata(body)
+    result = ActionResult(status_code=status, page_title=metadata.get("title"))
+
+    try:
+        markdown = pdf.extract_pdf(body, format="markdown")
+        text = pdf.extract_pdf(body, format="text")
+        error: str | None = None
+    except pdf.PdfSupportUnavailable as exc:
+        markdown = text = ""
+        error = str(exc)
+
+    for fmt in formats:
+        if fmt in ("markdown", "fit_markdown"):
+            # `fit_markdown` is the same text: there is no boilerplate in a PDF to
+            # prune, and the density scoring that produces it operates on a DOM.
+            result.extracts.append(markdown)
+        elif fmt == "text":
+            result.extracts.append(text)
+        elif fmt == "html":
+            # Deliberately empty rather than a fabricated wrapper. A caller asking
+            # for `html` wants the document as served, and this document has none.
+            result.extracts.append("")
+        elif fmt == "structured_data":
+            result.extracts.append(
+                json.dumps({"metadata": metadata, "json_ld": [], "hydration": {}})
+            )
+        elif fmt == "entities":
+            result.extracts.append(json.dumps(entities.extract_entities(text)))
+        elif fmt == "tables":
+            # A PDF's tables are a layout problem, not a markup one -- there is no
+            # `<table>` to read. Extracting them needs column-position clustering,
+            # which is a separate piece of work rather than a gap to paper over.
+            result.extracts.append(json.dumps([]))
+        else:
+            result.extracts.append("")
+
+    if error is not None:
+        result.verifications.append(error)
     return result

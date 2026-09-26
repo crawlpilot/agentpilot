@@ -782,7 +782,11 @@ def tautological_read(loc: Locator, raw: Any, field_name: str = "") -> str | Non
     # the instructions themselves -- that is what a caption is. Length is the
     # guard that keeps this from touching real prose: a description that happens
     # to contain the word "description" is a paragraph, not a caption.
-    if len(value) <= _MAX_CAPTION_CHARS and _names_the_field(field_name, value):
+    if (
+        len(value) <= _MAX_CAPTION_CHARS
+        and _names_the_field(field_name, value)
+        and _bare_label(value)
+    ):
         return (
             f"this reads {value!r}, which is a caption NAMING {field_name!r} rather "
             f"than a value for it -- you matched the control or heading that leads "
@@ -795,6 +799,30 @@ def tautological_read(loc: Locator, raw: Any, field_name: str = "") -> str | Non
 # A caption is short. Past this a string is prose, and prose that mentions the
 # field's own name is a paragraph about it rather than a label for it.
 _MAX_CAPTION_CHARS = 80
+
+# And a caption is a handful of words. Past this it is a sentence.
+_MAX_CAPTION_WORDS = 4
+
+
+def _bare_label(value: str) -> bool:
+    """Whether this value is a label and nothing else.
+
+    Length alone was not enough, and the gap was expensive. Panel content
+    routinely repeats its own heading -- "Ingredients: Water, Glycerin",
+    "Composition: 100% cotton", "Care instructions: machine wash at 30" -- so a
+    rule of "short, and mentions the field's name" threw away real values for
+    exactly the fields that live behind a click, which are the ones most likely
+    to be captioned with their own name. `how_to_use` contributes the word
+    "use", which put every short instruction containing it out of reach.
+
+    What separates the two is whether anything follows the label. A colon
+    introduces a value; a digit is a value. Either means the string is
+    label-plus-content, which is a reading of the page, not a caption for it.
+    """
+
+    if ":" in value or any(character.isdigit() for character in value):
+        return False
+    return len(re.findall(r"[A-Za-z0-9]+", value)) <= _MAX_CAPTION_WORDS
 
 
 def _names_the_field(field_name: str, value: str) -> bool:

@@ -703,7 +703,30 @@ async def _apply_pick_after_steps(
     recipe = _bind(
         recipe, resolution.field, rank_candidates([v.locator for v in resolving])
     )
-    return _with_steps(recipe, resolution.field, resolution.steps, resolution.teardown), None
+    # Store what was VERIFIED, which is the group's own route followed by
+    # theirs -- not theirs alone. The binding above was certified against the
+    # page those two produce together, and `_with_steps` replaces rather than
+    # appends, so storing only `resolution.steps` certified one state and saved
+    # a different one. On a Zara product page that is exactly fatal: the group
+    # already clicks "COMPOSITION, CARE & ORIGIN", so a manual route for a
+    # field in it was stored without the click it was verified behind and read
+    # nothing on every real run.
+    #
+    # `group` is read before `_bind`, which rewrites `field_groups`.
+    #
+    # The cost: if they re-pointed at a control the group already clicks, the
+    # stored route now clicks it twice, and a toggle closes on the second. That
+    # risk is already in the verification above -- this makes the stored route
+    # match it rather than introducing it -- and `trim_trailing_cleanup` cannot
+    # help, because the duplicate is not trailing. De-duplicating by target is
+    # the next step if it bites.
+    prefix = list(group.steps) if group is not None else []
+    return (
+        _with_steps(
+            recipe, resolution.field, [*prefix, *resolution.steps], resolution.teardown
+        ),
+        None,
+    )
 
 
 async def _apply_steps(

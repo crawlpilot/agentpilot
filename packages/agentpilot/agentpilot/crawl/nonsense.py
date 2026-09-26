@@ -47,11 +47,11 @@ Those are documents a caller may legitimately want -- once PDF extraction lands
 they are pages in every sense that matters -- whereas nothing downstream can do
 anything useful with a `.woff2`.
 
-Note this is currently forward-looking rather than effective: `filters
-._DENIED_EXTENSIONS` still drops those same extensions on both the map and crawl
-paths, with its own "no pdf/document engine yet" note. So a PDF survives *this*
-filter and is dropped by that one. Both lists have to change for documents to
-come back, and this module is not the place that decides it."""
+For `.pdf` this is now effective end to end: `filters._DENIED_EXTENSIONS` no
+longer denies it either, and `crawlpilot.extraction.pdf` reads it. The Office and
+`.csv` extensions still pass *this* filter and are still dropped by that one,
+since nothing can read them yet -- when something can, both lists change
+together."""
 
 _NONSENSE_FILENAMES = frozenset(
     {

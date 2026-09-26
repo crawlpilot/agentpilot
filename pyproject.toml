@@ -20,6 +20,9 @@ dev = [
     "fakeredis>=2.26",
     "lupa>=2.1",
     "lxml-stubs>=0.5",
+    # So the suite exercises the real PDF parser, not just the guarded-import
+    # path. Ships as the `crawlpilot[pdf]` extra in production.
+    "pypdf>=5.1",
 ]
 
 [tool.pytest.ini_options]
