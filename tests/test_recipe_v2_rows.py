@@ -777,3 +777,4 @@ async def test_an_open_map_keeps_its_own_columns() -> None:
     # `value` is empty everywhere, so this is not salvageable as a map.
     assert binding is None
     assert reason and "value" in reason
+

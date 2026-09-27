@@ -15,7 +15,13 @@ from fusion_fixtures import fnode
 
 from agentpilot.agent.state import AgentStepRecord
 from agentpilot.recipe.v2 import onboard as onboard_mod
-from agentpilot.recipe.v2.models import Candidate, FieldGroup, Locator
+from agentpilot.recipe.v2.models import (
+    Candidate,
+    FieldGroup,
+    Locator,
+    RepeatSpec,
+    Step,
+)
 from agentpilot.recipe.v2.onboard import (
     _MAX_DIALOG_DEFERRALS,
     _MAX_FIELD_ATTEMPTS,
@@ -1276,3 +1282,89 @@ async def test_a_field_the_page_says_nothing_about_still_gives_up_early(patched)
         await state.on_step(_step([{"type": "ScrollAction", "direction": "down"}]))
 
     assert "warranty_period" in state.presumed_absent
+
+
+# --- a built group owns the lifecycle of what it opens -----------------------
+
+
+def test_a_group_carries_both_how_to_open_a_section_and_how_to_close_it() -> None:
+    """The shape a real Zara route has to come out as.
+
+    Replay loads the page once and runs every group against it, so a group that
+    opens a drawer and cannot close it leaves that drawer over the next group's
+    button -- the failure re-navigating between groups used to hide, at one page
+    load per group. Two things have to come out of the build for the page to be
+    shared safely: the closing action kept as `teardown` rather than discarded,
+    and the reveal guarded so a drawer an earlier group already opened is left
+    alone instead of toggled shut.
+    """
+
+    state = ExplorationState(fields=SCALARS, reader=_Reader(), llm_config=None)  # type: ignore[arg-type]
+    route = [
+        Step(
+            op="click",
+            target=Locator(
+                kind="ax_role", role="button", name_contains="COMPOSITION, CARE & ORIGIN"
+            ),
+        ),
+        Step(
+            op="click",
+            target=Locator(kind="css", selector='button[aria-label="close"]'),
+            label="close the dialog (close)",
+            on_error="continue",
+            optional=True,
+        ),
+    ]
+    bindings = {"title": [Candidate(locator=Locator(kind="css", selector=".origin-text"))]}
+
+    group = state._group(["title"], bindings, route, repeat=None)
+
+    assert [s.op for s in group.steps] == ["click", "wait_for_selector"]
+    # Guarded on what the reveal was meant to show, so re-running it is a no-op.
+    assert [p.to_dict() for p in group.steps[0].when] == [
+        {"kind": "hidden", "selector": ".origin-text"}
+    ]
+    # And the close is kept, where replay can use it.
+    assert [s.label for s in group.teardown] == ["close the dialog (close)"]
+
+
+async def test_an_open_map_that_bound_its_rows_stops_being_looked_for(patched) -> None:
+    """The bug that made Amazon `specifications` never finish.
+
+    `_freeze` marks a row binding found by its COLUMN names, and for a declared
+    table that is right -- `all_leaf_fields` replaces the table with its
+    columns, so the columns are the leaves. An open key -> value map is the
+    exception: its leaf is the field itself, and its columns are the synthetic
+    `name`/`value` pair `MAP_COLUMNS` invents, which are in no `_unfound` and
+    belong to nobody.
+
+    So the block bound its rows, was never marked found, and was asked for again
+    on the very next batch -- re-binding the same rows until the step budget ran
+    out, with the field still listed as remaining. Observed on a live Amazon
+    build: `rows.bound field=specifications rows=17` four times over, and
+    `frozen=['name', 'value']` every time.
+    """
+
+    from agentpilot.recipe.v2.rows import RowBinding
+
+    spec = FieldSpec(name="specifications", type=TypeSpec(kind="object"))
+    state = ExplorationState(fields={"specifications": spec}, reader=_Reader(),  # type: ignore[arg-type]
+                             llm_config=None)
+    binding = RowBinding(
+        repeat=RepeatSpec(
+            kind="dom_rows", row_field="specifications", max_iterations=20,
+            rows_locator=Locator(kind="css", selector="tr"),
+        ),
+        bindings={
+            "name": [Candidate(locator=Locator(kind="css", selector="th"))],
+            "value": [Candidate(locator=Locator(kind="css", selector="td"))],
+        },
+        rows=[{"name": "Brand", "value": "Acme"}],
+    )
+
+    frozen = await state._freeze({}, {"specifications": binding}, snapshot=None,
+                                 clicked_ref=None, option_tree=None)
+
+    assert "specifications" in frozen
+    # And the group it produced collects the field the caller actually asked for.
+    assert state.field_groups[-1].field_names == ["specifications"]

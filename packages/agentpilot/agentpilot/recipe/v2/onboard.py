@@ -979,11 +979,30 @@ class ExplorationState:
             # variant set genuinely has to be clicked through -- so its columns
             # fall back to the per-column path, where the agent's representative
             # click becomes a `dom` repeat.
-            scalars.update({
+            fallback = {
                 name: spec
                 for name, spec in looking_for.items()
                 if self._column_to_table.get(name) == table_name
-            })
+            }
+            scalars.update(fallback)
+            if not fallback:
+                # An open key -> value map has no columns of its own, so the
+                # comprehension above yields nothing and there is no second path
+                # to try: `propose_rows` is the only way a specifications block
+                # can ever bind. Left alone it is re-asked every batch, burns its
+                # attempts, and is written off as "may simply not be there" --
+                # which is the one description that is certainly wrong for a
+                # block whose heading is on the page.
+                #
+                # Say what actually happened instead. `build_asks` carries this
+                # into the ask, where "point at the section" with shape `map` is
+                # the answer the panel already has for it.
+                self._failures[table_name] = (
+                    "this page does not present it as rows, and an open "
+                    "key -> value map has no other way to bind -- point at the "
+                    "section it lives in"
+                )
+                log.info("onboard.open_map_not_row_shaped", field=table_name)
 
         verified = (
             await propose_and_verify(
@@ -1242,6 +1261,20 @@ class ExplorationState:
             )
             self._group_urls.append(here)
             frozen |= set(binding.bindings)
+            # `binding.bindings` is keyed by COLUMN, and for a declared table
+            # the columns are the leaves -- `all_leaf_fields` replaces the table
+            # with them -- so freezing those is freezing the right names.
+            #
+            # An open key -> value map is the exception, and it cost a whole
+            # build. Its leaf is the field itself; its columns are the synthetic
+            # `name`/`value` pair `MAP_COLUMNS` invents, which are in no
+            # `_unfound` and belong to nobody. So a specifications block bound
+            # its rows, was never marked found, and was asked for again on the
+            # very next batch -- binding the same 17 rows over and over until
+            # the step budget ran out, with the field still "remaining" at the
+            # end. Observed on an Amazon product page.
+            if is_open_map(self._all_fields[table_name]):
+                frozen.add(table_name)
             # `to_object` for an open map, so the rows underneath become the
             # `{name: value}` the caller asked for. Carried out to the recipe's
             # field spec, which is where `_replay_repeat` looks for it.

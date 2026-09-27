@@ -766,21 +766,37 @@ automatically.
 3. Classify the page                                                -> blocked? stop, outcome = blocked
 4. Run global_setup steps
 5. Detect the active variant (first satisfied, by priority)
-6. For each field group:
-     a. re-navigate + re-run global_setup      (isolation, see below)
-     b. run the group's steps
-     c. if repeat: iterate options, one row per option
+6. For each field group, on the SAME page load:
+     a. run the group's steps        (reveals are guarded — see below)
+     b. if repeat: iterate options, one row per option
         else:      evaluate each field's candidates
-     d. apply transforms, assertions, required-gate
+     c. apply transforms, assertions, required-gate
+     d. run the group's teardown     (best-effort; never fails the group)
 7. Assemble RecipeRunResult
 ```
 
-**Step 6a is deliberate and expensive.** v1 re-navigated before every group so that state left by
-one group could not corrupt the next — the concrete failure it avoids is a second group's copy of
-"dismiss the cookie banner" running when the banner is already gone. v2 keeps the behaviour and
-makes the cost explicit: a recipe with *n* groups performs *n* page loads. Groups whose steps are
-provably read-only may be merged by the executor; that is an optimisation, not a contract change,
-and it is tracked in [`recipe-operations.md`](recipe-operations.md) §D6.
+**One page load per run.** v1, and v2 until this revision, re-navigated and re-ran `global_setup`
+before every group so that state left by one group could not corrupt the next — the concrete
+failure being a second drawer's button sitting under the first drawer, which is unclickable while
+it is covered. It worked by throwing the page away, at *n* page loads for *n* groups: the slowest
+part of a run, and on a protected site the shape of a bot.
+
+The isolation it bought is now a contract the **recipe** carries, because the recipe is the thing
+that knows what it opened:
+
+- `steps` reach the state the group's fields are readable in;
+- `teardown` returns the page to the state those steps started from — **required of any group whose
+  steps change state**, and `validate_document` warns when one is missing;
+- every reveal carries a `when` guard on the thing it reveals still being hidden, so a section an
+  earlier group already opened is left alone rather than toggled shut.
+
+`teardown` is best-effort: by the time it runs the values are collected, so a close control that has
+moved leaves a dirty page rather than losing data already read. There is no fallback reload — a
+recipe whose teardown does not restore the page fails and names the group, and `review` replays
+sample URLs through the same executor before a recipe is saved, so the gap surfaces at build time.
+
+Reloading during the **build** is unaffected: the agent and the assist path reload as often as they
+need. What changed is that a reload is no longer part of a stored recipe.
 
 ---
 
@@ -815,9 +831,11 @@ and it is tracked in [`recipe-operations.md`](recipe-operations.md) §D6.
 
 ## 13. Non-goals
 
-- **Cross-group state dependency.** A group cannot depend on state left by another group; §11's
-  re-navigation guarantees the opposite. A workflow that genuinely needs sequential state is an
-  agent task, not a recipe.
+- **Cross-group state dependency.** A group cannot depend on state left by another group. Groups
+  now share a page load (§11), so this is a contract rather than a physical guarantee: each group
+  reaches its own state from the page as `global_setup` left it, and returns it there. Ordering
+  groups so that one relies on another's leftovers is outside the contract — a workflow that
+  genuinely needs sequential state is an agent task, not a recipe.
 - **Authentication flows.** Logging in is a session concern (browser profiles, storage state),
   not a recipe one. A recipe may assume an authenticated profile; it may not carry credentials.
 - **Pagination across URLs.** A recipe collects from one page. Walking a listing into product

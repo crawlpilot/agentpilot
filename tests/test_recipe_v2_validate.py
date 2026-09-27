@@ -212,3 +212,56 @@ def test_a_partial_case_fold_is_a_warning_not_an_error() -> None:
     )
     assert errors == []
     assert any("only those 4 letters" in w for w in warnings)
+
+
+# --- a group that opens something must be able to close it -------------------
+
+
+def _group_with(steps: list[dict], teardown: list[dict] | None = None):
+    return doc(
+        fields={"care": {"type": {"kind": "scalar"}}},
+        field_groups=[{
+            "group_id": "care",
+            "field_names": ["care"],
+            "bindings": {"care": [{"locator": {"kind": "css", "selector": ".care"}}]},
+            "steps": steps,
+            **({"teardown": teardown} if teardown is not None else {}),
+        }],
+    )
+
+
+def test_a_group_that_opens_something_and_cannot_close_it_warns() -> None:
+    """Replay loads the page once and runs every group against it, so state one
+    group leaves is state the next inherits -- an open drawer over the next
+    group's button is the failure reloading between groups used to hide. This is
+    where an author finds out, rather than from a later group reading nothing.
+    """
+
+    errors, warnings = validate_document(
+        _group_with([{"op": "click", "target": {"kind": "css", "selector": "#open"}}])
+    )
+    assert errors == []
+    assert any("no teardown" in w for w in warnings)
+
+
+def test_a_group_that_closes_what_it_opened_is_quiet() -> None:
+    errors, warnings = validate_document(
+        _group_with(
+            [{"op": "click", "target": {"kind": "css", "selector": "#open"}}],
+            [{"op": "click", "target": {"kind": "css", "selector": "#close"}}],
+        )
+    )
+    assert errors == []
+    assert not any("teardown" in w for w in warnings)
+
+
+def test_a_reveal_that_changes_nothing_worth_undoing_is_quiet() -> None:
+    """Narrower than `REVEALING_OPS` on purpose: a scroll leaves nothing for a
+    later group to trip over, and warning about it would train authors to ignore
+    the warning."""
+
+    errors, warnings = validate_document(
+        _group_with([{"op": "scroll", "args": {"direction": "down"}}])
+    )
+    assert errors == []
+    assert not any("teardown" in w for w in warnings)

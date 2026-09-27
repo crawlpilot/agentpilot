@@ -655,3 +655,117 @@ async def test_dom_rows_keeps_the_rows_when_the_reshape_fails(browser) -> None:
     res = await run(r)
     assert res.data["items"] == [{"t": "Alpha"}, {"t": "Beta"}]
     assert res.field_status["items"] == "suspect"
+
+
+# --- the section lifecycle: one page load, opened and closed by the recipe ---
+
+
+def _json_name() -> dict[str, list[Candidate]]:
+    return {"name": [Candidate(locator=Locator(kind="json_ld", path="[0].name"))]}
+
+
+@pytest.mark.asyncio
+async def test_a_reveal_is_skipped_when_what_it_reveals_is_already_showing(browser) -> None:
+    """What makes a group's route safe to replay on a page another group opened.
+
+    A group's steps are the whole way from a cold page, so two groups sharing a
+    load replay the same accordion click twice -- and a second click on a toggle
+    closes what the first opened. The guard is the selector the reveal was meant
+    to make visible, and `hidden` rather than `selector_absent` because a
+    collapsed panel's content is in the DOM and merely unpainted.
+    """
+
+    fake = browser(
+        structured={"json_ld": [{"name": "Dove"}], "hydration": {}, "metadata": {}},
+        # The visible probe says the drawer is already on screen.
+        js={"box.width > 0 && box.height > 0": True},
+    )
+    r = recipe(field_groups=[FieldGroup(
+        group_id="g0", field_names=["name"], bindings=_json_name(),
+        steps=[Step(
+            op="click", target=Locator(kind="css", selector="#open-specs"),
+            when=[Predicate(kind="hidden", selector=".specs")],
+            label="open specs",
+        )],
+    )])
+
+    res = await run(r)
+    skipped = [o for o in res.step_trace if o.status == "skipped"]
+    assert skipped and skipped[0].label == "open specs"
+    assert "ClickAction" not in fake.actions
+    assert res.outcome == "ok"
+
+
+@pytest.mark.asyncio
+async def test_the_same_reveal_fires_when_the_section_is_shut(browser) -> None:
+    """The other half: a guard that is false must not cost the field."""
+
+    fake = browser(
+        structured={"json_ld": [{"name": "Dove"}], "hydration": {}, "metadata": {}},
+        js={"box.width > 0 && box.height > 0": False},
+    )
+    r = recipe(field_groups=[FieldGroup(
+        group_id="g0", field_names=["name"], bindings=_json_name(),
+        steps=[Step(
+            op="click", target=Locator(kind="css", selector="#open-specs"),
+            when=[Predicate(kind="hidden", selector=".specs")],
+            label="open specs",
+        )],
+    )])
+
+    await run(r)
+    assert "ClickAction" in fake.actions
+
+
+@pytest.mark.asyncio
+async def test_a_group_puts_the_page_back_for_the_next_one(browser) -> None:
+    """The Zara drawer, as a test.
+
+    Opening one drawer made the other drawer's button unclickable, and the
+    engine used to avoid that by throwing the page away between groups. Now the
+    recipe owns it: group one opens, reads, and closes; group two opens its own.
+    One page load for all of it.
+    """
+
+    fake = browser(structured={"json_ld": [{"name": "Dove"}], "hydration": {}, "metadata": {}})
+    r = recipe(field_groups=[
+        FieldGroup(
+            group_id="specs", field_names=["name"], bindings=_json_name(),
+            steps=[Step(op="click", target=Locator(kind="css", selector="#open-specs"),
+                        label="open specs")],
+            teardown=[Step(op="click", target=Locator(kind="css", selector="#close-specs"),
+                           on_error="continue", optional=True, label="close specs")],
+        ),
+        FieldGroup(
+            group_id="care", field_names=["name"], bindings=_json_name(),
+            steps=[Step(op="click", target=Locator(kind="css", selector="#open-care"),
+                        label="open care")],
+            teardown=[Step(op="click", target=Locator(kind="css", selector="#close-care"),
+                           on_error="continue", optional=True, label="close care")],
+        ),
+    ])
+
+    res = await run(r)
+
+    assert fake.navigations == 1
+    assert res.outcome == "ok"
+    # Open, close, open, close -- in that order, on one page.
+    ran = [o.label for o in res.step_trace if o.label and o.status in ("ok", "recovered")]
+    assert ran == ["open specs", "close specs", "open care", "close care"]
+
+
+@pytest.mark.asyncio
+async def test_a_teardown_never_fails_the_group_that_ran_it(browser) -> None:
+    """By the time it runs the values are collected, so a close button that has
+    moved leaves a dirty page rather than losing data that was already read."""
+
+    browser(structured={"json_ld": [{"name": "Dove"}], "hydration": {}, "metadata": {}})
+    r = recipe(field_groups=[FieldGroup(
+        group_id="g0", field_names=["name"], bindings=_json_name(),
+        teardown=[Step(op="click", target=Locator(kind="xpath", selector="//gone"),
+                       label="close")],
+    )])
+
+    res = await run(r)
+    assert res.outcome == "ok"
+    assert res.data["name"] == "Dove"
