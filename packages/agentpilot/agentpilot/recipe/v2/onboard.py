@@ -1495,10 +1495,19 @@ class ExplorationState:
         # Tidying that happened after the last reveal is not how the field got
         # on screen -- it is how it came off. The route is the whole path since
         # the page loaded, so a dismissal dispatched mid-exploration and the
-        # agent's own clicks on close controls both reach here; replaying them
-        # shuts the drawer the group is about to read from. See
-        # `capture.trim_trailing_cleanup`.
-        steps = capture.trim_trailing_cleanup(list(steps))
+        # agent's own clicks on close controls both reach here. Kept as the
+        # group's TEARDOWN rather than discarded: closing what was opened is the
+        # whole of what lets the next group share this page load instead of
+        # reloading it. See `capture.split_cleanup`.
+        steps, teardown = capture.split_cleanup(list(steps))
+        revealed = capture.document_scoped_selector(
+            candidates=[c for chain in bindings.values() for c in chain], repeat=repeat
+        )
+        # Replay loads the page once and runs every group against it, so this
+        # route may well run against a page some earlier group already opened.
+        # A second click on a toggle closes it, so each reveal is made to fire
+        # only while the thing it reveals is still hidden.
+        steps = capture.guard_reveals(steps, revealed)
         # The reveal has to have landed before the group reads. The driver
         # returns from a click as soon as it is dispatched, so without this the
         # group reads the page as it was before the drawer opened.
@@ -1514,6 +1523,7 @@ class ExplorationState:
             field_names=field_names,
             bindings=bindings,
             steps=steps,
+            teardown=teardown,
             repeat=repeat,
         )
 

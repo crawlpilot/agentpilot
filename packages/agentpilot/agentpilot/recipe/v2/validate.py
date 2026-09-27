@@ -23,6 +23,17 @@ from agentpilot.recipe.v2.locator_lint import (
 )
 
 
+# Reveals that plausibly leave the page in a different state than they found it.
+#
+# Narrower than `capture.REVEALING_OPS`: a `scroll` or a `hover` changes nothing
+# a later group needs undone, and warning about those would train authors to
+# ignore the warning.
+_STATE_CHANGING_OPS = frozenset({
+    "click", "double_click", "tap", "select_option", "check", "uncheck",
+    "fill", "press", "send_keys", "new_tab", "switch_tab",
+})
+
+
 def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return `(errors, warnings)` for a v2 document."""
 
@@ -68,6 +79,29 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
         if group_id in seen_groups:
             errors.append(f"{where}: duplicate group_id")
         seen_groups.add(group_id)
+
+        # A group that opens something has to be able to close it again.
+        #
+        # Replay loads the page once and runs every group against it, so state
+        # one group leaves is state the next one inherits -- an open drawer over
+        # the next group's button is the failure that used to be avoided by
+        # reloading between groups. A reveal with no teardown is therefore an
+        # incomplete recipe, and this is where an author finds out rather than
+        # from a later group mysteriously reading nothing.
+        #
+        # A warning, not an error: plenty of reveals change nothing worth undoing
+        # (a `scroll`, a `hover`), and refusing to save those would be wrong.
+        if not group.get("teardown"):
+            opens = [
+                str(step.get("op") or "")
+                for step in (group.get("steps") or [])
+                if isinstance(step, dict) and str(step.get("op") or "") in _STATE_CHANGING_OPS
+            ]
+            if opens:
+                warnings.append(
+                    f"{where}.teardown: this group runs {opens[0]} but has no teardown, so "
+                    "whatever it opens stays open for every group after it"
+                )
 
         bindings = group.get("bindings") or {}
         for name in group.get("field_names") or []:

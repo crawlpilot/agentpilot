@@ -343,9 +343,13 @@ def _click(name: str, label: str | None = None) -> Step:
     )
 
 
-def test_tidying_after_the_last_reveal_is_dropped() -> None:
+def test_tidying_after_the_last_reveal_becomes_the_teardown() -> None:
     """A group runs its steps and THEN reads, so a route ending in a close
-    cannot be what put the field on screen -- it is what took it off."""
+    cannot be what put the field on screen -- it is what took it off.
+
+    It is kept as teardown rather than discarded, because closing what was
+    opened is the whole of what lets the next group share this page load instead
+    of reloading it."""
 
     route = [
         _click("COMPOSITION, CARE & ORIGIN"),
@@ -359,10 +363,13 @@ def test_tidying_after_the_last_reveal_is_dropped() -> None:
         ),
         _click("close"),
     ]
-    kept = capture.trim_trailing_cleanup(route)
+    kept, teardown = capture.split_cleanup(route)
     assert [s.op for s in kept] == ["click", "wait"]
     assert kept[0].target is not None
     assert kept[0].target.name_contains == "COMPOSITION, CARE & ORIGIN"
+    # Both closes, in order, so replay can put the drawer back.
+    assert len(teardown) == 2
+    assert teardown[0].label == "close the dialog (close)"
 
 
 def test_a_dismissal_in_the_middle_is_load_bearing_and_stays() -> None:
@@ -370,7 +377,7 @@ def test_a_dismissal_in_the_middle_is_load_bearing_and_stays() -> None:
     state. Only trailing cleanup is not how the field got on screen."""
 
     route = [_click("close"), _click("Specifications")]
-    assert capture.trim_trailing_cleanup(route) == route
+    assert capture.split_cleanup(route) == (route, [])
 
 
 def test_escape_counts_as_tidying() -> None:
@@ -378,7 +385,9 @@ def test_escape_counts_as_tidying() -> None:
     control, and that step closes just as effectively."""
 
     route = [_click("Specifications"), Step(op="press", args={"key": "Escape"})]
-    assert [s.op for s in capture.trim_trailing_cleanup(route)] == ["click"]
+    setup, teardown = capture.split_cleanup(route)
+    assert [s.op for s in setup] == ["click"]
+    assert [s.op for s in teardown] == ["press"]
 
 
 def test_a_control_merely_named_like_one_is_not_tidying() -> None:

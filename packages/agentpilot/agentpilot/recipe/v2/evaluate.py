@@ -600,9 +600,9 @@ class PageReader:
             present = isinstance(count, (int, float)) and count > 0
             return present if p.kind == "selector_present" else not present
 
-        if p.kind == "visible":
+        if p.kind in ("visible", "hidden"):
             got = await self._eval_js(_VISIBLE_JS % json.dumps({"selector": p.selector or ""}))
-            return bool(got)
+            return bool(got) if p.kind == "visible" else not bool(got)
 
         if p.kind == "count_at_least":
             count = await self._eval_js(_COUNT_JS % json.dumps({"selector": p.selector or ""}))

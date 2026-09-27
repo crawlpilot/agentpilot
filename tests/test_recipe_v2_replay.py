@@ -371,10 +371,16 @@ async def test_expect_min_rows_flags_a_short_table(browser) -> None:
 
 
 @pytest.mark.asyncio
-async def test_each_group_re_navigates(browser) -> None:
-    """Observed failure this prevents: on a real product page, opening one
-    drawer makes the other drawer's button unclickable. Two reveal steps that
-    each work alone break in sequence."""
+async def test_the_whole_run_shares_one_page_load(browser) -> None:
+    """The point of the teardown contract, and worth pinning by count.
+
+    This used to be one navigation per group: three groups meant four loads of
+    the same URL to collect one record, which was the slowest part of a run and,
+    on a protected site, the shape of a bot. What replaced it is the recipe
+    owning the state it changes -- `steps` to reach it, `teardown` to put it
+    back, and a guard on each reveal so a section an earlier group opened is left
+    alone rather than toggled shut.
+    """
 
     fake = browser(structured={"json_ld": [{"name": "x"}], "hydration": {}, "metadata": {}})
     groups = [
@@ -383,9 +389,10 @@ async def test_each_group_re_navigates(browser) -> None:
                                                                 path="[0].name"))]})
         for i in range(3)
     ]
-    await run(recipe(field_groups=groups))
-    # one initial navigation + one per group
-    assert fake.navigations == 4
+    result = await run(recipe(field_groups=groups))
+    assert fake.navigations == 1
+    # And all three groups still read, on that one load.
+    assert result.data["name"] == "x"
 
 
 @pytest.mark.asyncio

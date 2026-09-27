@@ -387,6 +387,8 @@
                   "selector_present",
                   "selector_absent",
                   "visible",
+                  "hidden",
+              "hidden",
                   "count_at_least"
                 ]
               }

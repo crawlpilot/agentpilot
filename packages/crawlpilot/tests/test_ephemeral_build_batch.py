@@ -29,14 +29,38 @@ def test_build_batch_threads_include_and_exclude_tags_into_extract_actions() -> 
         assert action.exclude_tags == (".promo",)
 
 
-def test_effective_formats_appends_internal_markdown_when_extract_needs_it() -> None:
+def test_effective_formats_appends_the_internal_formats_extract_needs() -> None:
+    """Both renderings, not just `markdown`.
+
+    The extractor picks between them by size: a page whose full markdown overflows
+    the model's input budget extracts far better from the pruned rendering than
+    from the first 40k characters of the raw one, because truncation cuts the end
+    of the document while pruning cuts the navigation. Deriving the second costs
+    one pass over HTML already in memory.
+    """
+
     options = ScrapeOptions(formats=("html",), extract=ExtractConfig(prompt="get the price"))
-    assert _effective_formats(options) == ("html", "markdown")
+    assert _effective_formats(options) == ("html", "markdown", "fit_markdown")
 
 
-def test_effective_formats_does_not_duplicate_markdown_already_requested() -> None:
+def test_effective_formats_does_not_duplicate_a_format_already_requested() -> None:
     options = ScrapeOptions(formats=("markdown",), extract=ExtractConfig(prompt="get the price"))
-    assert _effective_formats(options) == ("markdown",)
+    assert _effective_formats(options) == ("markdown", "fit_markdown")
+
+    both = ScrapeOptions(
+        formats=("markdown", "fit_markdown"), extract=ExtractConfig(prompt="x")
+    )
+    assert _effective_formats(both) == ("markdown", "fit_markdown")
+
+
+def test_effective_formats_preserves_the_callers_order() -> None:
+    """`extracts` is index-correlated with this tuple, so reordering it would
+    silently mismatch every format against the wrong content."""
+
+    options = ScrapeOptions(
+        formats=("text", "html"), extract=ExtractConfig(prompt="x")
+    )
+    assert _effective_formats(options)[:2] == ("text", "html")
 
 
 def test_effective_formats_unchanged_when_extract_not_set() -> None:
@@ -44,12 +68,12 @@ def test_effective_formats_unchanged_when_extract_not_set() -> None:
     assert _effective_formats(options) == ("html", "text")
 
 
-def test_build_batch_only_adds_one_extract_action_for_internal_markdown() -> None:
+def test_build_batch_adds_one_extract_action_per_effective_format() -> None:
     options = ScrapeOptions(formats=("html",), extract=ExtractConfig(prompt="get the price"))
     batch = _build_batch("https://example.com", options)
 
     extract_actions = [a for a in batch if isinstance(a, ExtractAction)]
-    assert [a.format for a in extract_actions] == ["html", "markdown"]
+    assert [a.format for a in extract_actions] == ["html", "markdown", "fit_markdown"]
 
 
 def test_always_a_single_navigation_to_the_requested_url() -> None:

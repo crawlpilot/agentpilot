@@ -21,10 +21,16 @@ async def extract_structured(
     *,
     json_schema: dict[str, Any],
     prompt: str | None = None,
+    fit_markdown: str | None = None,
 ) -> tuple[Any, str | None]:
+    """`fit_markdown` is the boilerplate-pruned rendering of the same page, used
+    when the full markdown overflows the model's input budget -- see
+    `schema_extract._choose_input` for why that beats truncating."""
+
     return await schema_extract.extract_structured(
         markdown,
         json_schema=json_schema,
         prompt=prompt,
+        fit_markdown=fit_markdown,
         config=LLMConfig.from_env(),
     )

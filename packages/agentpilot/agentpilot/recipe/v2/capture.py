@@ -35,9 +35,18 @@ is scoped to it.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from typing import Any
 
-from agentpilot.recipe.v2.models import Candidate, Locator, RepeatSpec, Step, StepOp
+from agentpilot.recipe.v2.models import (
+    Candidate,
+    Locator,
+    Predicate,
+    RepeatSpec,
+    Step,
+    StepOp,
+)
 from agentpilot.recipe.v2.tree import find_node, find_nodes, find_parent, node_ref
 from crawlpilot.spi import actions as spi_actions
 from crawlpilot.spi.dom_tree import EnhancedDOMTreeNode
@@ -316,8 +325,38 @@ def is_cleanup(step: Step) -> bool:
     return name in _CLEANUP_NAMES
 
 
-def trim_trailing_cleanup(steps: list[Step]) -> list[Step]:
-    """A route, with the tidying that follows its last reveal removed.
+def guard_reveals(steps: list[Step], revealed: str | None) -> list[Step]:
+    """The same route, with each reveal refusing to fire on an open section.
+
+    What makes a group's route safe to replay when the page is no longer fresh.
+    A group's steps are the whole way from a cold page, so running two groups on
+    one page load replays the same accordion click twice -- and a second click
+    on a toggle closes what the first opened. Reloading between groups is how
+    that used to be avoided, at O(groups) page loads.
+
+    The guard is the selector the reveal was meant to make visible, which
+    `document_scoped_selector` already computes for `wait_step_for`. `hidden`
+    rather than `selector_absent`: a collapsed panel's content is in the DOM and
+    merely unpainted, so only the paint test can tell open from shut.
+
+    Nothing is guarded when the group has no css locator to watch -- a guard
+    that cannot be evaluated reads as false (`PageReader.holds`), which would
+    skip the reveal entirely and cost the field.
+    """
+
+    if not revealed:
+        return steps
+    guard = Predicate(kind="hidden", selector=revealed)
+    return [
+        replace(step, when=[*step.when, guard])
+        if step.op in REVEALING_OPS and not step.when
+        else step
+        for step in steps
+    ]
+
+
+def split_cleanup(steps: list[Step]) -> tuple[list[Step], list[Step]]:
+    """A route, cut into how it opens a section and how it closes it again.
 
     A group runs its steps and *then* reads, so a route that ends by closing
     something cannot be what put the field on screen -- it is what took it off.
@@ -333,15 +372,19 @@ def trim_trailing_cleanup(steps: list[Step]) -> list[Step]:
     panel's text stays in the DOM once rendered and the reader walks
     `textContent`, so nothing objected until the recipe ran.
 
-    Only TRAILING cleanup goes. A dismissal in the middle was followed by a
-    reveal that must have worked from the closed state, so it is load-bearing
-    and stays.
+    Only TRAILING cleanup is teardown. A dismissal in the middle was followed by
+    a reveal that must have worked from the closed state, so it is load-bearing
+    setup and stays where it is.
+
+    This used to discard the trailing half, which left every recipe knowing how
+    to open a section and not how to close it -- and closing it is the whole of
+    what lets the next group share the page rather than reload it.
     """
 
     end = len(steps)
     while end > 0 and is_cleanup(steps[end - 1]):
         end -= 1
-    return steps[:end]
+    return steps[:end], steps[end:]
 
 
 def generalize_option_locator(

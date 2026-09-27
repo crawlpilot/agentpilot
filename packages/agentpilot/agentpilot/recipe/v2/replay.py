@@ -5,14 +5,30 @@ honesty are the two things that matter. The execution order is normative and
 lives in docs/recipe-contract-v2.md section 11; the two parts worth restating
 here are the ones that look like inefficiency until you know why:
 
-**It re-navigates before every field group.** State left by one group must not
-corrupt the next. The concrete failure that motivates it was observed rather
-than theorised: on a Zara product page, clicking *COMPOSITION, CARE & ORIGIN*
-while the *PRODUCT MEASUREMENTS* drawer is open times out, because the open
-drawer covers the other button. Two reveal steps that each work perfectly in
-isolation break in sequence. The cost is O(groups) page loads, which is real
-and is why merging provably read-only groups is a worthwhile future
-optimisation -- an executor concern, not a contract change.
+**It loads the page once, and every group runs against that one page.** State
+left by one group must still not corrupt the next -- the failure that proves it
+was observed rather than theorised: on a Zara product page, clicking
+*COMPOSITION, CARE & ORIGIN* while the *PRODUCT MEASUREMENTS* drawer is open
+times out, because the open drawer covers the other button. Two reveal steps
+that each work perfectly in isolation break in sequence.
+
+Re-navigating before each group used to be the answer, and it worked by throwing
+the page away: O(groups) loads of one URL to collect one record, the slowest part
+of a run, and on a protected site the shape of a bot. What replaced it is a
+contract the *recipe* carries, because a recipe is the thing that knows what it
+opened:
+
+- a group's `steps` reach the state its fields are readable in;
+- its `teardown` returns the page to where those steps started;
+- every reveal is guarded on the thing it reveals still being hidden
+  (`capture.guard_reveals`), so a section an earlier group already opened is left
+  alone instead of being toggled shut.
+
+There is no fallback reload. A recipe whose teardown does not restore the page
+fails and says which group did it, rather than quietly costing a page load and
+hiding the gap from the next build -- and `review` replays sample URLs through
+this same function before a recipe is ever saved, so that gap shows up at build
+time.
 
 **It classifies the page before reading any field.** A challenge page has no
 product name, no price and no measurements, which is indistinguishable from
@@ -101,11 +117,11 @@ async def replay_recipe(
         recipe.variants, reader, meta=run_input.metadata
     )
 
+    # One page load for the whole run. Each group reaches the state it needs
+    # through its own `steps` and puts the page back through its `teardown`;
+    # nothing between them reloads. See this module's docstring.
     for group in recipe.field_groups:
-        await _replay_group(
-            group, recipe, run_input, result,
-            session=session, registry=registry, driver=driver,
-        )
+        await _replay_group(group, recipe, run_input, result, reader=reader, ctx=ctx)
 
     _finalize(result, recipe)
     return result
@@ -135,28 +151,22 @@ async def _replay_group(
     run_input: RunInput,
     result: RecipeRunResult,
     *,
-    session: InteractiveSession,
-    registry: RegistryProtocol,
-    driver: BrowserDriver,
+    reader: PageReader,
+    ctx: StepContext,
 ) -> None:
-    reader = PageReader(
-        session=session, registry=registry, driver=driver, base_url=run_input.url
-    )
-    ctx = StepContext(
-        session=session, registry=registry, driver=driver, reader=reader,
-        meta=run_input.metadata,
-        defaults_timeout_ms=recipe.defaults.step_timeout_ms,
-    )
+    """Reach this group's state, read it, and put the page back.
 
-    await _navigate(recipe, run_input, session=session, registry=registry, driver=driver)
-    reader.invalidate()
+    **It does not navigate, and `global_setup` is not re-run here.** Both used to
+    happen per group, which cost one page load of the same URL per group and was
+    the slowest part of a run -- and on a protected site, repeated loads of one
+    URL are the shape of a bot. The reader and the step context are the run's, so
+    the structured-data extract is shared rather than repeated per group too.
 
-    base = len(result.step_trace)
-    setup_trace, policy = await run_steps(recipe.global_setup, ctx, start_index=base)
-    result.step_trace.extend(setup_trace)
-    if policy is not None:
-        _fail_group(group, result, "global_setup failed for this group")
-        return
+    What replaced the reload is a contract the recipe carries: `steps` reach the
+    state, `teardown` returns the page to where they started. Every reveal is
+    guarded (`capture.guard_reveals`) so a section an earlier group already
+    opened is left alone rather than toggled shut.
+    """
 
     group_trace, policy = await run_steps(
         group.steps, ctx, start_index=len(result.step_trace)

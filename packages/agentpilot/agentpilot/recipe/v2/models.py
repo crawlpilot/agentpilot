@@ -38,9 +38,16 @@ from agentpilot.recipe.v2.transform import Transform, parse_transforms
 LocatorKind = Literal["css", "xpath", "ax_role", "text", "json_ld", "hydration", "meta"]
 PathLang = Literal["simple", "jmespath"]
 PredicateKind = Literal[
-    "selector_present", "selector_absent", "visible", "text_present",
+    "selector_present", "selector_absent", "visible", "hidden", "text_present",
     "url_matches", "json_path_present", "count_at_least", "meta_equals",
 ]
+"""`hidden` is the inverse of `visible`, and it is not `selector_absent`.
+
+A collapsed accordion's content is in the DOM and simply not painted, so
+`selector_absent` is false for it while `hidden` is true. That distinction is
+what lets a reveal step guard itself: click only if the thing it reveals is not
+already showing, which is what makes a group's route safe to replay after
+another group has already opened the same section."""
 StepOp = Literal[
     "navigate", "click", "double_click", "hover", "fill", "clear", "press", "send_keys",
     "select_option", "check", "uncheck", "scroll", "scroll_into_view", "find_text",
