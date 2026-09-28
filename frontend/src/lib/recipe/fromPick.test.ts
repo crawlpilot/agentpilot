@@ -697,7 +697,13 @@ describe('itemsToRecipe', () => {
     expect(wait).toBeDefined()
     // The condition is the next field's own selector -- named, not guessed at.
     expect(wait?.target?.selector).toBe('.origin')
-    expect(wait?.args?.state).toBe('visible')
+    // `attached`, not `visible`. This field reads `textContent`, which includes
+    // content that is in the DOM and merely unpainted -- and the contract (§2)
+    // says a `visible` wait on a collapsed section "will time out even though
+    // the data is right there". The step is optional, so that timeout never
+    // failed anything; it just burned REVEAL_TIMEOUT_MS every run. Mirrors
+    // `capture.wait_state_for`.
+    expect(wait?.args?.state).toBe('attached')
     // After the click, never before it.
     expect(steps.indexOf(wait!)).toBe(1)
     // A page where the drawer was already open satisfies it instantly; one

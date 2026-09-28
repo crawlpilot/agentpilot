@@ -27,6 +27,7 @@ from agentpilot.recipe.v2.onboard import (
     _MAX_FIELD_ATTEMPTS,
     _MAX_FIELD_ATTEMPTS_WITH_EVIDENCE,
     ExplorationState,
+    _opener_key,
     OnboardOutcome,
     derive_target,
     looks_variable,
@@ -1320,10 +1321,14 @@ def test_a_group_carries_both_how_to_open_a_section_and_how_to_close_it() -> Non
     group = state._group(["title"], bindings, route, repeat=None)
 
     assert [s.op for s in group.steps] == ["click", "wait_for_selector"]
-    # Guarded on what the reveal was meant to show, so re-running it is a no-op.
-    assert [p.to_dict() for p in group.steps[0].when] == [
-        {"kind": "hidden", "selector": ".origin-text"}
-    ]
+    # NOT guarded. An `ax_role` target cannot carry an `aria-expanded` guard,
+    # and there is deliberately no fallback to the content selector: `revealed`
+    # is computed over the group's whole binding set, so on a real page it names
+    # whichever field iterates first rather than the one the reveal was for.
+    # Measured on Zara, where that made the guard `hidden("button
+    # .product-detail-image img")` -- visible images -- and every reveal was
+    # skipped, taking `care` and `origin` with it. See `capture._guarded`.
+    assert group.steps[0].when == []
     # And the close is kept, where replay can use it.
     assert [s.label for s in group.teardown] == ["close the dialog (close)"]
 
@@ -1368,3 +1373,206 @@ async def test_an_open_map_that_bound_its_rows_stops_being_looked_for(patched) -
     assert "specifications" in frozen
     # And the group it produced collects the field the caller actually asked for.
     assert state.field_groups[-1].field_names == ["specifications"]
+
+
+# --- opening a drawer so a field inside it can bind -------------------------
+#
+# MEASURED (Zara, limited-edition-printed-combined-shirt-p08005861). `care` and
+# `origin` sit behind the "COMPOSITION, CARE & ORIGIN" drawer. The build made 29
+# and 22 attempts respectively, nearly all rejected "read nothing" against a
+# shut drawer, and dropped both fields -- and with them the reveal. The frozen
+# recipe had one group, zero steps, and no binding for `care` at all.
+
+
+async def test_a_reveal_is_kept_against_its_opener_not_in_the_shared_route() -> None:
+    """The route is cumulative and shared by every group frozen after it, so an
+    opener living there is replayed by groups that have no use for it -- and,
+    because each field reveals for itself, the same drawer is opened once per
+    field.
+
+    MEASURED (Zara). `care` and `origin` share one accordion, and the frozen
+    recipe carried THREE clicks on that one control, two of them re-toggling
+    what the first had opened.
+    """
+
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    opener = Locator(kind="css", selector=".product-detail-actions__action-button")
+
+    assert await state.reveal_for_binding(opener) is True
+    assert [s.op for s in dispatched] == ["click"]
+    # Dispatched, but NOT in the shared route.
+    assert state._route_for() == []
+
+    # It reaches the group whose fields are behind it, and only that one.
+    fields = {"care": [Candidate(locator=Locator(kind="css", selector=".care"))]}
+    steps = state._steps_for_section([], _opener_key(opener), fields)
+    assert [s.op for s in steps] == ["click", "wait_for_selector"]
+    assert steps[0].target is not None
+    assert steps[0].target.selector == opener.selector
+    assert steps[0].optional is True
+    assert steps[0].on_error == "continue"
+
+
+async def test_a_section_is_opened_once_however_many_fields_are_behind_it() -> None:
+    """The repetition the grouping exists to remove."""
+
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    opener = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
+
+    assert await state.reveal_for_binding(opener) is True
+    # `origin` comes along later and finds it already open. Reported as success
+    # because the postcondition -- the content is readable -- holds, and a
+    # second click on a toggle would shut it.
+    assert await state.reveal_for_binding(opener) is True
+    assert len(dispatched) == 1
+
+
+async def test_fields_are_grouped_by_the_section_they_came_out_of() -> None:
+    """One group per reveal, which is what a group's `steps` already mean: the
+    way to reach the state its fields are readable in."""
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+    drawer = Locator(kind="css", selector=".clevercare")
+    state._revealed_by = {"care": drawer, "origin": drawer}
+
+    scalar = {
+        "title": [Candidate(locator=Locator(kind="css", selector="h1"))],
+        "care": [Candidate(locator=Locator(kind="css", selector=".care"))],
+        "origin": [Candidate(locator=Locator(kind="css", selector=".origin"))],
+    }
+    partitions = state._by_opener(scalar)
+
+    assert list(partitions) == [None, _opener_key(drawer)], "no-reveal group stays first"
+    assert partitions[None] == ["title"]
+    assert partitions[_opener_key(drawer)] == ["care", "origin"]
+
+
+async def test_a_reveal_that_opens_a_dialog_records_how_to_close_it() -> None:
+    """`replay.py` loads the page once and runs every group against it, so a
+    drawer opened to read one field covers the next group's controls and
+    scroll-locks the document. The opening click is never accompanied by a
+    closing one in the route, because nothing dispatched a close, so
+    `split_cleanup` cannot find it."""
+
+    reader = _Reader()
+    reader.dialog = {
+        "open": True, "locked": True,
+        "close": 'button[aria-label="Close"]', "label": "Close",
+    }
+
+    async def dispatch(step):
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    opener = Locator(kind="css", selector=".product-detail-actions__action-button")
+    assert await state.reveal_for_binding(opener) is True
+
+    close = state._reveal_teardown[_opener_key(opener)]
+    assert close.label == "close the dialog (Close)"
+
+    # And it lands in teardown, where it runs after the read rather than before.
+    bindings = {"care": [Candidate(locator=Locator(kind="css", selector=".care"))]}
+    group = state._group(["care"], bindings, [], repeat=None, teardown=[close])
+    assert [s.label for s in group.teardown] == ["close the dialog (Close)"]
+
+
+async def test_an_accordion_reveal_records_no_teardown() -> None:
+    """An accordion covers nothing, so there is nothing to put away. The page is
+    asked rather than the step inspected: nothing about a click says whether it
+    opened a dialog or an accordion."""
+
+    async def dispatch(step):
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    opener = Locator(kind="css", selector=".acc")
+    assert await state.reveal_for_binding(opener) is True
+    assert _opener_key(opener) not in state._reveal_teardown
+
+
+async def test_each_section_carries_its_own_close() -> None:
+    """Two drawers opened during one build are two groups and two closes, each
+    attached to the group that opened it -- not a shared pile that every group
+    inherits."""
+
+    reader = _Reader()
+    reader.dialog = {
+        "open": True, "locked": False,
+        "close": 'button[aria-label="Close"]', "label": "Close",
+    }
+
+    async def dispatch(step):
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=reader, llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    first = Locator(kind="css", selector=".a")
+    second = Locator(kind="css", selector=".b")
+    await state.reveal_for_binding(first)
+    await state.reveal_for_binding(second)
+
+    assert set(state._reveal_teardown) == {_opener_key(first), _opener_key(second)}
+
+
+async def test_an_undispatchable_reveal_is_declined_without_touching_the_route() -> None:
+    """`steps.py` refuses an xpath action target -- the driver resolves
+    selectors with querySelector, not an XPath engine. Better to decline here
+    than to record a step that can never run."""
+
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    assert await state.reveal_for_binding(Locator(kind="xpath", selector="//button")) is False
+    assert dispatched == []
+    assert state._route_for() == []
+    assert state._reveal_steps == {}
+
+
+async def test_a_reveal_that_raises_leaves_no_trace() -> None:
+    async def dispatch(step):
+        raise RuntimeError("ref e17 is stale")
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+
+    assert await state.reveal_for_binding(Locator(kind="css", selector=".x")) is False
+    assert state._route_for() == []
+    assert state._reveal_steps == {}

@@ -96,6 +96,22 @@ _MAX_FRAGMENT_CHARS = 20_000
 # raw value, or None. Injected -- see the module docstring.
 Verifier = Callable[[Locator], Awaitable[Any]]
 
+# A callback that clicks a locator and reports whether the click landed.
+#
+# Injected for the same reason `Verifier` is, but it exists for a sharper one:
+# without it this module can only bind what is *already* on screen. Measured on
+# the Zara shirt page, where `care` and `origin` live behind the
+# "COMPOSITION, CARE & ORIGIN" drawer. The model proposed
+# `.product-detail-care`, `.product-detail-care__list` and
+# `.zds-dialog__content .product-detail-care__list` -- all correct -- and every
+# one read nothing, because the drawer was shut. It also found the opener and
+# was told "you matched the control or heading that leads to the content, not
+# the content. Open it", which is the right diagnosis addressed to something
+# that could not act on it: 29 attempts for one field, then the field was
+# dropped, and with it the reveal. `composition` bound fine from the same drawer
+# only because it is also in JSON-LD.
+Revealer = Callable[[Locator], Awaitable[bool]]
+
 _SYSTEM_PROMPT = """\
 You are building a reusable scraping recipe by locating declared fields on a \
 rendered web page. For each field, propose an ORDERED list of 1-4 candidate \
@@ -1238,6 +1254,7 @@ async def verify_locators(
     trace: BuildTrace | None = None,
     stage: str = "propose",
     probe: ScopeProbe | None = None,
+    openers: list[Locator] | None = None,
 ) -> tuple[list[VerifiedLocator], str | None]:
     """Keep the locators that produce a usable value right now.
 
@@ -1331,6 +1348,16 @@ async def verify_locators(
         circular = tautological_read(loc, raw, name)
         if circular is not None:
             last_error = rejected(loc, circular, raw=raw)
+            # This locator read a caption naming the field rather than a value
+            # for it, which means it matched the control or heading that LEADS
+            # to the content. That is the opener, and it is the one thing on this
+            # page that could make the content readable -- so it is handed back
+            # rather than only refused. `propose_and_verify` clicks it and tries
+            # again. A mutable collector rather than a third return value
+            # because `verify_locators` has 28 call sites and `trace` already
+            # establishes the idiom.
+            if openers is not None:
+                openers.append(loc)
             continue
 
         alternation = comma_group_reason(loc, spec)
@@ -1742,6 +1769,71 @@ async def bind_value_arrays(
     return bound
 
 
+async def _reveal_and_retry(
+    name: str,
+    spec: FieldSpec,
+    locators: list[Locator],
+    openers: list[Locator],
+    *,
+    verify: Verifier,
+    reveal: Revealer,
+    ctx: TransformContext,
+    trace: BuildTrace | None,
+    probe: ScopeProbe | None,
+) -> tuple[list[VerifiedLocator], Locator] | None:
+    """Open what the caption guard identified, then verify again.
+
+    Returns the surviving locators and the opener that made them survive, or
+    None when no opener helped -- in which case the caller carries on to its
+    ordinary retry, unchanged.
+
+    **Only openers are clicked, and only the content candidates are re-verified.**
+    The opener itself is never a candidate: it reads the section's own label,
+    which is what got it refused in the first place, and binding a field to the
+    name of the drawer it lives in is failure class 4 arriving by the front door.
+
+    The openers are tried in order and the loop stops at the first that works.
+    More than one usually means the model named a `<button>` and its wrapper, so
+    the second is rarely needed and is cheap when it is.
+
+    A click that does not land is not an error here. A stale ref, an overlay in
+    the way, a control that is not clickable -- all of them mean "this did not
+    help", and the field goes back for the retry it would have had anyway.
+    """
+
+    for opener in openers:
+        try:
+            landed = await reveal(opener)
+        except Exception as exc:  # noqa: BLE001 - a reveal that fails is data
+            record(
+                trace, name, "reveal", "rejected",
+                locator=opener, reason=f"the reveal could not be dispatched: {exc}",
+            )
+            continue
+        if not landed:
+            record(
+                trace, name, "reveal", "rejected",
+                locator=opener, reason="the reveal did not land",
+            )
+            continue
+        # Re-verify the CONTENT candidates, not the opener. Staged separately so
+        # the trace shows plainly that these were read against an opened page --
+        # otherwise the same selector appears twice with opposite outcomes and
+        # nothing says why.
+        content = [loc for loc in locators if locator_key(loc) != locator_key(opener)]
+        resolving, _reason = await verify_locators(
+            content, verify=verify, spec=spec, ctx=ctx, trace=trace,
+            stage="after_reveal", probe=probe,
+        )
+        if resolving:
+            log.info(
+                "propose.bound_after_reveal",
+                field=name, opener=opener.to_dict(),
+            )
+            return resolving, opener
+    return None
+
+
 async def propose_and_verify(
     fields: dict[str, FieldSpec],
     *,
@@ -1756,9 +1848,11 @@ async def propose_and_verify(
     page_url: str = "",
     trace: BuildTrace | None = None,
     probe: ScopeProbe | None = None,
+    reveal: Revealer | None = None,
+    revealed_by: dict[str, Locator] | None = None,
 ) -> dict[str, list[Candidate]]:
-    """Propose -> verify -> (on total failure) retry with the failure fed back,
-    then top up any JSON-only field with a DOM fallback.
+    """Propose -> verify -> (reveal and re-verify) -> retry with the failure fed
+    back, then top up any JSON-only field with a DOM fallback.
 
     Fields that could not be located are simply absent from the result. That is
     not an error: the caller keeps them and tries again on a later exploration
@@ -1767,6 +1861,15 @@ async def propose_and_verify(
     `dom_fallbacks` costs one extra call on pages that publish their data as
     JSON, and buys a chain that survives a renamed hydration key. See
     `needs_dom_fallback` for why that asymmetry is worth paying for.
+
+    `reveal` is what lets a field behind a collapsed section bind at all. When
+    every candidate reads nothing AND one of them was refused for reading a
+    caption that names the field, the refused locator IS the control that opens
+    the content -- so it is clicked and the candidates are tried again. Without
+    it the guard's own advice ("Open it") is addressed to nobody: see `Revealer`
+    for the Zara measurement. The opener that worked is reported through
+    `revealed_by`, because the caller has to freeze it as the group's reveal step
+    or the recipe will not reproduce the state it was bound in.
 
     `failures` seeds the feedback the first attempt is given, for callers that
     already know something was wrong with the previous answer. A repair round
@@ -1834,9 +1937,26 @@ async def propose_and_verify(
                 continue
             spec = remaining[name]
             deduped = dedupe_locators(locators)
+            openers: list[Locator] = []
             resolving, reason = await verify_locators(
-                deduped, verify=verify, spec=spec, ctx=ctx, trace=trace, probe=probe
+                deduped, verify=verify, spec=spec, ctx=ctx, trace=trace, probe=probe,
+                openers=openers,
             )
+
+            if not resolving and openers and reveal is not None:
+                # The content is behind something, and the caption guard just
+                # told us what. Opening it costs one click and one verification
+                # pass, spent only on a field that was otherwise about to be
+                # dropped -- against which the 29 attempts this replaces are not
+                # a close call.
+                opened = await _reveal_and_retry(
+                    name, spec, deduped, openers,
+                    verify=verify, reveal=reveal, ctx=ctx, trace=trace, probe=probe,
+                )
+                if opened is not None:
+                    resolving, opener = opened
+                    if revealed_by is not None:
+                        revealed_by[name] = opener
 
             if not resolving and name not in retyped:
                 # Every candidate read something and none survived its cleanup:

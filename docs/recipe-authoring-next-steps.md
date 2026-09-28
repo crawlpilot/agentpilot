@@ -51,46 +51,38 @@ surface at all, to save a screen nobody is forced to look at.
 
 ## 2. Saving a recipe
 
-**Not built. It needs backend work that does not exist yet**, and the wizard
-currently ends at "download the JSON / open in the advanced editor".
-
-### What is missing
-
-`POST /v1/recipes` takes the **v1** shape (`{name, url, field_schema,
-schedule_interval_seconds}` — `gateway/schemas.py`) and immediately queues an
-agent *build* run. There is no `PUT`, and no way to submit a document that has
-already been authored. So today a hand-authored v2 recipe cannot be persisted
-at all, which is the blocker `recipe-studio.md` named from the start.
-
-### Proposed
+**Built.** This section described it as missing; it shipped and the description
+went stale, which cost a later investigation real time. What exists now:
 
 ```
-POST /v1/recipes/v2        {recipe: <v2 document>}  -> {recipe_id, version}
-PUT  /v1/recipes/{id}      {recipe: <v2 document>}  -> {version}
+POST /v1/recipes/v2        {recipe: <v2 document>}  -> {recipe_id, version, warnings}
+PUT  /v1/recipes/{id}      {recipe: <v2 document>}  -> {recipe_id, version, warnings}
 ```
 
-Both write a `recipe_versions` row exactly as build and heal already do —
-`recipe_versions` is append-only, so an edit is a new version and rollback
-stays possible. Neither queues a run: a document authored by hand has already
-been previewed against a live page, and silently starting a build would
-overwrite it with the agent's answer.
+Both are in `gateway/routes/recipes.py` (`save_recipe_v2`, `update_recipe`) and
+share `_save`, so create and update cannot diverge. Neither queues a run: a
+document authored by hand has already been previewed against a live page, and
+silently starting a build would overwrite it with the agent's answer. Each write
+appends a `recipe_versions` row exactly as build and heal do, so an edit is a new
+version and rollback stays possible.
 
-Validation on the way in should be the same lint the studio runs, server-side,
-rejecting on `error` and returning `warning`s in the response body — so the two
-cannot drift.
+Validation on the way in is `recipe/v2/validate.py::validate_document` — the same
+lint the studio runs, server-side — rejecting on `error` with **422** and
+returning `warning`s in the response body.
 
-### Then, in the wizard
+### The one thing that was wrong for a long time
 
-The Review step gains **Save recipe** (primary) beside the existing JSON
-download, and reports the version it wrote. `useRecipeDoc.markSaved` already
-exists for exactly this and is currently unused.
+`_save` puts its reasons in `HTTPException.detail` as
+`{"errors": [...], "warnings": [...]}`, and the gateway's handler ran
+`str(exc.detail)` over it. So the `error` field carried a Python dict repr and
+`details` carried nothing, which in the studio made a *refused* save look like a
+*broken* save — the author had to read a Python literal to discover that, for
+instance, a `dom_rows` repeat was missing its `rows_locator`.
 
-### Order
-
-This is the highest-value remaining work. Everything else in the wizard
-produces a document nobody can keep.
-
----
+Fixed: a mapping detail now travels whole in `details`, with `error` carrying a
+readable summary (`errors.py::_summarize_detail`). The wizard joins the full list
+through `validationErrors` in `lib/api/client.ts`, so every reason is shown at
+once rather than one per save round trip.
 
 ## 3. Done in this round
 

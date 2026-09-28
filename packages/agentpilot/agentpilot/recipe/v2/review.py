@@ -32,6 +32,7 @@ import structlog
 from agentpilot.llm.client import LLMConfig
 from agentpilot.recipe.v2.evaluate import PageReader
 from agentpilot.recipe.v2.judge import DataVerdict, judge_collection
+from agentpilot.recipe.v2.merge import apply_verified_counts, verified_counts
 from agentpilot.recipe.v2.models import Candidate, FieldGroup, Recipe, RunInput
 from agentpilot.recipe.v2.onboard import ProgressSink
 from agentpilot.recipe.v2.replay import replay_recipe
@@ -487,6 +488,11 @@ async def verify_and_judge(
 
         if not repairable or attempt >= max_repairs:
             result.unrepaired = rejected
+            # The last replay is the one whose verdict stands, so `verified_on`
+            # is written from it rather than from an earlier round whose
+            # bindings have since been repaired. Cheap: the runs already
+            # happened and this only counts what their provenance recorded.
+            recipe = apply_verified_counts(recipe, verified_counts(result.runs))
             break
 
         log.info("review.repairing", fields=sorted(repairable), attempt=attempt + 1)
@@ -502,6 +508,7 @@ async def verify_and_judge(
             # Nothing changed, so another round would ask the same question of
             # the same page and get the same answer.
             result.unrepaired = rejected
+            recipe = apply_verified_counts(recipe, verified_counts(result.runs))
             break
 
     return recipe, result

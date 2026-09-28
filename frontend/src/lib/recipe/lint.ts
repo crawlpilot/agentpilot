@@ -132,15 +132,30 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
         if (candidate.variant_id && !variantIds.has(candidate.variant_id)) {
           add('error', at, `Scoped to variant "${candidate.variant_id}", which no variant declares.`, 'fields')
         }
-        // The spec's second named lint. `verified_on` is written by build-time
-        // multi-page induction; zero on an approved recipe means nobody --
-        // human or agent -- has ever seen this candidate resolve.
-        if ((candidate.verified_on ?? 0) === 0 && recipe.status !== 'draft') {
-          add('warning', at, 'Never verified against a sample page on an approved recipe.', 'fields')
-        }
         if ((candidate.transform ?? []).some((t) => t.op === 'lua') && !recipe.has_script) {
           add('warning', at, 'Uses a Lua transform but the recipe is not flagged has_script.', 'transforms')
         }
+      }
+
+      // The spec's second named lint, asked of the CHAIN rather than of each
+      // candidate. `verified_on` now counts the sample pages a candidate
+      // actually produced the value on (`recipe/v2/merge.py`), so a perfectly
+      // healthy fallback reads 0 -- it was never reached, because the primary
+      // kept winning. Warning per candidate would therefore fire on almost
+      // every fallback of every approved recipe, which is how a real warning
+      // becomes noise. What is worth saying is that NOTHING in this field's
+      // chain has ever been seen to work.
+      if (
+        recipe.status !== 'draft' &&
+        candidates.length > 0 &&
+        candidates.every(({ candidate }) => (candidate.verified_on ?? 0) === 0)
+      ) {
+        add(
+          'warning',
+          `${where}.${name}`,
+          'No candidate has ever resolved on a sample page, on an approved recipe.',
+          'fields',
+        )
       }
 
       if (!anyStructured && candidates.length === 1) {
@@ -185,7 +200,12 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
           lintLocator(rep.option_locator, `${where}.repeat.option_locator`, true, add)
         }
       } else if (!rep.rows_locator) {
-        add('error', `${where}.repeat`, 'A json repeat needs a rows_locator.', 'fields')
+        // Named by the kind it actually is. Both `json` and `dom_rows` need a
+        // rows_locator and this branch catches both, but the message said
+        // "json" unconditionally -- so an author whose table repeat was missing
+        // its row selector was told about a repeat kind their group does not
+        // use. Wording matches `recipe/v2/validate.py`, which gets it right.
+        add('error', `${where}.repeat`, `A ${rep.kind} repeat needs a rows_locator.`, 'fields')
       }
       if (!group.expect?.min_rows) {
         add(

@@ -769,3 +769,142 @@ async def test_a_teardown_never_fails_the_group_that_ran_it(browser) -> None:
     res = await run(r)
     assert res.outcome == "ok"
     assert res.data["name"] == "Dove"
+
+
+# --- table provenance: which of the two empty-table failures happened -------
+
+
+def _spec_table_recipe() -> Recipe:
+    """An Amazon-shaped specification table: one row per `tr`, key and value
+    columns read relative to it."""
+
+    return recipe(
+        fields={"specs": FieldSpec(name="specs", type=TypeSpec(
+            kind="table",
+            columns={"name": TypeSpec(value_type="string"),
+                     "value": TypeSpec(value_type="string")},
+        ))},
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["specs"],
+            bindings={
+                "name": [Candidate(locator=Locator(kind="css", selector="th, td:first-child"))],
+                "value": [Candidate(locator=Locator(kind="css", selector="td:last-child"))],
+            },
+            repeat=RepeatSpec(
+                kind="dom_rows", row_field="specs", max_iterations=100,
+                rows_locator=Locator(kind="css", selector="tr"),
+            ),
+        )],
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_rows_and_no_columns_are_distinguishable_in_provenance(browser) -> None:
+    """The failure this provenance exists for, in both its forms.
+
+    A table field that comes back empty has either matched no rows or matched
+    rows whose columns read nothing inside them, and the two need opposite
+    fixes -- a `rows_locator` that stopped matching versus a column selector
+    that is not relative to its row. Before `RepeatDiagnosis` the run record
+    said `rows: 0` for both and nothing else, which is why an Amazon spec table
+    bound to `th, td:first-child` / `td:last-child` reported "nothing
+    collected" twice with no way to tell which had happened.
+    """
+
+    browser(js={"opts.rows": {"rows": []}})
+    res = await run(_spec_table_recipe())
+    prov = res.provenance["specs"]
+    assert prov["rows"] == 0
+    assert prov["rows_matched"] == 0, "zero rows matched, so the row selector is the suspect"
+    # Every column is still named, so the reader can see what WOULD have been
+    # read -- and that none of them was ever given a row to read from.
+    assert prov["columns"]["name"]["of"] == 0
+    assert prov["columns"]["value"]["of"] == 0
+
+
+@pytest.mark.asyncio
+async def test_rows_found_but_columns_empty_blames_the_columns(browser) -> None:
+    browser(js={"opts.rows": {"rows": [
+        {"name#0": None, "value#0": None},
+        {"name#0": None, "value#0": None},
+    ]}})
+    res = await run(_spec_table_recipe())
+    prov = res.provenance["specs"]
+    assert prov["rows"] == 0, "no row yielded a single value, so the field is empty"
+    assert prov["rows_matched"] == 2, "the rows were there -- the columns are the suspect"
+    for column in ("name", "value"):
+        entry = prov["columns"][column]
+        assert entry["filled"] == 0
+        assert entry["of"] == 2
+        # And *why*, which is what says which fix is needed.
+        assert entry["first_failure"]["outcome"] == "empty"
+
+
+@pytest.mark.asyncio
+async def test_a_partly_filled_column_reports_how_partly(browser) -> None:
+    """The quiet case: a column that works on most rows and not all. Without a
+    per-column tally this is indistinguishable from a healthy table."""
+
+    browser(js={"opts.rows": {"rows": [
+        {"name#0": "Brand", "value#0": "Acme"},
+        {"name#0": "Weight", "value#0": None},
+        {"name#0": "ASIN", "value#0": "B01"},
+    ]}})
+    res = await run(_spec_table_recipe())
+    prov = res.provenance["specs"]
+    assert prov["rows_matched"] == 3
+    assert prov["columns"]["name"] == {
+        "locator": {"kind": "css", "selector": "th, td:first-child"},
+        "filled": 3, "of": 3, "won_at": 0,
+    }
+    value = prov["columns"]["value"]
+    assert (value["filled"], value["of"]) == (2, 3)
+    assert value["first_failure"]["outcome"] == "empty"
+
+
+@pytest.mark.asyncio
+async def test_a_rows_locator_that_cannot_address_dom_rows_says_so(browser) -> None:
+    """The one table failure no page change can cause, and the one that used to
+    look exactly like an empty page. `read_rows` answers None for a locator kind
+    it cannot resolve at all -- a malformed recipe, not a missing table."""
+
+    browser(js={"opts.rows": {"rows": []}})
+    base = _spec_table_recipe()
+    group = base.field_groups[0]
+    r = recipe(
+        fields=base.fields,
+        field_groups=[FieldGroup(
+            group_id="g0", field_names=["specs"], bindings=group.bindings,
+            repeat=RepeatSpec(
+                kind="dom_rows", row_field="specs", max_iterations=100,
+                rows_locator=Locator(kind="json_ld", path="[0].specs"),
+            ),
+        )],
+    )
+    res = await run(r)
+    prov = res.provenance["specs"]
+    # Nothing got far enough to count, so there is no row count to report --
+    # `to_dict` omits it rather than claiming zero, which would read as "the
+    # selector ran and matched nothing".
+    assert "rows_matched" not in prov
+    assert "cannot address DOM rows" in prov["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_table_still_reports_its_columns(browser) -> None:
+    """The success path keeps the same shape, so a reader does not have to know
+    whether a run went well to know how to read its provenance."""
+
+    browser(js={"opts.rows": {"rows": [
+        {"name#0": "Brand", "value#0": "Acme"},
+        {"name#0": "ASIN", "value#0": "B01"},
+    ]}})
+    res = await run(_spec_table_recipe())
+    prov = res.provenance["specs"]
+    assert res.field_status["specs"] == "resolved"
+    assert (prov["rows"], prov["rows_matched"]) == (2, 2)
+    assert prov["columns"]["value"] == {
+        "locator": {"kind": "css", "selector": "td:last-child"},
+        "filled": 2, "of": 2, "won_at": 0,
+    }
+    assert "first_failure" not in prov["columns"]["value"]

@@ -223,7 +223,13 @@ def test_a_wait_is_synthesised_for_the_group_container() -> None:
     # The container, not a row: a drawer can render its list element before it
     # has any children.
     assert step.target.selector == "ul.results"  # type: ignore[union-attr]
-    assert step.args == {"state": "visible"}
+    # `attached`, not `visible`. These candidates read `textContent`, which
+    # includes content that is in the DOM and merely unpainted -- and the
+    # contract (§2) is explicit that waiting for `visible` on a collapsed
+    # section times out "even though the data is right there". The step is
+    # optional, so that timeout never failed anything; it just burned five
+    # seconds a group on every run. See `capture.wait_state_for`.
+    assert step.args == {"state": "attached"}
     assert step.timeout_ms == capture.REVEAL_TIMEOUT_MS
     # A reveal that never renders is an empty field, not a failed run.
     assert step.optional is True
@@ -416,3 +422,190 @@ def test_a_captured_step_never_fails_its_whole_group() -> None:
     assert step is not None
     assert step.optional is True
     assert step.effective_on_error == "continue"
+
+
+# --- the route the split_cleanup docstring quotes, which it did not fix ------
+
+
+def test_the_quoted_zara_route_splits_at_the_reveal() -> None:
+    """`split_cleanup`'s own docstring cites this route as the thing it fixes:
+
+        open COMPOSITION, CARE & ORIGIN -> wait -> close the dialog -> close
+        -> wait for the composition panel to be visible
+
+    It did not fix it. Only TRAILING cleanup moved, and this route ends in a
+    *wait*, so the backwards scan stopped on the first step it looked at and
+    nothing moved at all: both closes stayed in `steps`, and at replay the group
+    opened the drawer, shut it twice, and then read. It verified anyway --
+    the panel's text stays in the DOM once rendered and the reader walks
+    `textContent` -- which is exactly why the gap survived being documented.
+    """
+
+    route = [
+        _click("COMPOSITION, CARE & ORIGIN"),
+        Step(op="wait", args={"ms": 1500}),
+        Step(
+            op="click",
+            target=Locator(kind="css", selector='button[aria-label="Close"]'),
+            label="close the dialog (close)",
+        ),
+        _click("close"),
+        Step(
+            op="wait_for_selector",
+            target=Locator(kind="css", selector=".product-detail-composition"),
+            args={"state": "visible"},
+        ),
+    ]
+    setup, teardown = capture.split_cleanup(route)
+
+    assert [s.op for s in setup] == ["click", "wait"]
+    assert setup[0].target is not None
+    assert setup[0].target.name_contains == "COMPOSITION, CARE & ORIGIN"
+    # Both closes, and NOT the trailing wait: waiting for a panel to appear is
+    # not part of closing it.
+    assert [s.op for s in teardown] == ["click", "click"]
+
+
+def test_a_css_close_button_is_recognised_as_cleanup() -> None:
+    """`dismiss_step_for` builds its steps from `PageReader.overlay()`, which
+    yields CSS -- and `is_cleanup` returned False for every target without an
+    accessible name. The dismissals it exists to catch were the ones it could
+    not see."""
+
+    for selector in (
+        'button[aria-label="Close"]',
+        "button[data-dismiss]",
+        '[data-testid="modal-close"]',
+        'button[class*="close"]',
+    ):
+        step = Step(op="click", target=Locator(kind="css", selector=selector))
+        assert capture.is_cleanup(step), selector
+
+
+def test_a_bare_close_class_is_deliberately_not_cleanup() -> None:
+    """The same caution as the whole-name rule for accessible names, where
+    "Close" is cleanup and "Close fit" is a product attribute. A bare
+    `.close-button` almost certainly closes something and `.close-fit` almost
+    certainly does not, and nothing in the class name says which -- so only
+    ATTRIBUTE forms count, where naming the attribute is a deliberate act.
+
+    Nothing is lost: `dismiss_step_for` labels its steps with
+    `DISMISS_LABEL_PREFIX`, which `is_cleanup` matches first, and every close
+    control `PageReader.overlay()` finds is matched by one of the attribute
+    patterns above.
+    """
+
+    step = Step(op="click", target=Locator(kind="css", selector="button.close-button"))
+    assert not capture.is_cleanup(step)
+
+
+def test_a_css_reveal_is_still_not_cleanup() -> None:
+    for selector in (
+        ".product-detail-actions__action-button",
+        "button.a-expander-header",
+        '[data-testid="composition-panel"]',
+    ):
+        step = Step(op="click", target=Locator(kind="css", selector=selector))
+        assert not capture.is_cleanup(step), selector
+
+
+def test_a_route_of_only_waits_is_all_setup() -> None:
+    """Waits are walked over to find the boundary, not treated as cleanup. With
+    nothing to put away the scan must not have moved past them."""
+
+    route = [_click("Specifications"), Step(op="wait", args={"ms": 500})]
+    assert capture.split_cleanup(route) == (route, [])
+
+
+# --- the guard: toggles only, on the control's own state ---------------------
+
+
+def test_only_toggles_are_guarded() -> None:
+    """A scroll cannot undo itself. Guarding one bought nothing and risked the
+    whole field, because a guard that misreads SKIPS the step silently."""
+
+    steps = [
+        Step(op="scroll", args={"direction": "down"}),
+        Step(op="hover", target=Locator(kind="css", selector=".x")),
+        Step(op="click", target=Locator(kind="css", selector=".opener")),
+    ]
+    guarded = capture.guard_reveals(steps, ".content")
+    assert guarded[0].when == []
+    assert guarded[1].when == []
+    assert guarded[2].when != []
+
+
+def test_a_toggle_is_guarded_on_its_own_declared_state() -> None:
+    """`aria-expanded="false"` is what "still shut" means, and it is the page's
+    own answer. The old guard watched the field's READ selector instead -- a
+    different element, routinely painted while the section is closed, in which
+    case `hidden` is false and the reveal is skipped."""
+
+    steps = [Step(op="click", target=Locator(kind="css", selector="button.accordion"))]
+    guarded = capture.guard_reveals(steps, ".panel-content")
+
+    assert len(guarded[0].when) == 1
+    guard = guarded[0].when[0]
+    assert guard.kind == "selector_present"
+    assert guard.selector == 'button.accordion[aria-expanded="false"]'
+
+
+def test_a_target_that_cannot_carry_state_is_not_guarded_at_all() -> None:
+    """An `ax_role` target has no selector to narrow, and there is deliberately
+    no fallback to the content selector.
+
+    MEASURED on the Zara shirt page, where that fallback deleted the reveal.
+    `revealed` is `document_scoped_selector` over the group's WHOLE binding set,
+    and the group bound ten fields, so all three reveal clicks were guarded on
+    `hidden("button.product-detail-image img")` -- the `images` selector.
+    Product images are visible, so `hidden` was false and the replay's step
+    trace read `click / skipped / guard hidden not satisfied` three times over.
+    The drawer never opened; `care` and `origin` failed with no provenance at
+    all.
+    """
+
+    steps = [Step(op="click", target=Locator(kind="ax_role", role="button", name_contains="Care"))]
+    assert capture.guard_reveals(steps, ".panel-content")[0].when == []
+
+
+def test_no_state_and_no_content_selector_means_no_guard() -> None:
+    """Getting the reveal to RUN matters more than avoiding a double-toggle: a
+    double-toggle costs one group's fields once, a skipped reveal costs them on
+    every run, and `teardown` already exists to put the page back."""
+
+    steps = [Step(op="click", target=Locator(kind="ax_role", role="button", name_contains="Care"))]
+    assert capture.guard_reveals(steps, None)[0].when == []
+
+
+def test_an_author_written_guard_is_never_replaced() -> None:
+    from agentpilot.recipe.v2.models import Predicate
+
+    mine = Predicate(kind="visible", selector="#mine")
+    steps = [Step(op="click", target=Locator(kind="css", selector=".o"), when=[mine])]
+    assert capture.guard_reveals(steps, ".c")[0].when == [mine]
+
+
+# --- the wait's state --------------------------------------------------------
+
+
+def test_a_visible_text_field_still_waits_for_paint() -> None:
+    candidates = [
+        Candidate(locator=Locator(kind="css", selector=".p", attribute="visible_text")),
+    ]
+    assert capture.wait_state_for(candidates) == "visible"
+
+
+def test_a_textcontent_field_waits_for_attachment() -> None:
+    """The contract's own words (§2): a `visible` wait on a collapsed section
+    "will time out even though the data is right there"."""
+
+    candidates = [Candidate(locator=Locator(kind="css", selector=".p"))]
+    assert capture.wait_state_for(candidates) == "attached"
+
+
+def test_one_visible_text_candidate_is_enough_to_want_paint() -> None:
+    candidates = [
+        Candidate(locator=Locator(kind="css", selector=".a")),
+        Candidate(locator=Locator(kind="css", selector=".b", attribute="visible_text")),
+    ]
+    assert capture.wait_state_for(candidates) == "visible"

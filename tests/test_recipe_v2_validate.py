@@ -265,3 +265,52 @@ def test_a_reveal_that_changes_nothing_worth_undoing_is_quiet() -> None:
     )
     assert errors == []
     assert not any("teardown" in w for w in warnings)
+
+
+# --- the never-verified chain, mirroring lint.ts ----------------------------
+
+
+def _chain(*verified: int):
+    return doc(
+        status="approved",
+        field_groups=[{
+            "group_id": "core",
+            "field_names": ["title"],
+            "bindings": {"title": [
+                {"locator": {"kind": "css", "selector": f".t{i}"}, "verified_on": v}
+                for i, v in enumerate(verified)
+            ]},
+        }],
+    )
+
+
+def _unverified(document) -> list[str]:
+    _errors, warnings = validate_document(document)
+    return [w for w in warnings if "has ever resolved" in w]
+
+
+def test_a_healthy_primary_carrying_a_field_is_not_warned_about() -> None:
+    """`verified_on` counts pages a candidate actually produced the value on, so
+    a fallback that was never reached reads 0 -- correctly. Asking per candidate
+    would warn about almost every fallback in every approved recipe."""
+
+    assert _unverified(_chain(2, 0)) == []
+
+
+def test_a_chain_nothing_has_ever_resolved_is_warned_about_once() -> None:
+    assert len(_unverified(_chain(0, 0))) == 1
+
+
+def test_a_draft_has_not_been_reviewed_yet_so_says_nothing() -> None:
+    document = _chain(0, 0)
+    document["status"] = "draft"
+    assert _unverified(document) == []
+
+
+def test_a_document_with_no_status_is_treated_as_a_draft() -> None:
+    """The studio omits `status` on a new document, and a brand-new draft has by
+    definition never been replayed against anything."""
+
+    document = _chain(0, 0)
+    del document["status"]
+    assert _unverified(document) == []

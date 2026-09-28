@@ -234,6 +234,83 @@ async def _replay_scalar(
         await _record(field_name, spec, candidates, res, result, reader, tctx)
 
 
+class RepeatDiagnosis:
+    """Why a table read produced the rows it did -- kept because "nothing
+    collected" is two completely different failures wearing one face.
+
+    A table field that comes back empty has either matched no rows, or matched
+    rows whose columns read nothing inside them. Those need opposite fixes: the
+    first is a `rows_locator` that stopped matching, the second is a column
+    selector that is not relative to its row (the exact misalignment `rows.py`
+    exists to prevent). The scalar path has carried `attempts` since
+    `resolve.py` started recording them; this path hardcoded
+    `{"candidate": 0, "candidates": 1}` and threw the equivalent away, so an
+    empty table was unattributable from the run record alone.
+
+    Measured on an Amazon specification table bound to `th, td:first-child` and
+    `td:last-child`: both columns reported "nothing collected" and the run's
+    provenance could not say whether the rows had been found.
+
+    Deliberately a SUMMARY, not a per-row log. A 100-row table with 6 columns
+    would otherwise put 600 attempt records into every run's provenance to
+    answer a question that `filled of matched` answers. The first failing
+    candidate is kept in full, because the reason is what says which fix is
+    needed -- `empty` means the selector stopped matching, `cleaned_to_nothing`
+    means it still matches and the transform is the problem.
+    """
+
+    __slots__ = ("rows_matched", "note", "columns")
+
+    def __init__(self) -> None:
+        self.rows_matched: int | None = None
+        """Rows the locator matched, BEFORE `max_iterations` truncated them.
+        `None` when nothing got far enough to count."""
+        self.note: str | None = None
+        """Why there was nothing to count, when that is knowable."""
+        self.columns: dict[str, dict[str, Any]] = {}
+
+    def saw_rows(self, count: int) -> None:
+        self.rows_matched = count
+
+    def column_read(self, column: str, res: FieldResolution) -> None:
+        """One column's outcome in one row, folded into its running tally."""
+
+        entry = self.columns.setdefault(column, {"filled": 0, "of": 0})
+        entry["of"] += 1
+        if res.status in ("resolved", "fallback"):
+            entry["filled"] += 1
+            # Which candidate carried it, from the first row that read anything.
+            # A column chain erodes exactly as a scalar one does -- reading from
+            # candidate 2 is the same early warning here -- and `filled` alone
+            # cannot see it. It is also what lets a column's `verified_on` be
+            # counted from a run rather than assumed (`merge.verified_counts`).
+            if "won_at" not in entry and res.candidate_index is not None:
+                entry["won_at"] = res.candidate_index
+            return
+        # The first row that failed, and only the first: every subsequent row
+        # fails the same way on a page whose column selector is wrong, and the
+        # tally already says how many.
+        if "first_failure" not in entry and res.attempts:
+            entry["first_failure"] = res.attempts[0].to_dict()
+        elif "first_failure" not in entry and res.reason:
+            entry["first_failure"] = {"outcome": "no_candidate", "detail": res.reason}
+
+    def to_dict(self, group: FieldGroup) -> dict[str, Any]:
+        columns: dict[str, Any] = {}
+        for name, chain in group.bindings.items():
+            if not chain:
+                continue
+            entry: dict[str, Any] = {"locator": chain[0].locator.to_dict()}
+            entry.update(self.columns.get(name, {"filled": 0, "of": 0}))
+            columns[name] = entry
+        out: dict[str, Any] = {"columns": columns}
+        if self.rows_matched is not None:
+            out["rows_matched"] = self.rows_matched
+        if self.note:
+            out["note"] = self.note
+        return out
+
+
 async def _replay_repeat(
     group: FieldGroup,
     repeat: RepeatSpec,
@@ -248,12 +325,14 @@ async def _replay_repeat(
     rows: list[dict[str, Any]] = []
     truncated = False
 
+    diag = RepeatDiagnosis()
+
     if repeat.kind == "json":
-        rows, truncated = await _rows_from_json(group, repeat, reader, tctx)
+        rows, truncated = await _rows_from_json(group, repeat, reader, tctx, diag)
     elif repeat.kind == "dom_rows":
-        rows, truncated = await _rows_from_dom_rows(group, repeat, reader, tctx)
+        rows, truncated = await _rows_from_dom_rows(group, repeat, reader, tctx, diag)
     else:
-        rows, truncated = await _rows_from_dom(group, repeat, reader, ctx, tctx, result)
+        rows, truncated = await _rows_from_dom(group, repeat, reader, ctx, tctx, result, diag)
 
     expect = group.expect
     if expect is not None and expect.min_rows is not None and len(rows) < expect.min_rows:
@@ -262,6 +341,12 @@ async def _replay_repeat(
     result.truncated[field_name] = truncated
     if not rows:
         result.field_status[field_name] = "failed" if (spec and spec.required) else "empty"
+        # The empty case is the one the diagnosis exists for, so it is recorded
+        # HERE rather than only on the success path below. Returning without it
+        # is what made an empty table unattributable.
+        result.provenance[field_name] = _repeat_provenance(
+            group, repeat, result, rows=0, diag=diag
+        )
         return
 
     # The field's own transforms, over the whole row set.
@@ -290,24 +375,37 @@ async def _replay_repeat(
     result.field_status[field_name] = (
         "suspect" if (truncated or reshape_failed) else "resolved"
     )
-    # A table has no candidate chain -- it has a rows locator and one binding
-    # per column, and those are what a person debugging it needs to see. The
-    # misalignment `rows.py` exists to prevent (a column resolving against the
-    # whole page rather than inside a row) is visible in exactly this shape:
-    # a column selector that is not relative.
-    result.provenance[field_name] = {
+    result.provenance[field_name] = _repeat_provenance(
+        group, repeat, result, rows=len(rows), diag=diag
+    )
+
+
+def _repeat_provenance(
+    group: FieldGroup,
+    repeat: RepeatSpec,
+    result: RecipeRunResult,
+    *,
+    rows: int,
+    diag: RepeatDiagnosis,
+) -> dict[str, Any]:
+    """What a person debugging a table needs, on both the full and empty paths.
+
+    A table has no candidate chain -- it has a rows locator and one binding per
+    column, so `candidate`/`candidates` are the constants they always were and
+    are kept only so every provenance entry has the same shape. Everything that
+    actually varies comes from `RepeatDiagnosis`: how many rows the locator
+    matched before truncation, and per column how many of those rows it filled.
+    """
+
+    return {
         "candidate": 0,
         "candidates": 1,
         "source": "json" if repeat.kind == "json" else "dom",
         "variant": result.variant_id,
-        "rows": len(rows),
+        "rows": rows,
         "repeat_kind": repeat.kind,
         "locator": repeat.rows_locator.to_dict() if repeat.rows_locator else None,
-        "columns": {
-            name: chain[0].locator.to_dict()
-            for name, chain in group.bindings.items()
-            if chain
-        },
+        **diag.to_dict(group),
     }
 
 
@@ -316,6 +414,7 @@ async def _rows_from_json(
     repeat: RepeatSpec,
     reader: PageReader,
     tctx: TransformContext,
+    diag: RepeatDiagnosis,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Rows from an array already in the page's structured data.
 
@@ -326,10 +425,20 @@ async def _rows_from_json(
     """
 
     if repeat.rows_locator is None:
+        diag.note = "this json repeat has no rows_locator"
         return [], False
     raw = await reader.read(repeat.rows_locator)
     if not isinstance(raw, list):
+        # A path that resolved to a scalar, or to nothing. Distinguished from an
+        # empty array because they need different fixes: the path is wrong
+        # versus the page genuinely has no rows.
+        diag.note = (
+            "the rows path did not resolve to an array"
+            if raw is not None
+            else "the rows path resolved to nothing"
+        )
         return [], False
+    diag.saw_rows(len(raw))
 
     limit = repeat.max_iterations
     truncated = len(raw) > limit
@@ -342,7 +451,7 @@ async def _rows_from_json(
                 return resolve_path(_el, loc.path or "", loc.path_lang)
             return None
 
-        row = await _resolve_columns(group, _row_evaluate, tctx)
+        row = await _resolve_columns(group, _row_evaluate, tctx, diag)
         if row:
             rows.append(row)
     return rows, truncated
@@ -353,6 +462,7 @@ async def _rows_from_dom_rows(
     repeat: RepeatSpec,
     reader: PageReader,
     tctx: TransformContext,
+    diag: RepeatDiagnosis,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Rows from N row elements already rendered on the page.
 
@@ -373,6 +483,7 @@ async def _rows_from_dom_rows(
     """
 
     if repeat.rows_locator is None:
+        diag.note = "this dom_rows repeat has no rows_locator"
         return [], False
 
     # Every candidate of every column, not just the first: `resolve_field`
@@ -395,7 +506,15 @@ async def _rows_from_dom_rows(
     # moment -- see `PageReader.read_rows`.
     raw = await reader.read_rows(repeat.rows_locator, slots)
     if raw is None:
+        # `read_rows` answers None only for a locator kind that cannot address
+        # DOM elements at all -- a malformed recipe, not an empty page. Said
+        # plainly, because it is the one table failure no page change can cause.
+        diag.note = (
+            f"a {repeat.rows_locator.kind} rows_locator cannot address DOM rows; "
+            "dom_rows needs css or xpath"
+        )
         return [], False
+    diag.saw_rows(len(raw))
 
     limit = repeat.max_iterations
     truncated = len(raw) > limit
@@ -411,7 +530,7 @@ async def _rows_from_dom_rows(
             key = slot_of.get(id(loc))
             return _el.get(key) if key is not None else None
 
-        row = await _resolve_columns(group, _row_evaluate, tctx)
+        row = await _resolve_columns(group, _row_evaluate, tctx, diag)
         if row:
             rows.append(row)
     return rows, truncated
@@ -424,6 +543,7 @@ async def _rows_from_dom(
     ctx: StepContext,
     tctx: TransformContext,
     result: RecipeRunResult,
+    diag: RepeatDiagnosis,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Rows by clicking through an option set.
 
@@ -437,6 +557,7 @@ async def _rows_from_dom(
     """
 
     if repeat.option_locator is None:
+        diag.note = "this dom repeat has no option_locator"
         return [], False
 
     from agentpilot.recipe.v2.steps import dispatch_step
@@ -448,7 +569,10 @@ async def _rows_from_dom(
         snapshot = await reader.snapshot()
         total = len(find_nodes(snapshot, repeat.option_locator)) if snapshot else 0
     if total == 0:
+        diag.saw_rows(0)
+        diag.note = "the option locator matched nothing, in the DOM or the tree"
         return [], False
+    diag.saw_rows(total)
 
     limit = min(total, repeat.max_iterations)
     truncated = total > repeat.max_iterations
@@ -466,7 +590,7 @@ async def _rows_from_dom(
                 await dispatch_step(repeat.settle, ctx, len(result.step_trace))
             )
         reader.invalidate()
-        row = await _resolve_columns(group, reader.read, tctx)
+        row = await _resolve_columns(group, reader.read, tctx, diag)
         if row:
             rows.append(row)
     return rows, truncated
@@ -494,8 +618,19 @@ def _option_step(repeat: RepeatSpec, index: int) -> Any:
 
 
 async def _resolve_columns(
-    group: FieldGroup, evaluate: Any, tctx: TransformContext
+    group: FieldGroup,
+    evaluate: Any,
+    tctx: TransformContext,
+    diag: RepeatDiagnosis | None = None,
 ) -> dict[str, Any]:
+    """One row's columns, recording what each one did on the way past.
+
+    `diag` is optional so the function stays callable without a diagnosis, but
+    replay always passes one: a column that reads nothing in every row is the
+    commonest table failure and `resolve_field` already knows why. Discarding
+    its `attempts` here is what left an empty table with no explanation.
+    """
+
     row: dict[str, Any] = {}
     for column, candidates in group.bindings.items():
         spec = FieldSpec(name=column)
@@ -505,6 +640,8 @@ async def _resolve_columns(
                 url=tctx.url, meta=tctx.meta, field_name=column, variant=tctx.variant
             ),
         )
+        if diag is not None:
+            diag.column_read(column, res)
         if res.status in ("resolved", "fallback"):
             row[column] = res.value
     return row

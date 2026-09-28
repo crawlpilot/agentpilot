@@ -146,12 +146,18 @@ interface ChainOptions {
 /**
  * A ranked selector chain becomes an ordered candidate list.
  *
- * `verified_on: 1` is deliberate and load-bearing. These selectors were not
- * guessed -- they were derived from an element the author clicked and, in list
- * mode, validated against every sibling by `CommonSelectorGenerator`'s majority
- * rule. Leaving it 0 would make `lintRecipe` flag every picked candidate as
- * "nobody has ever seen it work", which is precisely the warning that should
- * stay meaningful for the ones nobody has.
+ * `verified_on: 1` is deliberate. These selectors were not guessed -- they were
+ * derived from an element the author clicked and, in list mode, validated
+ * against every sibling by `CommonSelectorGenerator`'s majority rule, so one
+ * page has genuinely seen each of them resolve. It is the same unit the server
+ * counts in: `recipe/v2/merge.py` writes the number of sample pages a candidate
+ * actually produced the value on, and a review pass overwrites these with its
+ * own count. Until one runs, `1` is the honest figure for a picked selector and
+ * `0` would be the wrong one.
+ *
+ * It is no longer load-bearing for the lint, which now asks whether a field's
+ * WHOLE chain is unverified rather than flagging each candidate -- a healthy
+ * fallback legitimately reads 0, because nothing ever reached it.
  */
 export function chainToCandidates(
   chain: PickSelector[] | undefined,
@@ -904,12 +910,28 @@ function waitStepFor(draft: FieldDraft): Step | null {
   return {
     op: 'wait_for_selector',
     target: { kind: 'css', selector },
-    args: { state: 'visible' },
+    args: { state: waitStateFor(draft) },
     timeout_ms: REVEAL_TIMEOUT_MS,
     on_error: 'continue',
     optional: true,
     label: 'wait for the reveal to render',
   }
+}
+
+/**
+ * `visible` only when a candidate reads what a user can actually see.
+ *
+ * Mirrors `capture.wait_state_for`. `attribute: 'text'` is `textContent`, which
+ * includes content that is in the DOM and merely unpainted -- a collapsed
+ * accordion -- and the contract (§2) is explicit that a `visible` wait on such
+ * a section "will time out even though the data is right there". Because this
+ * step is optional that timeout never failed anything; it silently burned
+ * `REVEAL_TIMEOUT_MS` on every group, every run.
+ */
+function waitStateFor(draft: FieldDraft): 'visible' | 'attached' {
+  const columns = Object.values(draft.columns ?? {}).flat()
+  const every = [...draft.candidates, ...columns]
+  return every.some((c) => c.locator.attribute === 'visible_text') ? 'visible' : 'attached'
 }
 
 /**

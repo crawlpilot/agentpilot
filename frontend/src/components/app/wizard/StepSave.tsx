@@ -122,7 +122,12 @@ export function StepSave({
             the same ones, so they are fixed here rather than discovered on save.
           </p>
         )}
-        {error && <p className="text-[11px] text-destructive">{error}</p>}
+        {/* `whitespace-pre-line` because a 422 is a LIST of validation
+            reasons joined by newlines, not one sentence -- see
+            `RecipeWizardPage::saveError`. */}
+        {error && (
+          <p className="whitespace-pre-line text-[11px] text-destructive">{error}</p>
+        )}
       </div>
 
       {saved && (

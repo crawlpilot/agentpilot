@@ -52,6 +52,7 @@ from agentpilot.recipe.v2.json_index import outline
 from agentpilot.recipe.v2.models import (
     Candidate,
     FieldGroup,
+    Locator,
     Recipe,
     RepeatSpec,
     Step,
@@ -276,6 +277,20 @@ def _same_document(before: str, after: str) -> bool:
 
     a, b = urlsplit(before), urlsplit(after)
     return (a.scheme, a.netloc, a.path) == (b.scheme, b.netloc, b.path)
+
+
+def _opener_key(locator: Locator) -> tuple[Any, ...]:
+    """One identity for one section's control.
+
+    `locator_key` is the module that already had to answer this, for
+    `dedupe_locators`. Reusing it is what makes "these two fields came out of
+    the same drawer" a dictionary lookup rather than a second notion of
+    sameness that could disagree with the first.
+    """
+
+    from agentpilot.recipe.v2.selector_agent import locator_key
+
+    return locator_key(locator)
 
 
 def silently_unbound(
@@ -518,6 +533,24 @@ class ExplorationState:
         # Whether the freshly-loaded page has been checked for a site popup yet.
         self._cleanup_probed = False
         self._pending_steps: list[Step] = []
+        # Which field was bound behind which opener, and how to close each
+        # opener again. Together they are what makes a group mean "one section,
+        # and everything readable inside it".
+        #
+        # A reveal is deliberately NOT added to `_path`. The route is cumulative
+        # and shared by every group frozen after it, so an opener living there
+        # would be replayed by groups that have no use for it -- and, because
+        # each field reveals for itself, the same drawer would be opened once
+        # per field. Measured on Zara: `care` and `origin` sit behind one
+        # accordion and the frozen recipe carried THREE clicks on it.
+        self._revealed_by: dict[str, Locator] = {}
+        self._reveal_teardown: dict[tuple[Any, ...], Step] = {}
+        # The click itself, per opener, so the group that opener defines can
+        # carry exactly one copy of it.
+        self._reveal_steps: dict[tuple[Any, ...], Step] = {}
+        # Openers already clicked and still open, so a second field behind the
+        # same section does not toggle it shut.
+        self._revealed_open: set[tuple[Any, ...]] = set()
         self._failures: dict[str, str] = {}
         # Consecutive misses per field, and what that count is allowed to
         # conclude. See `_MAX_FIELD_ATTEMPTS`.
@@ -703,6 +736,154 @@ class ExplorationState:
         wait = capture.wait_step_for(candidates=candidates, repeat=repeat)
         if wait is not None:
             self._path.append(wait)
+
+    async def reveal_for_binding(self, locator: Locator) -> bool:
+        """Open what a caption rejection identified, and keep the click.
+
+        `selector_agent` can only bind what is readable at the moment it looks,
+        and a field inside a collapsed drawer is not. Its caption guard already
+        works out which control leads to the content -- it refuses that locator
+        with "you matched the control or heading that leads to the content, not
+        the content. Open it" -- and until now nothing could act on the advice.
+
+        MEASURED (Zara, the printed-combined-shirt page). `care` took 29 attempts
+        and `origin` 22, nearly all of them "read nothing" against a shut drawer,
+        and both fields were dropped. `composition` bound from the same drawer
+        only because it is also in JSON-LD.
+
+        **Kept against the OPENER rather than in `_path`.** A field bound behind
+        a drawer is only reproducible if the recipe carries the click that
+        opened it -- but the route is cumulative and shared, so an opener living
+        there would be replayed by every group frozen afterwards, and since each
+        field reveals for itself the same drawer would be opened once per field.
+        Measured on Zara, where `care` and `origin` share one accordion and the
+        frozen recipe carried three clicks on it. `_freeze` instead groups the
+        fields BY their opener, so one section is one group with one click.
+
+        Already-open sections are not clicked again: a second click on a toggle
+        shuts it, which would take the first field down with the second.
+
+        `optional`/`on_error: continue` to match every other captured reveal: a
+        drawer that does not open is a field that comes back empty, not a run
+        that fails.
+        """
+
+        problem = capture.dispatchability_error(locator, "click")
+        if problem is not None:
+            log.info("onboard.reveal_not_dispatchable", reason=problem)
+            return False
+        key = _opener_key(locator)
+        if key in self._revealed_open:
+            # Already open, from another field behind the same section. Reported
+            # as success because the postcondition -- the content is readable --
+            # holds, which is what the caller is about to rely on.
+            return True
+        step = Step(
+            op="click",
+            target=locator,
+            label="open the section this field is inside",
+            optional=True,
+            on_error="continue",
+        )
+        if self._dispatch_step is None:
+            return False
+        try:
+            outcome = await self._dispatch_step(step)
+        except Exception:  # noqa: BLE001 - a reveal that fails is data, not a crash
+            log.debug("onboard.reveal_failed", exc_info=True)
+            return False
+        if outcome is not None and getattr(outcome, "status", "") == "failed":
+            return False
+        self._revealed_open.add(key)
+        self._reveal_steps[key] = step
+        self._reader.invalidate()
+        await self._record_reveal_teardown(key)
+        log.info("onboard.revealed_for_binding", locator=locator.to_dict())
+        return True
+
+    async def _record_reveal_teardown(self, key: tuple[Any, ...]) -> None:
+        """How to close what the reveal just opened, if it opened a dialog.
+
+        A reveal that opens a modal leaves it open. `replay.py` loads the page
+        once and runs every group against it, so the drawer this opened covers
+        the next group's controls and scroll-locks the document -- the Zara
+        failure the replay docstring describes, where clicking
+        *COMPOSITION, CARE & ORIGIN* while *PRODUCT MEASUREMENTS* is open times
+        out because the open drawer is on top.
+
+        Dispatched by nobody here: closing it now would shut the drawer the
+        field is about to be read from. It is recorded against the OPENER and
+        attached by `_freeze` to the group that opener defines, which reads
+        before it tears down.
+
+        Asked of the page rather than inferred, because nothing about the click
+        says whether it opened a dialog or an accordion. An accordion yields no
+        overlay and therefore no teardown, which is right: it does not cover
+        anything.
+        """
+
+        try:
+            overlay = await self._reader.overlay()
+        except Exception:  # noqa: BLE001 - a probe that fails is not a failed build
+            log.debug("onboard.reveal_overlay_probe_failed", exc_info=True)
+            return
+        close = capture.dismiss_step_for(overlay)
+        if close is None:
+            return
+        self._reveal_teardown[key] = close
+        log.info("onboard.reveal_teardown_recorded", label=close.label)
+
+    def _by_opener(
+        self, scalar: dict[str, list[Candidate]]
+    ) -> dict[tuple[Any, ...] | None, list[str]]:
+        """The batch's fields, partitioned by the section they came out of.
+
+        `None` is the section-less partition -- fields readable without opening
+        anything -- and it is emitted FIRST so the ordinary group keeps the
+        position it has always had, which keeps `group_id`s stable for a build
+        that reveals nothing.
+
+        Insertion order is preserved within each partition, so a group's field
+        order still follows the order they were bound in.
+        """
+
+        out: dict[tuple[Any, ...] | None, list[str]] = {}
+        for name in scalar:
+            opener = self._revealed_by.get(name)
+            key = _opener_key(opener) if opener is not None else None
+            out.setdefault(key, []).append(name)
+        if None in out:
+            # Re-inserted first; dicts preserve insertion order and the
+            # section-less group is the one that existed before this split.
+            return {None: out.pop(None), **out}
+        return out
+
+    def _steps_for_section(
+        self,
+        base: list[Step],
+        opener: tuple[Any, ...] | None,
+        fields: dict[str, list[Candidate]],
+    ) -> list[Step]:
+        """The route, plus the one click that opens this section and the wait
+        that lets it render.
+
+        The opener is appended here rather than carried in `_path` precisely so
+        that it reaches ONLY the group whose fields are behind it. The wait is
+        computed from that group's own candidates, so it watches what this
+        section actually reveals rather than whatever field happened to sort
+        first across the whole batch -- the mistake that made every reveal in
+        the Zara recipe guard on the product image and be skipped.
+        """
+
+        if opener is None or opener not in self._reveal_steps:
+            return base
+        steps = [*base, self._reveal_steps[opener]]
+        wait = capture.wait_step_for(
+            candidates=[c for chain in fields.values() for c in chain], repeat=None
+        )
+        if wait is not None:
+            steps.append(wait)
+        return steps
 
     def _route_for(self) -> list[Step]:
         """The whole way from a loaded, cleaned-up page to the state being frozen.
@@ -1022,6 +1203,17 @@ class ExplorationState:
                 # not is confined to the container it found its values in. See
                 # `selector_agent.scope_problem`.
                 probe=self._reader.read_with_scope,
+                # And let it OPEN what it identified. Without this a field
+                # behind a collapsed drawer can only bind by luck -- see
+                # `reveal_for_binding`. The click lands in `_path`, so the
+                # route `_freeze` reads already carries it and the group gets
+                # the reveal step for free.
+                reveal=self.reveal_for_binding,
+                # Which opener bound which field. This is the grouping key:
+                # fields that came out of one section become one group with one
+                # reveal, rather than a group per field each repeating the same
+                # click. See `_freeze`.
+                revealed_by=self._revealed_by,
             )
             if scalars
             else {}
@@ -1241,13 +1433,42 @@ class ExplorationState:
         frozen: set[str] = set()
         here = await self._reader.current_url()
 
-        if scalar:
-            if not await self._absorb(scalar, group_steps, here):
+        # One group per section, not one group per freeze batch.
+        #
+        # A group's `steps` are what reaches the state its fields are readable
+        # in, so the natural unit is "everything behind one reveal". Fields that
+        # needed no reveal keep the plain route; fields that came out of the
+        # same drawer share one group carrying that drawer's single click and
+        # its teardown.
+        #
+        # MEASURED (Zara). `care` and `origin` live behind one accordion, and
+        # each field revealed for itself into the shared cumulative route, so
+        # the frozen recipe carried THREE clicks on that one control -- two of
+        # them re-toggling what the first had already opened. Partitioning by
+        # opener is also what lets the teardown be right: one close per section
+        # that was opened, attached to the group that opened it.
+        for opener, names in self._by_opener(scalar).items():
+            fields = {name: scalar[name] for name in names}
+            steps = self._steps_for_section(group_steps, opener, fields)
+            teardown = (
+                [self._reveal_teardown[opener]]
+                if opener is not None and opener in self._reveal_teardown
+                else []
+            )
+            # A revealed section is never absorbed. Merging it into the previous
+            # group would hand that group's fields a reveal they do not need and
+            # lose this one's teardown -- and "one group is one section" is the
+            # whole point of the partition above. Fields behind no reveal still
+            # merge exactly as before, which is where the page-load saving was.
+            absorbed = opener is None and await self._absorb(fields, steps, here)
+            if not absorbed:
                 self.field_groups.append(
-                    self._group(list(scalar), scalar, group_steps, repeat=None)
+                    self._group(
+                        list(fields), fields, steps, repeat=None, teardown=teardown
+                    )
                 )
                 self._group_urls.append(here)
-            frozen |= set(scalar)
+            frozen |= set(fields)
 
         for table_name, binding in rows.items():
             # A `json` or `dom_rows` table reads what is already on the page, so
@@ -1524,6 +1745,7 @@ class ExplorationState:
         *,
         repeat: RepeatSpec | None,
         group_id: str | None = None,
+        teardown: list[Step] | None = None,
     ) -> FieldGroup:
         # Tidying that happened after the last reveal is not how the field got
         # on screen -- it is how it came off. The route is the whole path since
@@ -1532,7 +1754,13 @@ class ExplorationState:
         # group's TEARDOWN rather than discarded: closing what was opened is the
         # whole of what lets the next group share this page load instead of
         # reloading it. See `capture.split_cleanup`.
-        steps, teardown = capture.split_cleanup(list(steps))
+        steps, captured_teardown = capture.split_cleanup(list(steps))
+        # Plus how to close the section this group opened, if it opened one.
+        # That close was never dispatched, so it is not in the route and
+        # `split_cleanup` cannot have found it -- and it is the difference
+        # between a group that shares the page load and one that leaves a modal
+        # over everything after it.
+        teardown = [*captured_teardown, *(teardown or [])]
         revealed = capture.document_scoped_selector(
             candidates=[c for chain in bindings.values() for c in chain], repeat=repeat
         )

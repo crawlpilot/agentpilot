@@ -137,6 +137,25 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
                 errors.append(f'{where}.{name}.{key}: column "{key}" has no candidates bound')
 
             for key in keys:
+                # Asked of the CHAIN, not of each candidate. `verified_on` counts
+                # the sample pages a candidate actually produced the value on
+                # (`merge.verified_counts`), so a healthy fallback reads 0 --
+                # nothing ever reached it, because the primary kept winning.
+                # Warning per candidate would fire on almost every fallback of
+                # every approved recipe. Mirrors `lint.ts`; the two must agree,
+                # because a document the studio calls clean must not be warned
+                # about on the way in.
+                chain = bindings.get(key) or []
+                if (
+                    doc.get("status") not in (None, "draft")
+                    and chain
+                    and all(int(c.get("verified_on") or 0) == 0 for c in chain)
+                ):
+                    warnings.append(
+                        f"{where}.{name}.{key}: no candidate has ever resolved on a "
+                        "sample page, on an approved recipe"
+                    )
+
                 for index, candidate in enumerate(bindings.get(key) or []):
                     at = f"{key} -> candidate {index + 1}"
                     locator = candidate.get("locator")

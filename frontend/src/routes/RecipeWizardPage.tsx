@@ -20,6 +20,7 @@ import { useRecipeValidation } from '@/hooks/useRecipeValidation'
 import { useToast } from '@/components/ui/toast'
 import { emptyRecipe, toExport } from '@/lib/recipe/document'
 import { lintRecipe } from '@/lib/recipe/lint'
+import { validationErrors } from '@/lib/api/client'
 import { buildValidationPlan, structuredOnlyFields } from '@/lib/recipe/validatePlan'
 import {
   detailPickToDraft,
@@ -437,6 +438,20 @@ export function RecipeWizardPage() {
     )
   }
 
+  /**
+   * The save failure, as the author needs to read it.
+   *
+   * A 422 from `POST /v1/recipes/v2` carries `validate_document`'s whole list in
+   * `details.errors`; `message` only summarises the first few. Anything else --
+   * a 401, a network failure -- has no list and its message is the message.
+   */
+  function saveError(err: unknown): string | null {
+    if (!err) return null
+    const reasons = validationErrors(err)
+    if (reasons.length > 0) return reasons.join('\n')
+    return err instanceof Error ? err.message : String(err)
+  }
+
   function commitAndOpenEditor() {
     reset(built)
     navigate(recipeId ? `/recipes/${recipeId}/studio` : '/recipes/new/studio')
@@ -585,7 +600,10 @@ export function RecipeWizardPage() {
                 onSave={saveRecipe}
                 saving={save.isPending}
                 saved={saved}
-                error={save.error ? save.error.message : null}
+                // Every validation reason, not the three the server's summary
+                // fits into `message`. A 422 here is a refusal with a list, and
+                // fixing one item per save round trip is the thing this avoids.
+                error={saveError(save.error)}
               />
             )}
           </div>

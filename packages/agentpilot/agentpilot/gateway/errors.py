@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -90,6 +90,34 @@ def _error_response(
         content={"success": False, "code": code.value, "error": message, "details": details},
         headers=headers,
     )
+
+
+# How many of a structured detail's reasons to name in the one-line summary.
+# The whole list still travels in `details`; this is only what a client that
+# renders `error` alone will show, and three is where a toast stops being
+# readable.
+_SUMMARY_REASONS = 3
+
+
+def _summarize_detail(detail: Mapping[str, Any]) -> str:
+    """A one-line message for a structured `HTTPException.detail`.
+
+    Prefers the reasons themselves over a count, because "a dom_rows repeat
+    needs a rows_locator" is actionable and "3 problems" is not. Falls back to
+    the mapping's own `error`/`detail`/`message` key, and finally to the key
+    names -- anything but a Python repr.
+    """
+
+    errors = detail.get("errors")
+    if isinstance(errors, list) and errors:
+        shown = "; ".join(str(e) for e in errors[:_SUMMARY_REASONS])
+        rest = len(errors) - _SUMMARY_REASONS
+        return f"{shown} (and {rest} more)" if rest > 0 else shown
+    for key in ("error", "detail", "message"):
+        value = detail.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return f"request refused: {', '.join(sorted(map(str, detail)))}"
 
 
 _HttpHandler = Callable[[Any, Any], Awaitable[JSONResponse]]
@@ -204,8 +232,33 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _http_exception_handler(
         request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
+        """A raised `HTTPException`, with a structured `detail` kept structured.
+
+        `detail` is usually a string and `str()` was right for it. It is
+        sometimes a mapping, and for those `str()` produced a Python dict repr
+        in the `error` field -- a client reading `error` got
+        `"{'errors': [...], 'warnings': [...]}"` and a client reading `details`
+        got nothing at all, because `details` was never passed.
+
+        Measured on the one route where the list *is* the error: `POST
+        /v1/recipes/v2` and `PUT /v1/recipes/{id}` raise 422 with
+        `{"errors": [...], "warnings": [...]}` from `validate_document`, and
+        that list names the exact field group and the exact reason a document
+        was refused. The studio rendered the repr and the author had to read a
+        Python literal to find out that, say, a `dom_rows` repeat was missing
+        its `rows_locator`. Saving looked broken rather than refused.
+
+        So a mapping detail travels as `details`, with `error` carrying the
+        summary a human reads first. Everything else keeps the old behaviour.
+        """
+
         code = ErrorCode.NOT_FOUND if exc.status_code == 404 else ErrorCode.BAD_REQUEST
-        return _error_response(exc.status_code, code, str(exc.detail))
+        detail = exc.detail
+        if isinstance(detail, Mapping):
+            return _error_response(
+                exc.status_code, code, _summarize_detail(detail), details=detail
+            )
+        return _error_response(exc.status_code, code, str(detail))
 
     @handles(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

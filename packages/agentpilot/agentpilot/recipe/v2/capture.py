@@ -35,6 +35,7 @@ is scoped to it.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from typing import Any
@@ -65,6 +66,22 @@ REVEALING_OPS: frozenset[StepOp] = frozenset({
     "click", "double_click", "hover", "press", "send_keys", "select_option",
     "check", "uncheck", "scroll", "scroll_into_view", "tap", "swipe", "drag",
     "find_text", "new_tab", "switch_tab", "close_tab",
+})
+
+# The subset of `REVEALING_OPS` that can UNDO itself when run twice.
+#
+# A group's route is the whole way from a cold page, so replaying two groups on
+# one page load replays the same accordion click twice -- and a second click on
+# a toggle shuts what the first opened. That is the entire reason
+# `guard_reveals` exists, and it is a property of toggles, not of reveals.
+#
+# A scroll is idempotent. So is `scroll_into_view`, `hover`, `find_text`, and
+# switching to a tab that is already focused. Guarding those buys nothing and
+# costs the whole field when the guard misreads -- a skipped step is silent
+# (`run_steps` skips rather than fails), so it surfaces only as a field that
+# came back empty.
+TOGGLING_OPS: frozenset[StepOp] = frozenset({
+    "click", "double_click", "tap", "check", "uncheck", "select_option",
 })
 
 # How long a reveal gets to appear before the group reads without it. Mirrors
@@ -241,6 +258,22 @@ def wait_step_for(
     reveal. `on_error: continue` and `optional` because a reveal that does not
     render is a field that comes back empty, not a run that fails.
 
+    **The state is chosen from what the field actually reads**, and asking for
+    the wrong one cost five seconds a group, every run. `attribute: "text"` is
+    `textContent`, which includes content that is in the DOM and merely
+    unpainted -- a collapsed accordion. `docs/recipe-contract-v2.md` §2 says
+    what happens when such a field is made to wait for `visible`:
+
+        A `wait_for_selector` with `state: "visible"` on a collapsed section
+        will time out even though the data is right there. That is not a bug;
+        it is the two meanings of "present" diverging.
+
+    Because this step is `optional` with `on_error: continue`, that timeout
+    never failed anything -- it silently burned `REVEAL_TIMEOUT_MS` and taught
+    nobody. So only a field that genuinely reads what a user can see
+    (`visible_text`) waits for `visible`; everything else waits for `attached`,
+    which is the condition a `textContent` read actually needs.
+
     Mirrors `waitStepFor` in `fromPick.ts`.
     """
 
@@ -250,11 +283,26 @@ def wait_step_for(
     return Step(
         op="wait_for_selector",
         target=Locator(kind="css", selector=selector),
-        args={"state": "visible"},
+        args={"state": wait_state_for(candidates)},
         timeout_ms=REVEAL_TIMEOUT_MS,
         on_error="continue",
         optional=True,
         label="wait for the reveal to render",
+    )
+
+
+def wait_state_for(candidates: list[Candidate]) -> str:
+    """`visible` only when a candidate reads what a user can actually see.
+
+    Separate from `wait_step_for` so the rule is testable on its own and so
+    `fromPick.ts` has one named thing to mirror rather than an inline
+    conditional. See `wait_step_for` for why the default flipped.
+    """
+
+    return (
+        "visible"
+        if any(c.locator.attribute == "visible_text" for c in candidates)
+        else "attached"
     )
 
 
@@ -308,6 +356,17 @@ DISMISS_LABEL_PREFIX = "close the dialog"
 _CLEANUP_NAMES = ("close", "dismiss", "cerrar", "×", "✕")
 
 
+# Attribute values that mark a control as a dismissal on a CSS target, where
+# there is no accessible name to read. Ported from the recorder's `DISMISS_ATTR`
+# so the two halves agree on what a close button looks like.
+_CLEANUP_ATTR_RE = re.compile(
+    r"\[\s*(?:data-dismiss|data-bs-dismiss|data-close)\b"
+    r"|\[\s*(?:aria-label|title|data-testid|data-qa|id|class)\s*[~|^$*]?=\s*"
+    r"[\"']?[^\"'\]]*\b(?:close|dismiss|reject|decline)\b",
+    re.IGNORECASE,
+)
+
+
 def is_cleanup(step: Step) -> bool:
     """Whether this step's job is to put something away rather than reveal it."""
 
@@ -318,15 +377,21 @@ def is_cleanup(step: Step) -> bool:
     if step.op != "click" or step.target is None:
         return False
     name = (step.target.name_contains or "").strip().casefold()
-    if not name:
-        return False
-    # Whole-name only. "Close" is cleanup; "Close fit" is a product attribute,
-    # and a substring test would drop the click that reveals it.
-    return name in _CLEANUP_NAMES
+    if name:
+        # Whole-name only. "Close" is cleanup; "Close fit" is a product
+        # attribute, and a substring test would drop the click that reveals it.
+        return name in _CLEANUP_NAMES
+    # No accessible name means a CSS target, and those used to be invisible
+    # here: the function returned False for every one of them. That is backwards
+    # -- `dismiss_step_for` builds its steps from `PageReader.overlay()`, which
+    # yields CSS, so the dismissals this exists to catch were exactly the ones it
+    # could not see.
+    selector = step.target.selector or ""
+    return bool(selector) and bool(_CLEANUP_ATTR_RE.search(selector))
 
 
 def guard_reveals(steps: list[Step], revealed: str | None) -> list[Step]:
-    """The same route, with each reveal refusing to fire on an open section.
+    """The same route, with each TOGGLE refusing to fire on an open section.
 
     What makes a group's route safe to replay when the page is no longer fresh.
     A group's steps are the whole way from a cold page, so running two groups on
@@ -334,25 +399,94 @@ def guard_reveals(steps: list[Step], revealed: str | None) -> list[Step]:
     on a toggle closes what the first opened. Reloading between groups is how
     that used to be avoided, at O(groups) page loads.
 
-    The guard is the selector the reveal was meant to make visible, which
-    `document_scoped_selector` already computes for `wait_step_for`. `hidden`
-    rather than `selector_absent`: a collapsed panel's content is in the DOM and
-    merely unpainted, so only the paint test can tell open from shut.
+    **The guard is the control's own declared state where it has one, and
+    nothing at all where it does not.** Both halves of that are corrections.
 
-    Nothing is guarded when the group has no css locator to watch -- a guard
-    that cannot be evaluated reads as false (`PageReader.holds`), which would
-    skip the reveal entirely and cost the field.
+    It used to guard on `hidden(<the field's read selector>)`. Those are
+    different elements: the read selector points at the CONTENT, and the thing
+    being clicked is the CONTROL. Whenever the content's element is already
+    painted while the section is shut -- an accordion header, a wrapper div, a
+    selector broad enough to include the collapsed region -- `hidden` is false,
+    the guard fails, and the click is **skipped**. The section never opens and
+    every field in the group reads an unrevealed page. `run_steps` skips rather
+    than fails, so the only symptom is an empty field.
+
+    `aria-expanded="false"` is what "still shut" actually means, and it is the
+    page's own answer rather than an inference from paint. When the control does
+    not declare one, no guard is emitted: getting the reveal to run matters more
+    than avoiding a double-toggle, because a double-toggle costs one group's
+    fields once while a skipped reveal costs them on every run, and `teardown`
+    already exists to put the page back.
+
+    Only `TOGGLING_OPS` are guarded. A scroll cannot undo itself, and guarding
+    one was pure risk.
     """
 
-    if not revealed:
-        return steps
-    guard = Predicate(kind="hidden", selector=revealed)
-    return [
-        replace(step, when=[*step.when, guard])
-        if step.op in REVEALING_OPS and not step.when
-        else step
-        for step in steps
-    ]
+    return [_guarded(step, revealed) for step in steps]
+
+
+def _guarded(step: Step, revealed: str | None) -> Step:
+    """A toggle guarded on its own state, or not guarded at all.
+
+    **There is deliberately no fallback to the content selector.** That fallback
+    is what this function used to do unconditionally, and it is worse than no
+    guard, because `revealed` is `document_scoped_selector` over the group's
+    WHOLE binding set -- whichever field happens to iterate first, which is
+    rarely the field the reveal was for.
+
+    MEASURED on the Zara shirt page. The group bound ten fields, and the first
+    css candidate belonged to `images`, so all three reveal clicks were guarded
+    on `hidden("button.product-detail-image img")`. Product images are visible,
+    so `hidden` was false, and the replay's step trace reads:
+
+        0 click  skipped  guard hidden not satisfied
+        1 click  skipped  guard hidden not satisfied
+        2 click  skipped  guard hidden not satisfied
+
+    The drawer never opened and `care` and `origin` failed with no provenance at
+    all. A guard that cannot be tied to the thing being revealed does not
+    protect the reveal; it deletes it.
+    """
+
+    del revealed  # see the docstring: never guard on another field's selector
+    if step.op not in TOGGLING_OPS or step.when:
+        return step
+    guard = _toggle_guard(step)
+    return replace(step, when=[guard]) if guard is not None else step
+
+
+def _toggle_guard(step: Step) -> Predicate | None:
+    """`still shut`, as the control itself declares it.
+
+    Only for a css target: the predicate is evaluated with `querySelector`
+    (`PageReader._holds`), so an `ax_role` target has nothing to hand it. The
+    selector is narrowed with `[aria-expanded="false"]` rather than replaced, so
+    it still identifies the same control.
+    """
+
+    target = step.target
+    if target is None or target.kind != "css" or not target.selector:
+        return None
+    if "aria-expanded" in target.selector:
+        return None
+    return Predicate(
+        kind="selector_present",
+        selector=f'{target.selector}[aria-expanded="false"]',
+    )
+
+
+def content_guard(revealed: str | None) -> Predicate | None:
+    """`still shut`, measured on the content rather than on the control.
+
+    Not used by `guard_reveals` -- see `_guarded` for the measurement that
+    removed it from that path. Kept because it is the right guard when the
+    caller knows the selector belongs to the field this reveal is *for*, which
+    `guard_reveals` does not: `hidden` rather than `selector_absent`, because a
+    collapsed panel's content is in the DOM and merely unpainted, so only the
+    paint test can tell open from shut.
+    """
+
+    return Predicate(kind="hidden", selector=revealed) if revealed else None
 
 
 def split_cleanup(steps: list[Step]) -> tuple[list[Step], list[Step]]:
@@ -379,12 +513,40 @@ def split_cleanup(steps: list[Step]) -> tuple[list[Step], list[Step]]:
     This used to discard the trailing half, which left every recipe knowing how
     to open a section and not how to close it -- and closing it is the whole of
     what lets the next group share the page rather than reload it.
+
+    **Waits do not anchor the split**, and that is what made the route quoted
+    above split wrongly. It ends with a `wait_for_selector`, so the scan stopped
+    on the very first step it looked at and *nothing* moved to teardown: the two
+    closes stayed in `steps`, and the group opened the drawer, shut it twice and
+    then read. It verified anyway -- the panel's text stays in the DOM once
+    rendered and the reader walks `textContent` -- so the docstring above could
+    describe this as fixed while the case it cites still failed.
+
+    A wait is neither setup nor cleanup; it belongs to whatever it follows. So
+    trailing waits are walked over while looking for the boundary, and any wait
+    that ends up in the teardown half is dropped -- waiting for a panel to
+    appear is not part of closing it.
     """
 
     end = len(steps)
-    while end > 0 and is_cleanup(steps[end - 1]):
+    while end > 0 and (is_cleanup(steps[end - 1]) or _is_wait(steps[end - 1])):
         end -= 1
-    return steps[:end], steps[end:]
+    # Everything from `end` on is the trailing cleanup, minus the waits that
+    # were only walked over to reach it.
+    teardown = [s for s in steps[end:] if not _is_wait(s)]
+    if not teardown:
+        # Nothing to put away, so the waits were ordinary route steps and the
+        # scan should not have moved past them.
+        return list(steps), []
+    # A wait that sat *before* the first cleanup step is still part of setup.
+    keep = end
+    while keep < len(steps) and _is_wait(steps[keep]):
+        keep += 1
+    return steps[:keep], [s for s in steps[keep:] if not _is_wait(s)]
+
+
+def _is_wait(step: Step) -> bool:
+    return step.op in ("wait", "wait_for_selector", "wait_for_text", "wait_for_load")
 
 
 def generalize_option_locator(

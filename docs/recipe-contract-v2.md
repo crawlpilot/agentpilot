@@ -675,6 +675,41 @@ breakage.
 `truncated` marks a table field that hit `max_iterations` or `max_repeats`, or a group that failed
 its `expect.min_rows`. A run that captured 8 of 40 sizes must never report `ok`.
 
+**A table field's provenance has a different shape, because a table has no candidate chain** — it
+has a rows locator and one binding per column, so `candidate`/`candidates` are constants and the
+useful information is elsewhere:
+
+```
+provenance[table_field]
+  rows:         int                  # rows that yielded at least one value
+  rows_matched: int | absent         # rows the locator matched, BEFORE max_iterations
+  repeat_kind:  "json" | "dom_rows" | "dom"
+  locator:      Locator              # the rows locator
+  note:         str | absent         # why there was nothing to count, when knowable
+  columns: {name: {locator, filled: int, of: int, first_failure?: CandidateAttempt}}
+```
+
+`rows_matched` and the per-column `filled of of` exist because **an empty table is two completely
+different failures wearing one face.** Either the rows locator matched nothing, or it matched rows
+whose columns read nothing inside them — a column selector that is not relative to its row, the
+misalignment `rows.py` exists to prevent. The two need opposite fixes, and `rows: 0` alone cannot
+tell them apart.
+
+> **MEASURED (Amazon).** A specification table bound to `th, td:first-child` and `td:last-child`
+> reported "nothing collected" on both columns, and the run record could not say whether the rows
+> had been found. `rows_matched: 0` blames the rows locator; `rows_matched: 22` with
+> `filled: 0, of: 22` blames the columns.
+
+`first_failure` is the first failing row's `CandidateAttempt`, and only the first — every
+subsequent row fails the same way on a page whose column selector is wrong, and the tally already
+says how many. Its `outcome` is the part that says which fix is needed: `empty` means the selector
+stopped matching, while `cleaned_to_nothing` means it still matches and the transform is the
+problem.
+
+`rows_matched` is **absent** rather than `0` when nothing got far enough to count — a `dom_rows`
+repeat whose locator kind cannot address DOM elements at all, say. Zero would read as "the selector
+ran and matched nothing", which is a different diagnosis; `note` carries the real one.
+
 ```
 StepOutcome
   index: int; op: str; label: str | None
@@ -742,6 +777,19 @@ ExecutionDefaults
   max_repeat_iterations: int = 20
   lua_timeout_ms:       int = 250
 ```
+
+**`verified_on` is the number of sample pages on which that candidate produced the value** — not
+the number on which the field resolved. `resolve_field` stops at the first non-empty transformed
+value, so on a page where candidate 0 wins, candidates 1 and 2 are never evaluated at all. Counting
+"pages the field resolved at or before this candidate" would score a chain of three whose primary
+always wins as `3, 3, 3`, making the never-executed positional fallback read as the best-verified
+selector in the recipe — inflating exactly the brittle tail §6 and `selector_quality` exist to
+demote.
+
+So a healthy fallback reads `0`, correctly: nothing has reached it. The consequence is that "nobody
+has ever seen this work" is a question about a field's **whole chain**, which is how both
+`validate.py` and `lint.ts` ask it. It is written by `recipe/v2/merge.py` from the sample replays
+`review.py` already performs, so it costs no extra page loads and no model calls.
 
 **`sample_urls` is required and must contain at least one entry, and should contain three.** A
 recipe induced from a single page is an overfit guess; requiring the plural is the single

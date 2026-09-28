@@ -111,3 +111,84 @@ def test_reconstruction_survives_a_custom_init() -> None:
     error = error_from_wire("STALE_REF", "ref 'e12' is not available")
     assert isinstance(error, spi_errors.StaleRefError)
     assert str(error) == "ref 'e12' is not available"
+
+
+# --- a structured HTTPException detail stays structured ---------------------
+#
+# `_save` in `gateway/routes/recipes.py` is the one route whose error IS a list:
+# it raises 422 with `{"errors": [...], "warnings": [...]}` from
+# `validate_document`, and that list names the exact field group and reason a
+# recipe document was refused. The handler ran `str(exc.detail)` over it, so the
+# `error` field carried a Python dict repr and `details` carried nothing. In the
+# studio that made a refused save look like a broken save.
+
+
+def test_a_mapping_detail_is_summarised_and_carried_whole() -> None:
+    from agentpilot.gateway.errors import _summarize_detail
+
+    detail = {
+        "errors": ["field_groups[1].repeat: a dom_rows repeat needs a rows_locator"],
+        "warnings": ["fields.brand: declared but not collected by any group"],
+    }
+    assert _summarize_detail(detail) == (
+        "field_groups[1].repeat: a dom_rows repeat needs a rows_locator"
+    )
+
+
+def test_a_long_error_list_is_truncated_with_a_count() -> None:
+    """A toast has to stay readable; the whole list still travels in `details`."""
+
+    from agentpilot.gateway.errors import _summarize_detail
+
+    summary = _summarize_detail({"errors": ["a", "b", "c", "d", "e"]})
+    assert summary == "a; b; c (and 2 more)"
+
+
+def test_a_mapping_with_no_errors_key_never_yields_a_dict_repr() -> None:
+    from agentpilot.gateway.errors import _summarize_detail
+
+    assert _summarize_detail({"message": "not allowed here"}) == "not allowed here"
+    # The last resort names the keys rather than printing the mapping. A repr is
+    # the one output this function exists to make impossible.
+    fallback = _summarize_detail({"shape": {"nested": 1}, "count": 2})
+    assert "{" not in fallback and "'" not in fallback
+    assert "count" in fallback and "shape" in fallback
+
+
+@pytest.mark.asyncio
+async def test_the_handler_puts_the_list_in_details() -> None:
+    """End to end through the registered handler, because the bug was not in the
+    summary -- it was in `details` never being passed at all."""
+
+    import json
+
+    from fastapi import FastAPI, HTTPException
+
+    from agentpilot.gateway.errors import register_exception_handlers
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise HTTPException(status_code=422, detail={"errors": ["x is wrong"], "warnings": []})
+
+    @app.get("/plain")
+    async def plain() -> None:
+        raise HTTPException(status_code=404, detail="no such recipe")
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        res = client.get("/boom")
+        assert res.status_code == 422
+        body = json.loads(res.content)
+        assert body["error"] == "x is wrong", "not a dict repr"
+        assert body["details"] == {"errors": ["x is wrong"], "warnings": []}
+
+        # A string detail is unchanged -- every other route in the app.
+        res = client.get("/plain")
+        assert res.status_code == 404
+        body = json.loads(res.content)
+        assert body["error"] == "no such recipe"
+        assert body["code"] == "NOT_FOUND"

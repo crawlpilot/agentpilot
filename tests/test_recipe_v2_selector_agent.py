@@ -1822,3 +1822,165 @@ def test_content_behind_a_caption_is_not_mistaken_for_one(field: str, value: str
     """
 
     assert tautological_read(Locator(kind="css", selector=".panel"), value, field) is None
+
+
+# --- the reveal loop: binding what is behind a closed drawer -----------------
+#
+# MEASURED (Zara, limited-edition-printed-combined-shirt-p08005861). `care` and
+# `origin` live behind the "COMPOSITION, CARE & ORIGIN" drawer. The build made
+# 29 attempts on `care` and 22 on `origin`; 23 and 18 of those were rejected
+# "read nothing" -- the drawer was shut -- and the rest were rejected for
+# matching the opener, with the advice "you matched the control or heading that
+# leads to the content, not the content. Open it". Nothing could act on that
+# advice, so both fields were dropped, and with them the reveal step. The frozen
+# recipe had one group, no steps, and no binding for `care` at all.
+# `composition` bound from the same drawer only because it is also in JSON-LD.
+
+
+CARE = FieldSpec(name="care", type=TypeSpec(value_type="string"))
+OPENER = Locator(kind="css", selector=".product-detail-actions__action-button")
+CONTENT = Locator(kind="css", selector=".product-detail-care__list")
+
+
+def closed_drawer_page(opened: dict[str, bool]):
+    """Zara's drawer: the content reads nothing until the opener is clicked, and
+    the opener always reads the section's own caption."""
+
+    async def _verify(loc: Locator) -> Any:
+        if loc.selector == OPENER.selector:
+            return "Composition, care & origin"
+        if loc.selector == CONTENT.selector:
+            return "Machine wash at max 30C" if opened["yes"] else None
+        return None
+
+    return _verify
+
+
+@pytest.mark.asyncio
+async def test_the_caption_guard_hands_back_the_opener_it_refused() -> None:
+    """The refusal already knows which element opens the content. It used to
+    only say so in prose, to a model that could not click."""
+
+    openers: list[Locator] = []
+    survivors, reason = await verify_locators(
+        [OPENER], verify=closed_drawer_page({"yes": False}), spec=CARE, openers=openers,
+    )
+    assert survivors == []
+    assert "caption NAMING" in reason
+    assert [o.selector for o in openers] == [OPENER.selector]
+
+
+@pytest.mark.asyncio
+async def test_a_content_selector_that_reads_nothing_is_not_an_opener() -> None:
+    """Only the caption guard identifies an opener. An empty read is the
+    ordinary "not on this page" and says nothing about what would reveal it."""
+
+    openers: list[Locator] = []
+    await verify_locators(
+        [CONTENT], verify=closed_drawer_page({"yes": False}), spec=CARE, openers=openers,
+    )
+    assert openers == []
+
+
+@pytest.mark.asyncio
+async def test_opening_the_drawer_binds_the_field_and_reports_the_opener() -> None:
+    from agentpilot.recipe.v2.selector_agent import _reveal_and_retry
+
+    opened = {"yes": False}
+
+    async def _reveal(loc: Locator) -> bool:
+        assert loc.selector == OPENER.selector, "only the opener is ever clicked"
+        opened["yes"] = True
+        return True
+
+    got = await _reveal_and_retry(
+        "care", CARE, [OPENER, CONTENT], [OPENER],
+        verify=closed_drawer_page(opened), reveal=_reveal,
+        ctx=TransformContext(url="https://www.zara.com/x"), trace=None, probe=None,
+    )
+    assert got is not None
+    resolving, opener = got
+    assert [r.locator.selector for r in resolving] == [CONTENT.selector]
+    assert opener.selector == OPENER.selector
+
+
+@pytest.mark.asyncio
+async def test_the_opener_never_becomes_a_candidate() -> None:
+    """It reads the drawer's own label. Binding `care` to the name of the drawer
+    it lives in is a well-typed, plausible, permanently wrong value."""
+
+    from agentpilot.recipe.v2.selector_agent import _reveal_and_retry
+
+    opened = {"yes": False}
+
+    async def _reveal(loc: Locator) -> bool:
+        opened["yes"] = True
+        return True
+
+    got = await _reveal_and_retry(
+        "care", CARE, [OPENER, CONTENT], [OPENER],
+        verify=closed_drawer_page(opened), reveal=_reveal,
+        ctx=TransformContext(url=""), trace=None, probe=None,
+    )
+    assert got is not None
+    assert OPENER.selector not in [r.locator.selector for r in got[0]]
+
+
+@pytest.mark.asyncio
+async def test_a_reveal_that_does_not_land_is_not_an_error() -> None:
+    """A stale ref, an overlay in the way, a control that is not clickable. All
+    of them mean "this did not help", and the field goes back for the retry it
+    would have had anyway."""
+
+    from agentpilot.recipe.v2.selector_agent import _reveal_and_retry
+
+    async def _no(loc: Locator) -> bool:
+        return False
+
+    got = await _reveal_and_retry(
+        "care", CARE, [OPENER, CONTENT], [OPENER],
+        verify=closed_drawer_page({"yes": False}), reveal=_no,
+        ctx=TransformContext(url=""), trace=None, probe=None,
+    )
+    assert got is None
+
+
+@pytest.mark.asyncio
+async def test_a_reveal_that_raises_is_not_an_error() -> None:
+    from agentpilot.recipe.v2.selector_agent import _reveal_and_retry
+
+    async def _boom(loc: Locator) -> bool:
+        raise RuntimeError("ref e17 is stale")
+
+    got = await _reveal_and_retry(
+        "care", CARE, [OPENER, CONTENT], [OPENER],
+        verify=closed_drawer_page({"yes": False}), reveal=_boom,
+        ctx=TransformContext(url=""), trace=None, probe=None,
+    )
+    assert got is None
+
+
+@pytest.mark.asyncio
+async def test_openers_are_tried_in_order_until_one_works() -> None:
+    """More than one usually means the model named a button and its wrapper."""
+
+    from agentpilot.recipe.v2.selector_agent import _reveal_and_retry
+
+    wrapper = Locator(kind="css", selector=".product-detail-actions__clevercare")
+    opened = {"yes": False}
+    clicked: list[str] = []
+
+    async def _reveal(loc: Locator) -> bool:
+        clicked.append(loc.selector or "")
+        if loc.selector == wrapper.selector:
+            return False
+        opened["yes"] = True
+        return True
+
+    got = await _reveal_and_retry(
+        "care", CARE, [wrapper, OPENER, CONTENT], [wrapper, OPENER],
+        verify=closed_drawer_page(opened), reveal=_reveal,
+        ctx=TransformContext(url=""), trace=None, probe=None,
+    )
+    assert got is not None
+    assert clicked == [wrapper.selector, OPENER.selector]

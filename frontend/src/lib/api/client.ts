@@ -16,6 +16,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The validation reasons behind a 422, or an empty list when the error is not one.
+ *
+ * The server puts them in `details.errors` -- `validate_document`'s output, one
+ * string per structural problem, naming the field group and the reason. They are
+ * also summarised into `message`, but truncated there: a document with six
+ * problems shows three and "(and 3 more)". An authoring surface wants all of
+ * them at once, because fixing one at a time through a save round trip each is a
+ * miserable way to author anything.
+ */
+export function validationErrors(err: unknown): string[] {
+  if (!(err instanceof ApiError)) return []
+  const details = err.details
+  if (!details || typeof details !== 'object') return []
+  const errors = (details as { errors?: unknown }).errors
+  if (!Array.isArray(errors)) return []
+  return errors.filter((e): e is string => typeof e === 'string')
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'DELETE' | 'PUT'
   body?: unknown
