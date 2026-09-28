@@ -73,6 +73,14 @@ These used to be `fail_run`s, indistinguishable from a genuine build failure in
 every dashboard -- three Walgreens onboards died inside 0.1s of being claimed and
 looked exactly like recipes that could not be built."""
 
+runs_timed_out_total = Counter(
+    "agentpilot_runs_timed_out_total",
+    "Recipe runs stopped for exceeding their wall-clock deadline",
+)
+"""Distinct from an ordinary failure, because the cause is different in kind: a
+run that timed out did not fail a check, it stopped answering. Any sustained
+count here is a hang to go and find, not a recipe to go and fix."""
+
 node_slots_live = Gauge(
     "agentpilot_node_slots_live",
     "Browsers this node is currently counted as holding",

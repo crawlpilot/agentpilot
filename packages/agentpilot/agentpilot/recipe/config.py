@@ -60,6 +60,32 @@ class RecipeConfig:
     tracked whether anyone was still on the other end.
     """
 
+    replay_deadline_s: float
+    """The longest a single replay may run before it is given up on.
+
+    A replay is one page load and a walk over the frozen groups; it has no model
+    calls and no park. Ten minutes is far past any honest one, so this only ever
+    fires on a run that has stopped moving.
+
+    MEASURED, and the reason this exists. A Walgreens replay crashed its renderer
+    ten seconds in and then sat `running` for as long as anyone watched -- no
+    error, no step trace, `progress` still NULL. `page.content()` had no timeout,
+    `execute_on_session` had none, and `replay.py` contained no `wait_for` at
+    all, so the await simply never returned.
+
+    The page read is bounded now too (`_page_read` in the driver), and that fixes
+    the known case. This is the backstop for the unknown one: any await on a page
+    that never returns, whatever its shape."""
+
+    build_deadline_s: float
+    """The same for a build, heal or codegen run.
+
+    Much larger because these are genuinely long -- fifteen agent steps, dozens
+    of model calls, plus a park of up to `assist_timeout_s` waiting for a person.
+    An Amazon onboard measured at seven minutes of real work. An hour is not a
+    target, it is the point past which a run is certainly wedged rather than
+    slow."""
+
     trace_prompts: bool
     """Whether to also persist what the model was SHOWN, not just what it
     proposed and why each proposal was rejected.
@@ -93,6 +119,12 @@ class RecipeConfig:
             ),
             assist_unattended_s=float(
                 os.environ.get("AGENTPILOT_RECIPE_ASSIST_UNATTENDED_S", "180")
+            ),
+            replay_deadline_s=float(
+                os.environ.get("AGENTPILOT_RECIPE_REPLAY_DEADLINE_S", "600")
+            ),
+            build_deadline_s=float(
+                os.environ.get("AGENTPILOT_RECIPE_BUILD_DEADLINE_S", "3600")
             ),
             trace_prompts=os.environ.get(
                 "AGENTPILOT_RECIPE_TRACE_PROMPTS", "0"

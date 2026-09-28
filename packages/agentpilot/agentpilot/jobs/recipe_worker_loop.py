@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -29,7 +30,7 @@ import structlog
 
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore
 from agentpilot.llm.client import LLMConfig
-from agentpilot.observability.metrics import runs_deferred_total
+from agentpilot.observability.metrics import runs_deferred_total, runs_timed_out_total
 from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.v2.onboard import DEFAULT_ONBOARD_MAX_STEPS
 from crawlpilot.config import DEFAULTS, BrowserConfig
@@ -130,6 +131,12 @@ class RecipeWorkerLoop:
         # run_id -> (live_session_id, session, tier), so `_heartbeat` can keep
         # the redis route alive for runs that outlive its TTL. See `_heartbeat`.
         self._live_routes: dict[str, tuple[str, Any, str]] = {}
+        self._deadlines: dict[str, float] = {}
+        """run_id -> monotonic instant past which this run is presumed wedged.
+
+        Shared with `_heartbeat` so the two halves of the same policy cannot
+        drift: the deadline stops the run, and the heartbeat stops *vouching*
+        for it. Either alone leaves a hole -- see `_heartbeat`."""
         # How often a parked run checks whether a person has answered. The
         # answer is written by the gateway, not passed in memory, so this is a
         # database poll -- cheap, and a few seconds of latency is nothing next
@@ -216,9 +223,32 @@ class RecipeWorkerLoop:
         # Keep this run's lease fresh for its whole (potentially long) duration
         # so `reclaim_stale_runs` can't hand it to a second worker -- a build is
         # up to 15 agent steps, well past `stale_after`.
+        # The deadline is shared with the heartbeat rather than held here, so
+        # the two cannot disagree about when this run stopped being healthy.
+        cfg = RecipeConfig.from_env()
+        budget = cfg.replay_deadline_s if run.kind == "replay" else cfg.build_deadline_s
+        deadline = time.monotonic() + budget
+        self._deadlines[run.run_id] = deadline
+
         heartbeat = asyncio.create_task(self._heartbeat(run))
         try:
-            await self._process_run(run)
+            # A wall clock over the whole run, because a hung await has no other
+            # end. MEASURED: a Walgreens replay crashed its renderer ten seconds
+            # in and sat `running` indefinitely -- no error, no step trace -- with
+            # no timeout anywhere between `page.content()` and here.
+            await asyncio.wait_for(self._process_run(run), timeout=budget)
+        except TimeoutError:
+            log.warning(
+                "recipe_worker_loop.run_deadline_exceeded",
+                run_id=run.run_id, kind=run.kind, budget_s=budget,
+            )
+            runs_timed_out_total.inc()
+            await self._store.fail_run(
+                run.run_id,
+                run.lock,
+                f"run exceeded its {budget:.0f}s deadline and was stopped; the "
+                "page or a model call stopped responding",
+            )
         except NodeAtCapacity as exc:
             # Nothing is wrong with this run: the node was full at the instant it
             # was claimed, and the usual reason is a neighbouring build that is
@@ -240,6 +270,7 @@ class RecipeWorkerLoop:
             log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
             await self._store.fail_run(run.run_id, run.lock, str(exc))
         finally:
+            self._deadlines.pop(run.run_id, None)
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
@@ -268,6 +299,30 @@ class RecipeWorkerLoop:
         interval = max(self._stale_after_seconds / 3.0, 1.0)
         while True:
             await asyncio.sleep(interval)
+            deadline = self._deadlines.get(run.run_id)
+            if deadline is not None and time.monotonic() > deadline:
+                # Past its budget, so stop renewing -- and keep not renewing.
+                #
+                # This is the half that makes the deadline reliable. `wait_for`
+                # cancels the run, but cancellation lands on an `await` that has
+                # to be reachable, and the failure this exists for is precisely
+                # an await that never returns. If the cancel wedges too, the
+                # heartbeat is the only thing left, and while it keeps renewing
+                # `locked_at` the run is invisible to `reclaim_stale_runs`:
+                #
+                #   WHERE status = 'running' AND locked_at < now() - stale_after
+                #
+                # A heartbeat that renews unconditionally proves the WORKER is
+                # alive, which it is, and says nothing about the RUN, which is
+                # not. Measured on a Walgreens replay: eight minutes `running`,
+                # heartbeat renewing every 40s, so the reclaim it needed could
+                # never fire and nothing would ever have freed it.
+                log.warning(
+                    "recipe_worker_loop.heartbeat_withdrawn",
+                    run_id=run.run_id,
+                    reason="run is past its deadline; letting the lock go stale",
+                )
+                return
             try:
                 await self._store.renew_lock(run.run_id, run.lock)
             except Exception:
