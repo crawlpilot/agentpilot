@@ -73,10 +73,19 @@ export function RecipeDetailPage() {
         <Badge variant={healthVariant(recipe.health_status)} className="capitalize">
           {recipe.health_status}
         </Badge>
+        {/* The wizard, not the studio.
+            This used to point straight at `/studio`, which is the surface the
+            wizard's own docstring calls the one "behind" it -- so the single
+            action on this page skipped the front door and landed you in three
+            panes and seven tabs. It also landed you there empty: both editors
+            share a draft key, and the studio reads that draft, so a recipe
+            opened through the wizard is populated and the same recipe opened
+            directly is not. The working path was the one nobody was sent down.
+            "Advanced editor" in the wizard header still reaches the studio. */}
         <Button size="sm" variant="outline" className="ml-auto" asChild>
-          <Link to={`/recipes/${recipe.recipe_id}/studio`}>
+          <Link to={`/recipes/${recipe.recipe_id}/wizard`}>
             <PencilRuler className="size-3.5" />
-            Open in studio
+            Edit recipe
           </Link>
         </Button>
       </div>
