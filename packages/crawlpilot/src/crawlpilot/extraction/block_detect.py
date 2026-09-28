@@ -67,6 +67,36 @@ _AKAMAI_MARKERS = (
     "reference #",
 )
 
+# --- Akamai Bot Manager's sensor-challenge stub.
+#
+# Not a wall: a page that is *about to become* the real one. Captured verbatim
+# from cos.com (2026-09-28) as the first document of a navigation, in two
+# variants -- 1146 bytes, and 2733 bytes with a hidden behavioural challenge:
+#
+#     <div id="sec-if-cpt-container" role="main" style="display: none">
+#     ...
+#     var chlgeId = '';
+#     ... if (pointer.responseURL.indexOf('t=' + chlgeId) > -1) location.reload(true);
+#
+# It proxies `XMLHttpRequest.send`, waits for the sensor POST carrying its
+# challenge id, and reloads into the product page once Akamai accepts it. The
+# 2733-byte variant has an `<a>` (Akamai's privacy link) and is over
+# `_TOO_SMALL_LEN`, so before this it classified **OK** -- a read that raced the
+# reload returned the stub as the scraped content. `warmup.settle_akamai_challenge`
+# waits it out; a page still showing it afterwards did not pass.
+_AKAMAI_CHALLENGE_MARKERS = (
+    "sec-if-cpt",
+    "chlgeid",
+)
+
+
+def is_akamai_challenge(html: str | None) -> bool:
+    """Whether `html` is Akamai's in-flight sensor-challenge stub (see above)."""
+
+    body = (html or "").lower()
+    return any(m in body for m in _AKAMAI_CHALLENGE_MARKERS)
+
+
 # --- Cloudflare / hCaptcha / Turnstile / generic interstitials.
 _CHALLENGE_MARKERS = (
     "just a moment",
@@ -81,9 +111,10 @@ _CHALLENGE_MARKERS = (
     "challenges.cloudflare.com",
 )
 
-# --- DataDome. Nothing in this module detected it before, which is why COS
-# and H&M -- both DataDome-class -- classified as OK or TOO_SMALL and their
-# interstitials were returned to callers as if they were content.
+# --- DataDome. Nothing in this module detected it before, which is why H&M's
+# interstitials were returned to callers as if they were content. (COS was
+# listed here too, but COS is Akamai -- `AkamaiGHost`, `_abck`, the `/akam/`
+# pixel on every trace -- and its stub is `_AKAMAI_CHALLENGE_MARKERS` above.)
 _DATADOME_MARKERS = (
     "geo.captcha-delivery.com",
     "interstitial.captcha",
@@ -343,6 +374,11 @@ def classify_page(
     # Akamai / Cloudflare walls -- often 200, so check the body regardless.
     if any(m in body for m in _AKAMAI_MARKERS):
         return Verdict.FORBIDDEN
+    if is_akamai_challenge(body):
+        # Still on the sensor stub at read time: the warm-up already waited for
+        # it to reload (`warmup.settle_akamai_challenge`), so this one did not
+        # pass. A challenge, not a hard deny -- the lightest robot-check weight.
+        return Verdict.ROBOT_CHECK
     if any(m in body for m in _CHALLENGE_MARKERS):
         return Verdict.ROBOT_CHECK
     if any(m in body for m in _DATADOME_MARKERS):

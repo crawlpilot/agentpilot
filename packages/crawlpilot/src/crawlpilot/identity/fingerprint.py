@@ -214,29 +214,53 @@ def _ua_version(full_version: str) -> str:
     return f"{full_version.split('.', 1)[0]}.0.0.0"
 
 
-# Sec-CH-UA GREASE brand. The greasy `"Not_A Brand";v="24"` pair is stable for
-# this Chromium era; the real major rides on the Chromium / Google Chrome
-# brands. WAFs check the version, not the brand order, so a fixed order is safe.
-_GREASE_BRAND = "Not_A Brand"
-_GREASE_VERSION = "24"
+# Sec-CH-UA GREASE brand -- computed, not hardcoded.
+#
+# This used to be a fixed `"Not_A Brand";v="24"`, on the assumption that "WAFs
+# check the version, not the brand order". Both halves were wrong. Chrome derives
+# the GREASE brand, its version *and* the brand order from the major version
+# (`GetGreasedUserAgentBrandVersion` in Chromium's user_agent_utils.cc), so the
+# fixed value was right for no current release and disagreed with the real
+# `navigator.userAgentData` on every one. MEASURED, byte for byte, against the
+# live browsers:
+#
+#   151 -> "Not=A?Brand";v="99", "Google Chrome";v="151", "Chromium";v="151"
+#   153 -> "Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"
+_GREASEY_CHARS = (" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_")
+_GREASED_VERSIONS = ("8", "99", "24")
+_BRAND_ORDERS = ((0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0))
+
+
+def _grease(major: str) -> tuple[str, str, tuple[int, int, int]]:
+    """(brand, version, order) for Chrome `major`, seeded exactly as Chromium seeds it."""
+
+    seed = int(major)
+    brand = (
+        f"Not{_GREASEY_CHARS[seed % len(_GREASEY_CHARS)]}A"
+        f"{_GREASEY_CHARS[(seed + 1) % len(_GREASEY_CHARS)]}Brand"
+    )
+    return brand, _GREASED_VERSIONS[seed % len(_GREASED_VERSIONS)], _BRAND_ORDERS[seed % 6]
+
+
+def _ordered(major: str, grease_version: str, chromium: str, chrome: str) -> list[dict[str, str]]:
+    brand, _, order = _grease(major)
+    slots: list[dict[str, str]] = [{}, {}, {}]
+    slots[order[0]] = {"brand": brand, "version": grease_version}
+    slots[order[1]] = {"brand": "Chromium", "version": chromium}
+    slots[order[2]] = {"brand": "Google Chrome", "version": chrome}
+    return slots
 
 
 def _brands(major: str) -> list[dict[str, str]]:
     """Low-entropy brand list shared by Sec-CH-UA and userAgentData.brands."""
-    return [
-        {"brand": _GREASE_BRAND, "version": _GREASE_VERSION},
-        {"brand": "Chromium", "version": major},
-        {"brand": "Google Chrome", "version": major},
-    ]
+    _, version, _ = _grease(major)
+    return _ordered(major, version, major, major)
 
 
 def _full_version_list(full: str, major: str) -> list[dict[str, str]]:
-    """High-entropy fullVersionList: same brands, but full dotted versions."""
-    return [
-        {"brand": _GREASE_BRAND, "version": f"{_GREASE_VERSION}.0.0.0"},
-        {"brand": "Chromium", "version": full},
-        {"brand": "Google Chrome", "version": full},
-    ]
+    """High-entropy fullVersionList: same brands and order, full dotted versions."""
+    _, version, _ = _grease(major)
+    return _ordered(major, f"{version}.0.0.0", full, full)
 
 
 def _seed_int(canvas_seed: str) -> int:
@@ -296,7 +320,10 @@ _MAC_APPLE_UK = _DevicePreset(
         "(KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
     ),
     screen=ScreenParameters(2560, 1600, 2560, 1495, color_depth=30, device_pixel_ratio=2.0),
-    hardware=HardwareParameters(8, 16, platform="MacIntel", vendor="Apple Computer, Inc."),
+    # `vendor` stays the default `Google Inc.`: that is what Chrome reports on
+    # every OS. "Apple Computer, Inc." is Safari's value, and claiming it from a
+    # Chrome UA was a contradiction SannySoft and CreepJS both printed.
+    hardware=HardwareParameters(8, 16, platform="MacIntel"),
     webgl=WebGLParameters(
         vendor="Google Inc. (Apple)",
         renderer="ANGLE (Apple, Apple M1, OpenGL 4.1)",
@@ -335,6 +362,19 @@ _PRESETS_BY_REGION: dict[str, _DevicePreset] = {
     "UK": _MAC_APPLE_UK,
     "IN": _LINUX_NVIDIA_IN,
 }
+
+
+def geo_for_region(region: str | None) -> GeoTimeParameters | None:
+    """The timezone/locale block for an egress country, or `None` if unknown.
+
+    Deliberately independent of the device preset: the geo must follow where the
+    traffic exits, never which device an identity happens to hash to.
+    """
+
+    if not region:
+        return None
+    preset = _PRESETS_BY_REGION.get(region.upper())
+    return preset.geo if preset else None
 
 
 def generate(

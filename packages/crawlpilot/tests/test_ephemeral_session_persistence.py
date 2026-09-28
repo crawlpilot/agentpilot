@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from crawlpilot.config import BrowserConfig, FingerprintConfig
 from crawlpilot.session.ephemeral import run_ephemeral_scrape
 from crawlpilot.session.registry import Registry
 from crawlpilot.spi.actions import Action, ActionResult
@@ -118,6 +119,13 @@ class _FakeDriver:
         # Validate-on-acquire pings the acquired context; a freshly opened one
         # in these tests is always live.
         return True
+
+
+SPOOFED = BrowserConfig(fingerprint=FingerprintConfig(mode="spoofed"))
+"""The per-identity device-preset path, which is opt-in since truthful became the
+default. Tests about ladder mechanics that tell rungs apart by `headful` pin it:
+in truthful mode every protected rung asks for a window, so the rungs no longer
+differ there."""
 
 
 async def _scrape(driver: _FakeDriver, profiles_root: Path, **kwargs: object) -> None:
@@ -246,12 +254,15 @@ async def test_auto_tier_starts_on_the_protected_rung(tmp_path: Path) -> None:
     # first attempt, so a default scrape is robust out of the box.
     assert o["warmup"] is True
     assert o["detect_blocks"] is True
-    assert isinstance(o["user_agent"], str)
+    # Truthful by default: the real browser reports itself, in a real window.
+    assert o["user_agent"] is None
+    assert o["init_script"] is None
+    assert o["headful"] is True
 
 
 async def test_protected_tier_pins_fingerprint_and_enables_stealth(tmp_path: Path) -> None:
     driver = _FakeDriver()
-    await _scrape(driver, tmp_path, session_name="s", tier="stealth")
+    await _scrape(driver, tmp_path, session_name="s", tier="stealth", browser_config=SPOOFED)
     o = driver.opens[0]
     assert o["warmup"] is True
     assert o["detect_blocks"] is True
@@ -340,6 +351,7 @@ async def test_auto_escalates_on_challenge_to_a_fresh_identity(tmp_path: Path) -
         proxy_pinner=None,
         lease_ttl_seconds=300.0,
         tier="auto",  # ladder: stealth -> enhanced
+        browser_config=SPOOFED,
     )
     assert driver.execs == 2  # first blocked, escalated, second passed
     assert len(driver.opens) == 2
@@ -469,6 +481,7 @@ async def test_soft_verdict_does_not_escalate_the_tier(tmp_path: Path) -> None:
         tier="auto",  # ladder stealth -> enhanced
         crawl_retry_max=1,
         retry_delay_base_s=0.0,
+        browser_config=SPOOFED,
     )
     # CRAWL soft retries stay on the stealth rung; the enhanced (headful) rung is
     # never reached, and the served tier is reported truthfully as stealth.
@@ -558,8 +571,46 @@ async def test_protected_tier_requests_residential_and_aligns_geo(tmp_path: Path
     assert pinner.tiers_requested and all(t == "residential" for t in pinner.tiers_requested)
     # ...the served page was counted toward the proxy's retirement cap...
     assert pinner.successes == [proxy]
-    # ...and the proxy's country (IN) seeded the fingerprint's geo, so the
-    # browser's timezone/locale match the egress.
+    # ...and the proxy's country (IN) set the timezone, so the browser's clock
+    # matches the egress. Language is left to the browser in truthful mode:
+    # Playwright's `locale=` would send a bare `Accept-Language: en-IN`.
     o = driver.opens[0]
     assert o["timezone_id"] == "Asia/Kolkata"
-    assert o["locale"] == "en-IN"
+    assert o["locale"] is None
+
+
+async def test_truthful_protected_rungs_all_ask_for_a_window(tmp_path: Path) -> None:
+    """With no UA override left, a headless protected rung would send
+    `HeadlessChrome` -- an edge-level 403 at Akamai (measured on cos.com). So in
+    truthful mode every protected rung asks for a window, not just `enhanced`."""
+
+    driver = _BlockThenPassDriver()
+    await run_ephemeral_scrape(
+        scope="acme",
+        domain="example.com",
+        url="https://example.com/",
+        options=ScrapeOptions(formats=("markdown",)),
+        registry=Registry(),
+        driver=driver,  # type: ignore[arg-type]
+        profiles_root=tmp_path,
+        proxy_pinner=None,
+        lease_ttl_seconds=300.0,
+        tier="auto",
+    )
+    assert [o["headful"] for o in driver.opens] == [True, True]
+
+
+async def test_no_proxy_takes_the_timezone_from_the_egress_lookup(tmp_path: Path) -> None:
+    """The coin-toss this replaces: with no proxy, the preset -- and so the
+    timezone -- was picked by hashing the identity slug. MEASURED: CreepJS showed
+    `Europe/London` on a Jio IP in Karnataka."""
+
+    from crawlpilot.config import EgressConfig
+    from crawlpilot.egress import geo
+
+    geo.reset_cache()
+    driver = _FakeDriver()
+    config = BrowserConfig(egress=EgressConfig(country="IN", timezone="Asia/Kolkata"))
+    for slot in ("s0", "s1", "s2", "s3", "s4", "s5"):
+        await _scrape(driver, tmp_path, session_name=slot, tier="stealth", browser_config=config)
+    assert {o["timezone_id"] for o in driver.opens} == {"Asia/Kolkata"}

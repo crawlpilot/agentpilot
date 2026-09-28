@@ -966,6 +966,18 @@ class PatchrightDriver:
                 channel=launch.channel,
                 executable=launch.executable_path,
             )
+            if not effective_headful and user_agent is None:
+                # Headless with no caller-chosen UA: strip `HeadlessChrome` and
+                # nothing else. See `browser_discovery.headful_user_agent`.
+                headless_ua = browser_discovery.headful_user_agent(launch.executable_path)
+                if headless_ua is not None:
+                    launch_args.append(f"--user-agent={headless_ua}")
+                else:
+                    log.warning(
+                        "driver.headless_ua_unresolved",
+                        channel=launch.channel,
+                        executable=launch.executable_path,
+                    )
             context = await playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=not effective_headful,

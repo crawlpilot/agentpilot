@@ -75,7 +75,11 @@ class _Loop(RecipeWorkerLoop):
         self.started.append(run.run_id)
         await self.release.wait()
 
-    async def _heartbeat(self, run: ClaimedRecipeRun) -> None:
+    async def _heartbeat(self, run: ClaimedRecipeRun, deadline: float | None = None) -> None:
+        # Mirrors the real signature, which now takes the run's wall-clock
+        # deadline so the heartbeat can stop vouching for a wedged run. This
+        # override exists only to keep the heartbeat out of the way while these
+        # tests measure concurrency, so it ignores it.
         await asyncio.sleep(3600)
 
 

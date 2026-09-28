@@ -3,6 +3,8 @@ per-identity fingerprints. Pure, no browser."""
 
 from __future__ import annotations
 
+import pytest
+
 from crawlpilot.identity import fingerprint as fp
 
 
@@ -111,3 +113,40 @@ def test_init_script_pins_window_screen() -> None:
     assert str(f.screen.width) in script
     assert str(f.screen.avail_height) in script
     assert "devicePixelRatio" in script
+
+
+# --- Sec-CH-UA GREASE, computed the way Chromium computes it ------------------
+#
+# Captured byte for byte from the live browsers on 2026-09-28. The old hardcoded
+# `"Not_A Brand";v="24"` matched neither, so the pinned header contradicted the
+# real `navigator.userAgentData` it claimed to align with.
+
+
+@pytest.mark.parametrize(
+    ("major", "header"),
+    [
+        ("151", '"Not=A?Brand";v="99", "Google Chrome";v="151", "Chromium";v="151"'),
+        ("153", '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"'),
+    ],
+)
+def test_sec_ch_ua_matches_the_real_browser(major: str, header: str) -> None:
+    from crawlpilot.identity.fingerprint import _sec_ch_ua
+
+    assert _sec_ch_ua(major) == header
+
+
+def test_full_version_list_keeps_the_same_brands_and_order() -> None:
+    from crawlpilot.identity.fingerprint import _brands, _full_version_list
+
+    low = [b["brand"] for b in _brands("153")]
+    high = [b["brand"] for b in _full_version_list("153.0.8010.49", "153")]
+    assert low == high
+
+
+def test_chrome_never_claims_safaris_vendor() -> None:
+    """`Apple Computer, Inc.` is Safari's `navigator.vendor`; Chrome reports
+    `Google Inc.` on every OS, macOS included."""
+
+    from crawlpilot.identity.fingerprint import _PRESETS
+
+    assert {p.hardware.vendor for p in _PRESETS} == {"Google Inc."}

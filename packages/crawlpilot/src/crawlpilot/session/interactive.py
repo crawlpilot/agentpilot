@@ -30,6 +30,7 @@ import structlog
 
 from crawlpilot import metrics
 from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.egress import geo as egress_geo
 from crawlpilot.identity.profile_store import (
     delete_profile_dir,
     resolve_profile_dir,
@@ -167,12 +168,16 @@ async def open_interactive_session(
             # (`StealthProfile.wait_abck`), and this flag means reaction only.
             detect_blocks=detect_blocks,
             config=browser_config,
+            egress_geo=None if proxy else await egress_geo.resolve(browser_config.egress),
         )
         ctx = await driver.open(
             identity,
             profile_dir,
             proxy,
-            headful,
+            # A truthful protected tier needs a real window -- see
+            # `StealthProfile.wants_headful`. The driver still degrades to
+            # headless where no display exists, and says so in the log.
+            headful or stealth.wants_headful,
             egress if egress is not None else EgressPolicy(),
             block_popups,
             enable_cdp,

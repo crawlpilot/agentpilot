@@ -10,17 +10,20 @@ from __future__ import annotations
 
 import pytest
 
+from crawlpilot.config import BrowserConfig, FingerprintConfig
+from crawlpilot.egress.geo import EgressGeo
 from crawlpilot.session import stealth_profile
 from crawlpilot.spi.identity import IdentityRef, ProfileKind
 from crawlpilot.spi.proxy import ProxyEndpoint
 from crawlpilot.tiers import TierPolicy
 
 IDENTITY = IdentityRef(key="acme/zara.com/s1", kind=ProfileKind.DEFAULT)
+SPOOFED = BrowserConfig(fingerprint=FingerprintConfig(mode="spoofed"))
 
 
 @pytest.mark.parametrize("tier", ["stealth", "enhanced", "auto"])
-def test_protected_tiers_get_the_full_stealth_kwargs(tier: str) -> None:
-    profile = stealth_profile.resolve(IDENTITY, tier)
+def test_protected_tiers_get_the_full_stealth_kwargs_when_spoofed(tier: str) -> None:
+    profile = stealth_profile.resolve(IDENTITY, tier, config=SPOOFED)
 
     assert profile.warmup is True
     assert profile.detect_blocks is True
@@ -77,10 +80,10 @@ def test_explicit_locale_and_timezone_win_over_the_fingerprints() -> None:
 
 
 def test_fingerprint_is_pinned_per_identity() -> None:
-    a = stealth_profile.resolve(IDENTITY, "stealth")
-    b = stealth_profile.resolve(IDENTITY, "stealth")
+    a = stealth_profile.resolve(IDENTITY, "stealth", config=SPOOFED)
+    b = stealth_profile.resolve(IDENTITY, "stealth", config=SPOOFED)
     other = stealth_profile.resolve(
-        IdentityRef(key="acme/zara.com/s2"), "stealth"
+        IdentityRef(key="acme/zara.com/s2"), "stealth", config=SPOOFED
     )
 
     assert a == b
@@ -96,10 +99,13 @@ def test_proxy_country_seeds_the_geo() -> None:
 
     proxy = ProxyEndpoint(scheme="http", host="gw", port=8000, country="IN")
 
-    profile = stealth_profile.resolve(IDENTITY, "stealth", proxy=proxy)
+    truthful = stealth_profile.resolve(IDENTITY, "stealth", proxy=proxy)
+    spoofed = stealth_profile.resolve(IDENTITY, "stealth", proxy=proxy, config=SPOOFED)
 
-    assert profile.timezone_id == "Asia/Kolkata"
-    assert profile.locale == "en-IN"
+    assert truthful.timezone_id == spoofed.timezone_id == "Asia/Kolkata"
+    # Truthful leaves language to the browser; the preset pins its own.
+    assert truthful.locale is None
+    assert spoofed.locale == "en-IN"
 
 
 def test_as_open_kwargs_matches_the_driver_open_signature() -> None:
@@ -157,6 +163,12 @@ def test_block_detection_is_opt_out_for_long_lived_sessions() -> None:
     # Everything that helps *avoid* a block is unchanged.
     assert off.warmup is True
     assert (off.user_agent, off.init_script) == (on.user_agent, on.init_script)
+    spoofed_off = stealth_profile.resolve(
+        IDENTITY, "stealth", detect_blocks=False, config=SPOOFED
+    )
+    assert spoofed_off.init_script == stealth_profile.resolve(
+        IDENTITY, "stealth", config=SPOOFED
+    ).init_script
 
 
 def test_the_akamai_handshake_is_not_gated_on_block_detection() -> None:
@@ -289,3 +301,87 @@ def test_no_flag_that_marks_the_browser_as_driven() -> None:
     assert not (set(args) & harmful)
     # And still never our own `--disable-blink-features`, which Patchright owns.
     assert not any(a.startswith("--disable-blink-features") for a in args)
+
+
+# --- truthful mode (the default) ---------------------------------------------
+#
+# MEASURED on cos.com (Akamai), same residential IP, same Chrome 153: plain
+# Chrome reached the product page; adding any component of the spoofed profile
+# -- init script alone, UA + client hints alone, UA + locale + timezone alone --
+# got Access Denied within 3-6s. CreepJS: `stealth 0%` plain, `40%` spoofed.
+
+
+@pytest.mark.parametrize("tier", ["stealth", "enhanced", "auto"])
+def test_truthful_protected_tiers_add_no_lie(tier: str) -> None:
+    profile = stealth_profile.resolve(IDENTITY, tier)
+
+    assert profile.user_agent is None
+    assert profile.init_script is None
+    assert profile.extra_http_headers is None
+    assert profile.extra_launch_args is None
+    # ...while keeping the avoidance that cannot be cross-checked into a lie.
+    assert profile.warmup is True
+    assert profile.wait_abck is True
+    assert profile.wants_headful is True
+
+
+def test_the_default_is_truthful() -> None:
+    assert FingerprintConfig().mode == "truthful"
+
+
+def test_an_unknown_mode_is_refused(monkeypatch) -> None:
+    monkeypatch.setenv("CRAWLPILOT_FINGERPRINT_MODE", "stealthy")
+    with pytest.raises(ValueError, match="FINGERPRINT_MODE"):
+        FingerprintConfig.from_env()
+
+
+def test_wants_headful_never_reaches_driver_open() -> None:
+    """`headful` is positional on `open()` and owned by the caller; splatting it
+    as a kwarg too would be a TypeError at runtime."""
+
+    assert "wants_headful" not in stealth_profile.resolve(IDENTITY, "stealth").as_open_kwargs()
+
+
+def test_unprotected_tiers_never_ask_for_a_window() -> None:
+    assert stealth_profile.resolve(IDENTITY, "basic").wants_headful is False
+
+
+# --- geo follows the exit, never the identity's hash bucket ------------------
+
+
+INDIA = EgressGeo(country="IN", timezone="Asia/Kolkata")
+
+
+@pytest.mark.parametrize("config", [BrowserConfig(), SPOOFED], ids=["truthful", "spoofed"])
+def test_no_proxy_uses_the_egress_timezone_for_every_identity(config: BrowserConfig) -> None:
+    """Before this, an identity was New York, London or Kolkata by coin-toss.
+    MEASURED: CreepJS reported `Europe/London (-60)` on a Jio IP in Karnataka.
+    Many slugs, because the bug only showed on two of three hash buckets."""
+
+    zones = {
+        stealth_profile.resolve(
+            IdentityRef(key=f"acme/cos.com/s{i}"), "stealth", egress_geo=INDIA, config=config
+        ).timezone_id
+        for i in range(24)
+    }
+    assert zones == {"Asia/Kolkata"}
+
+
+def test_a_proxy_country_wins_over_the_workers_own_egress() -> None:
+    proxy = ProxyEndpoint(scheme="http", host="gw", port=8000, country="US")
+    profile = stealth_profile.resolve(IDENTITY, "stealth", proxy=proxy, egress_geo=INDIA)
+    assert profile.timezone_id == "America/New_York"
+
+
+def test_an_unknown_egress_leaves_the_browsers_clock_alone() -> None:
+    """Truthful with nothing known: no override, i.e. the host's own clock --
+    not a guess."""
+
+    assert stealth_profile.resolve(IDENTITY, "stealth").timezone_id is None
+
+
+def test_an_explicit_timezone_still_wins() -> None:
+    profile = stealth_profile.resolve(
+        IDENTITY, "stealth", egress_geo=INDIA, timezone_id="Europe/Paris"
+    )
+    assert profile.timezone_id == "Europe/Paris"

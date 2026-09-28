@@ -30,6 +30,7 @@ from urllib.parse import urlsplit
 import structlog
 
 from crawlpilot.config import DEFAULTS, BrowserConfig
+from crawlpilot.egress import geo as egress_geo
 from crawlpilot.extensions.mounts import BlockHooks, Resolution
 from crawlpilot.identity.burn_tracker import BurnTracker
 from crawlpilot.identity.fingerprint import generate as generate_fingerprint
@@ -327,11 +328,16 @@ async def run_ephemeral_scrape(
             locale=locale,
             timezone_id=timezone_id,
             config=browser_config,
+            # Where this worker exits when there is no proxy, so the timezone
+            # agrees with the IP the site sees. Cached per process.
+            egress_geo=None if proxy else await egress_geo.resolve(browser_config.egress),
         )
         # `enhanced` is the top rung: request headful (the driver runs it under
         # Xvfb on the worker, or degrades to headless where no display exists),
-        # since headless is itself a detection vector on hardened targets.
-        headful = attempt_tier == "enhanced"
+        # since headless is itself a detection vector on hardened targets. A
+        # truthful protected tier asks for the same, because it has no UA
+        # override left to hide `HeadlessChrome` behind.
+        headful = attempt_tier == "enhanced" or stealth.wants_headful
         return await driver.open(
             identity,
             profile_dir,
@@ -409,7 +415,17 @@ async def run_ephemeral_scrape(
                 if warm
                 else proxy_pinner.pick_ephemeral(identity, tier=None)
             )
-        fp = generate_fingerprint(identity.slug(), region=proxy.country if proxy else None)
+        geo = None if proxy else await egress_geo.resolve(browser_config.egress)
+        fp = generate_fingerprint(
+            identity.slug(),
+            region=(proxy.country if proxy else None) or (geo.country if geo else None),
+            # Claim the Chrome this worker actually ships, like the browser path
+            # does. Omitting it fell back to `DEFAULT_CHROME_VERSION` -- 131, over
+            # twenty majors stale -- on every `basic` request.
+            chrome_version=browser_config.fingerprint.resolved_chrome_version(
+                stealth_profile.browser_executable(browser_config)
+            ),
+        )
         # The full Chrome navigation header set, in Chrome's order. This path
         # used to send five headers and nothing else -- no Accept, no
         # Sec-Fetch-*, no Upgrade-Insecure-Requests, no Referer -- which is a

@@ -306,3 +306,59 @@ def test_headers_are_optional() -> None:
         )
         is Verdict.OK
     )
+
+
+# --- Akamai's sensor-challenge stub ------------------------------------------
+#
+# Trimmed from the first document of a cos.com navigation (2026-09-28, 2733
+# bytes). It reloads into the product page once the sensor POST is accepted, so
+# a read that races the reload gets this. It carries an `<a>` and is over the
+# 500-byte floor, which is why it used to classify OK -- the stub was returned
+# to callers as the scraped page.
+_AKAMAI_STUB = """<!DOCTYPE html>
+<html>
+<body><script type="text/javascript" src="/nb7-Nt/FBN2pw/x?v=10768401&amp;t=351402956"></script>
+<div id="sec-if-cpt-container" role="main" style="display: none">
+    <div class="behavioral-content">
+        <div id="sec-bc-text-container"></div>
+        <div class="scf-akamai-logo-sec-abc">
+            <p class ="scf-akamai-protected-by">Powered and protected by</p>
+            <div class="akamai-privacy" >
+              <a href="https://www.akamai.com/privacy" target="_blank">Privacy</a></div>
+        </div>
+    </div>
+</div>
+<script>
+    (function () {
+        var chlgeId = '';
+        var context = 't';
+        var proxied = window.XMLHttpRequest.prototype.send;
+        window.XMLHttpRequest.prototype.send = function() {
+            var pointer = this
+            var intervalId = window.setInterval(function() {
+                if (pointer.readyState === 4 && pointer.responseURL.indexOf('t=' + chlgeId) > -1) {
+                    if (context === 't') { location.reload(true); }
+                    clearInterval(intervalId);
+                }
+            }, 1);
+            return proxied.apply(this, [].slice.call(arguments));
+        };
+    })();
+</script>
+</body>
+</html>"""
+
+
+def test_the_akamai_sensor_stub_is_recognised() -> None:
+    assert block_detect.is_akamai_challenge(_AKAMAI_STUB)
+    assert not block_detect.is_akamai_challenge("<html><body><a href=/>Coat</a></body></html>")
+
+
+def test_a_stub_still_showing_at_read_time_is_not_ok() -> None:
+    """The regression: over the size floor, has an anchor, no deny wording --
+    so every generic rule passed it as content."""
+
+    verdict = block_detect.classify_page(
+        html=_AKAMAI_STUB, url="https://www.cos.com/en-us/x", status=200
+    )
+    assert verdict is block_detect.Verdict.ROBOT_CHECK

@@ -131,12 +131,6 @@ class RecipeWorkerLoop:
         # run_id -> (live_session_id, session, tier), so `_heartbeat` can keep
         # the redis route alive for runs that outlive its TTL. See `_heartbeat`.
         self._live_routes: dict[str, tuple[str, Any, str]] = {}
-        self._deadlines: dict[str, float] = {}
-        """run_id -> monotonic instant past which this run is presumed wedged.
-
-        Shared with `_heartbeat` so the two halves of the same policy cannot
-        drift: the deadline stops the run, and the heartbeat stops *vouching*
-        for it. Either alone leaves a hole -- see `_heartbeat`."""
         # How often a parked run checks whether a person has answered. The
         # answer is written by the gateway, not passed in memory, so this is a
         # database poll -- cheap, and a few seconds of latency is nothing next
@@ -228,9 +222,16 @@ class RecipeWorkerLoop:
         cfg = RecipeConfig.from_env()
         budget = cfg.replay_deadline_s if run.kind == "replay" else cfg.build_deadline_s
         deadline = time.monotonic() + budget
-        self._deadlines[run.run_id] = deadline
 
-        heartbeat = asyncio.create_task(self._heartbeat(run))
+        # Handed to the heartbeat rather than parked on `self`, so the two
+        # halves of one policy cannot drift and neither can leak: the deadline
+        # belongs to this run, and an instance dict would have to be cleaned up
+        # on every exit path and mirrored by every subclass that builds its own
+        # state. `tests/test_recipe_worker_capacity.py` has exactly such a
+        # subclass, and an attribute it did not know to set turned a passing
+        # test into `AttributeError` swallowed inside a task -- reported only as
+        # "the run never started".
+        heartbeat = asyncio.create_task(self._heartbeat(run, deadline))
         try:
             # A wall clock over the whole run, because a hung await has no other
             # end. MEASURED: a Walgreens replay crashed its renderer ten seconds
@@ -270,12 +271,11 @@ class RecipeWorkerLoop:
             log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
             await self._store.fail_run(run.run_id, run.lock, str(exc))
         finally:
-            self._deadlines.pop(run.run_id, None)
             heartbeat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await heartbeat
 
-    async def _heartbeat(self, run: ClaimedRecipeRun) -> None:
+    async def _heartbeat(self, run: ClaimedRecipeRun, deadline: float | None = None) -> None:
         """Keep this run's claim lock *and* its live-view route fresh.
 
         The two used to be one line, and the missing half broke the assist
@@ -299,7 +299,6 @@ class RecipeWorkerLoop:
         interval = max(self._stale_after_seconds / 3.0, 1.0)
         while True:
             await asyncio.sleep(interval)
-            deadline = self._deadlines.get(run.run_id)
             if deadline is not None and time.monotonic() > deadline:
                 # Past its budget, so stop renewing -- and keep not renewing.
                 #

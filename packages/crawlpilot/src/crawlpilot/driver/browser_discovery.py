@@ -173,6 +173,42 @@ def browser_version(executable_path: str | None = None) -> str | None:
     return found.group(1) if found else None
 
 
+_UA_PLATFORM = {
+    "Darwin": "Macintosh; Intel Mac OS X 10_15_7",
+    "Linux": "X11; Linux x86_64",
+    "Windows": "Windows NT 10.0; Win64; x64",
+}
+"""The frozen platform token a reduced desktop Chrome UA carries per OS. Frozen
+by Chrome's UA reduction -- an Apple Silicon Mac still says `Intel Mac OS X
+10_15_7`, which is exactly what makes it safe to hardcode."""
+
+
+def headful_user_agent(executable_path: str | None) -> str | None:
+    """The UA this browser would send with a window, for a launch that has none.
+
+    Headless Chrome sends `HeadlessChrome/<major>` where a windowed one sends
+    `Chrome/<major>`, and nothing else in the reduced UA differs. That token alone
+    is an edge-level 403 at Akamai (measured on cos.com). So when a launch ends up
+    headless, the driver sets this with `--user-agent` -- a launch switch, not the
+    Playwright `user_agent=` kwarg, because the kwarg synthesises client-hint
+    metadata and Workers then report empty `userAgentData` brands (measured, via
+    CreepJS's WorkerGlobalScope card). The switch changes the UA string only.
+
+    `None` when the major version or the OS cannot be determined; the caller then
+    leaves the browser's own UA alone rather than guessing a version.
+    """
+
+    version = browser_version(executable_path)
+    token = _UA_PLATFORM.get(platform.system())
+    if version is None or token is None:
+        return None
+    major = version.split(".", 1)[0]
+    return (
+        f"Mozilla/5.0 ({token}) AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{major}.0.0.0 Safari/537.36"
+    )
+
+
 def resolve_browser(
     *,
     executable_path: str | Path | None = None,

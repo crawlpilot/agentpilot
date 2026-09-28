@@ -27,6 +27,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 DEFAULT_CHROME_VERSION = "131.0.6778.86"
@@ -68,6 +69,12 @@ def _env(suffix: str, default: str = "") -> str:
     return default.strip()
 
 
+FingerprintMode = Literal["truthful", "spoofed"]
+"""How a protected tier presents the browser -- see `FingerprintConfig.mode`."""
+
+_FINGERPRINT_MODES: tuple[FingerprintMode, ...] = ("truthful", "spoofed")
+
+
 @dataclass(frozen=True)
 class FingerprintConfig:
     chrome_version: str = DEFAULT_CHROME_VERSION
@@ -82,12 +89,34 @@ class FingerprintConfig:
     the constant cannot be trusted to be current.
     """
 
+    mode: FingerprintMode = "truthful"
+    """`truthful`: a protected tier lets the real browser report itself -- no
+    UA override, no client-hint headers, no init-script patches, no extra
+    launch flags. `spoofed`: the per-identity device preset from
+    `identity.fingerprint` is applied on top.
+
+    Truthful is the default because it is the one that passes. MEASURED against
+    cos.com (Akamai Bot Manager), same residential IP, same Chrome 153:
+
+        plain Chrome                      -> _abck ~0~, product page
+        + spoofed profile (any component) -> Access Denied within 3-6s
+
+    and CreepJS scored the spoofed browser `stealth: 40%` against `0%` plain,
+    because the page-world patches disagree with what a Worker reports (GPU,
+    cores, userAgentData). A lie a sensor can cross-check is worse than no lie.
+    """
+
     @classmethod
     def from_env(cls) -> FingerprintConfig:
         raw = _env("CHROME_VERSION", "")
+        mode = _env("FINGERPRINT_MODE", "truthful").lower()
+        if mode not in _FINGERPRINT_MODES:
+            raise ValueError(
+                f"CRAWLPILOT_FINGERPRINT_MODE={mode!r}: expected one of {_FINGERPRINT_MODES}"
+            )
         if raw:
-            return cls(chrome_version=raw, pinned=True)
-        return cls(chrome_version=DEFAULT_CHROME_VERSION, pinned=False)
+            return cls(chrome_version=raw, pinned=True, mode=mode)
+        return cls(chrome_version=DEFAULT_CHROME_VERSION, pinned=False, mode=mode)
 
     def resolved_chrome_version(self, executable_path: str | None) -> str:
         """The version to claim in the UA and Client Hints.
@@ -134,15 +163,33 @@ class EgressConfig:
     *lives* there (Ollama via `host.docker.internal` sits in 192.168/16), so
     without this exemption the baseline severs the control plane too."""
 
+    geo_lookup_url: str | None = None
+    """Where to ask for this worker's own egress country/timezone when a session
+    has no proxy (see `egress.geo`). `None` -- the default, and what `DEFAULTS`
+    carries -- makes no network call; a composition root opts in via
+    `CRAWLPILOT_EGRESS_GEO_URL`, which defaults to ipinfo's keyless endpoint
+    (`off` disables it)."""
+
+    country: str | None = None
+    """Static egress country (ISO-3166 alpha-2). Wins over the lookup -- for a
+    worker whose egress is known and fixed, or one that must not call out."""
+
+    timezone: str | None = None
+    """Static egress IANA timezone. Wins over the lookup, like `country`."""
+
     @classmethod
     def from_env(cls) -> EgressConfig:
         # `ANTHROPIC_BASE_URL` is the fallback the Bedrock provider resolves its
         # endpoint from, so honour it too rather than silently losing the
         # exemption when only that one is set.
         base = _env("LLM_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL")
-        if not base:
-            return cls()
-        return cls(llm_endpoint_host=urlparse(base).hostname)
+        geo_url = _env("EGRESS_GEO_URL", "https://ipinfo.io/json")
+        return cls(
+            llm_endpoint_host=urlparse(base).hostname if base else None,
+            geo_lookup_url=None if geo_url.lower() == "off" else geo_url,
+            country=_env("EGRESS_COUNTRY") or None,
+            timezone=_env("EGRESS_TIMEZONE") or None,
+        )
 
 
 @dataclass(frozen=True)

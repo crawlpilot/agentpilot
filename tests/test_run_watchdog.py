@@ -129,15 +129,14 @@ class _Store:
         return True
 
 
-def _loop_with(deadline: float) -> tuple[object, _Store]:
+def _loop() -> tuple[object, _Store]:
     from agentpilot.jobs.recipe_worker_loop import RecipeWorkerLoop
 
     store = _Store()
     loop = RecipeWorkerLoop.__new__(RecipeWorkerLoop)
-    loop._store = store  # type: ignore[attr-defined]
-    loop._stale_after_seconds = 3.0  # type: ignore[attr-defined]
-    loop._live_routes = {}  # type: ignore[attr-defined]
-    loop._deadlines = {"run-1": deadline}  # type: ignore[attr-defined]
+    loop._store = store  # type: ignore[assignment]
+    loop._stale_after_seconds = 3.0
+    loop._live_routes = {}
     return loop, store
 
 
@@ -159,11 +158,12 @@ async def test_the_heartbeat_withdraws_once_the_run_is_past_its_deadline() -> No
     nothing about the RUN, which is not.
     """
 
-    loop, store = _loop_with(time.monotonic() - 1.0)
+    loop, store = _loop()
 
     # Returns rather than looping: the withdrawal is permanent, because a run
     # past its budget does not come back under it.
-    await asyncio.wait_for(loop._heartbeat(_run()), timeout=5.0)  # type: ignore[attr-defined]
+    past = time.monotonic() - 1.0
+    await asyncio.wait_for(loop._heartbeat(_run(), past), timeout=5.0)  # type: ignore[attr-defined]
 
     assert store.renewals == [], "a run past its deadline must not be vouched for"
 
@@ -173,9 +173,10 @@ async def test_the_heartbeat_keeps_renewing_a_run_inside_its_budget() -> None:
     spends minutes in model calls with no page activity at all, and the heartbeat
     is the only thing keeping its claim alive."""
 
-    loop, store = _loop_with(time.monotonic() + 300.0)
+    loop, store = _loop()
 
-    task = asyncio.create_task(loop._heartbeat(_run()))  # type: ignore[attr-defined]
+    ahead = time.monotonic() + 300.0
+    task = asyncio.create_task(loop._heartbeat(_run(), ahead))  # type: ignore[attr-defined]
     await asyncio.sleep(1.2)
     task.cancel()
 
@@ -183,13 +184,13 @@ async def test_the_heartbeat_keeps_renewing_a_run_inside_its_budget() -> None:
 
 
 async def test_a_run_with_no_deadline_recorded_is_still_renewed() -> None:
-    """`_deadlines` is populated by `_process`, so any path that reaches the
-    heartbeat without it -- a test, a future caller -- must fall back to the old
+    """The deadline is passed by `_process`, so any path that reaches the
+    heartbeat without one -- a test, a future caller -- must fall back to the old
     unconditional behaviour rather than silently letting a live run go stale."""
 
-    loop, store = _loop_with(time.monotonic() + 300.0)
-    loop._deadlines = {}  # type: ignore[attr-defined]
+    loop, store = _loop()
 
+    # No deadline passed at all -- the old unconditional behaviour.
     task = asyncio.create_task(loop._heartbeat(_run()))  # type: ignore[attr-defined]
     await asyncio.sleep(1.2)
     task.cancel()

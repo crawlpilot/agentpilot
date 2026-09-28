@@ -88,3 +88,42 @@ async def test_warm_up_never_raises_on_page_errors() -> None:
     page = _BrokenPage()
     # Must swallow and still return a bool, never propagate.
     assert await warmup.warm_up(page, humanize.STEALTH, wait_abck=False) is True
+
+
+# --- waiting out Akamai's sensor stub ----------------------------------------
+
+
+class _ReloadingPage:
+    """Serves the Akamai stub for `stub_reads` reads, then the real page."""
+
+    def __init__(self, stub_reads: int) -> None:
+        self._left = stub_reads
+        self.url = "https://www.cos.com/en-us/x"
+        self.load_waits = 0
+
+    async def content(self) -> str:
+        if self._left > 0:
+            self._left -= 1
+            return "<div id='sec-if-cpt-container'></div><script>var chlgeId='';</script>"
+        return "<html><body><h1>Tailored coat</h1><a href='/'>home</a></body></html>"
+
+    async def wait_for_load_state(self, state: str, timeout: int | None = None) -> None:
+        self.load_waits += 1
+
+
+async def test_settle_waits_until_the_stub_reloads_into_the_page() -> None:
+    page = _ReloadingPage(stub_reads=3)
+    assert await warmup.settle_akamai_challenge(page, timeout_s=5.0) is True  # type: ignore[arg-type]
+    assert page.load_waits == 1
+
+
+async def test_settle_gives_up_on_a_stub_that_never_reloads() -> None:
+    page = _ReloadingPage(stub_reads=10**9)
+    assert await warmup.settle_akamai_challenge(page, timeout_s=0.01) is False  # type: ignore[arg-type]
+
+
+async def test_the_abck_wait_outlasts_a_measured_pass() -> None:
+    """Passing cos.com runs validated at 6.0-8.6s and one reached the page at
+    25s. The old 8s cap was shorter than a pass."""
+
+    assert warmup._ABCK_POLL_MAX_S >= 25.0

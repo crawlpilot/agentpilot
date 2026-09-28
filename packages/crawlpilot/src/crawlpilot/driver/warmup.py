@@ -23,6 +23,7 @@ Two faithful choices from the Kotlin source:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import time
 from collections.abc import Mapping, Sequence
@@ -40,11 +41,20 @@ log = structlog.get_logger(__name__)
 # InteractSettings.kt:42-66 -- viewport-height fractions to rest the scroll at.
 _INIT_SCROLL_FRACTIONS = (0.3, 0.75)
 
-_ABCK_POLL_MAX_S = 8.0
-"""Upper bound on the _abck wait. Two-three accepted sensor POSTs typically
-land within a few seconds of scrolling; beyond this the site either doesn't use
-Akamai or isn't going to validate us, and we let the caller proceed/handle the
-block rather than hang the scrape."""
+_ABCK_POLL_MAX_S = 30.0
+"""Upper bound on the _abck wait. The site either validates us inside this or
+isn't going to, and we let the caller proceed/handle the block rather than hang
+the scrape.
+
+Was 8s, which is shorter than a pass takes. MEASURED on cos.com, native Chrome,
+residential IP: `_abck` flipped to `~0~` at 6.0s, 6.0s and 8.6s, and one run
+reached the real document only at 25s, through a challenge stub. An emulated
+worker is 3-4x slower at the sensor's JS than that. Non-Akamai pages never pay
+it -- `wait_for_abck` short-circuits once it sees no Akamai cookie."""
+
+_CHALLENGE_SETTLE_MAX_S = 20.0
+"""Upper bound on waiting for Akamai's sensor stub to reload into the real page,
+after `_abck` validates (see `settle_akamai_challenge`)."""
 
 # Cookies Akamai Bot Manager sets. If none of these is present the site isn't
 # Akamai-protected, so the _abck wait short-circuits rather than burning the
@@ -160,6 +170,35 @@ async def wait_for_abck(
     return False
 
 
+async def settle_akamai_challenge(
+    page: Page, *, timeout_s: float = _CHALLENGE_SETTLE_MAX_S
+) -> bool:
+    """Wait while the page is Akamai's sensor-challenge stub. True once it is not.
+
+    The stub (`block_detect.is_akamai_challenge`) reloads itself into the real
+    page when its sensor POST is accepted, which can land *after* `_abck` has
+    already validated -- so a read straight after the cookie wait can still get
+    the stub. Polls the DOM rather than waiting on a navigation event, because the
+    reload may already have happened by the time this runs. A read that throws
+    means a navigation is in flight, which is exactly what we are waiting for.
+    """
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            html = await page.content()
+        except Exception:
+            await asyncio.sleep(0.25)
+            continue
+        if not block_detect.is_akamai_challenge(html):
+            with contextlib.suppress(Exception):
+                await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            return True
+        await asyncio.sleep(0.5)
+    log.info("warmup.akamai_challenge_unsettled", url=page.url)
+    return False
+
+
 async def warm_up(page: Page, policy: DelayPolicy, *, wait_abck: bool = False) -> bool:
     """Run the pre-read warm-up on an already-navigated page: settle on `body`,
     scroll like a human, and -- when `wait_abck` (Akamai targets) -- wait for a
@@ -177,4 +216,6 @@ async def warm_up(page: Page, policy: DelayPolicy, *, wait_abck: bool = False) -
     ok = await wait_for_abck(page, policy)
     if not ok:
         log.info("warmup.abck_unvalidated", url=page.url)
+        return ok
+    await settle_akamai_challenge(page)
     return ok
