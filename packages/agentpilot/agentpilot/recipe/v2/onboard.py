@@ -107,6 +107,14 @@ _MAX_NARRATED_STEPS = 40
 # The cost of being wrong in this direction is bounded and small: at most four
 # wasted proposals for a field that genuinely is not there, against the fifteen
 # it was before any limit existed.
+# How many sections may be opened on one field's behalf across a whole build.
+#
+# One. Past that the model is offering a different CONTROL each round rather
+# than a better selector, and every extra click is as likely to shut a section
+# as to open one. MEASURED (Zara): three clicks landed on the one
+# "COMPOSITION, CARE & ORIGIN" control in a single build, leaving it toggling.
+_MAX_REVEALS_PER_FIELD = 1
+
 _MAX_FIELD_ATTEMPTS = 4
 
 # The same budget for a field the page shows evidence of.
@@ -290,6 +298,15 @@ def _opener_key(locator: Locator) -> tuple[Any, ...]:
 
     from agentpilot.recipe.v2.selector_agent import locator_key
 
+    # Case-folded for `ax_role`, because the accessible name is prose and the
+    # model does not spell it consistently. MEASURED (Zara): one build proposed
+    # "Composition, care & origin" and "COMPOSITION, CARE & ORIGIN" for the same
+    # control in two rounds, so the exact key saw two sections, clicked both,
+    # and the second click SHUT what the first had opened.
+    if locator.kind == "ax_role" and locator.name_contains:
+        return locator_key(
+            replace(locator, name_contains=locator.name_contains.casefold())
+        )
     return locator_key(locator)
 
 
@@ -551,6 +568,8 @@ class ExplorationState:
         # Openers already clicked and still open, so a second field behind the
         # same section does not toggle it shut.
         self._revealed_open: set[tuple[Any, ...]] = set()
+        # How many sections have been opened on each field's behalf.
+        self._reveals_for: dict[str, int] = {}
         self._failures: dict[str, str] = {}
         # Consecutive misses per field, and what that count is allowed to
         # conclude. See `_MAX_FIELD_ATTEMPTS`.
@@ -737,7 +756,7 @@ class ExplorationState:
         if wait is not None:
             self._path.append(wait)
 
-    async def reveal_for_binding(self, locator: Locator) -> bool:
+    async def reveal_for_binding(self, field: str, locator: Locator) -> bool:
         """Open what a caption rejection identified, and keep the click.
 
         `selector_agent` can only bind what is readable at the moment it looks,
@@ -776,8 +795,18 @@ class ExplorationState:
         if key in self._revealed_open:
             # Already open, from another field behind the same section. Reported
             # as success because the postcondition -- the content is readable --
-            # holds, which is what the caller is about to rely on.
+            # holds, and a second click on a toggle would shut it. Checked
+            # before the budget: this clicks nothing, so it is always safe.
             return True
+        if self._reveals_for.get(field, 0) >= _MAX_REVEALS_PER_FIELD:
+            # One field gets one section opened for it. Past that the model is
+            # offering a different control each round rather than a better
+            # selector, and every extra click is as likely to shut a section as
+            # to open one -- which is how a page ends up toggling instead of
+            # opening. What it needs then is a fresh look at the page, which
+            # `propose_and_verify` arranges through `resnapshot`.
+            log.info("onboard.reveal_budget_spent", field=field)
+            return False
         step = Step(
             op="click",
             target=locator,
@@ -795,11 +824,28 @@ class ExplorationState:
         if outcome is not None and getattr(outcome, "status", "") == "failed":
             return False
         self._revealed_open.add(key)
+        self._reveals_for[field] = self._reveals_for.get(field, 0) + 1
         self._reveal_steps[key] = step
         self._reader.invalidate()
         await self._record_reveal_teardown(key)
         log.info("onboard.revealed_for_binding", locator=locator.to_dict())
         return True
+
+    async def _snapshot_text(self) -> str:
+        """The page as it is NOW, for a model that was shown it as it was.
+
+        Opening a section changes the only thing the proposal prompt has to go
+        on. Without this the model re-guesses against a description of the
+        closed page and invents class names -- see `propose_and_verify`.
+        """
+
+        self._reader.invalidate()
+        snapshot = await self._reader.snapshot()
+        if snapshot is None:
+            return ""
+        return serialize(
+            snapshot, view=SnapshotView(for_authoring=True, content_only=True)
+        ).llm_text
 
     async def _record_reveal_teardown(self, key: tuple[Any, ...]) -> None:
         """How to close what the reveal just opened, if it opened a dialog.
@@ -1214,6 +1260,12 @@ class ExplorationState:
                 # reveal, rather than a group per field each repeating the same
                 # click. See `_freeze`.
                 revealed_by=self._revealed_by,
+                # And let it look again once a section has opened. The proposals
+                # were written against the page with that section shut, so the
+                # model had never seen inside it -- on Zara it invented a whole
+                # `.product-detail-care*` class family for a page that uses
+                # `.product-detail-extra-detail__section`.
+                resnapshot=self._snapshot_text,
             )
             if scalars
             else {}
@@ -1471,6 +1523,29 @@ class ExplorationState:
             frozen |= set(fields)
 
         for table_name, binding in rows.items():
+            if not binding.bindings:
+                # Rows but no columns. The group would carry a `rows_locator`
+                # and nothing to read out of each row, which `validate_document`
+                # refuses with "no candidates bound -- this field can never
+                # resolve" -- and it refuses the WHOLE document, so one
+                # column-less table discards every other field the build got
+                # right.
+                #
+                # MEASURED (Amazon). `specifications` bound its rows to
+                # `//table[@id='productDetails_techSpec_section_1' ...]`, its
+                # name/value columns came back empty, and the build completed
+                # with "the built recipe did not validate" -- throwing away
+                # twelve fields that had bound correctly, including every
+                # required one.
+                #
+                # Reported as a failure instead, which is what `build_asks`
+                # turns into a question a person can answer on the live page.
+                self._failures[table_name] = (
+                    "its rows were found but nothing could be read out of them "
+                    "-- point at one row's label and value"
+                )
+                log.info("onboard.rows_without_columns", field=table_name)
+                continue
             # A `json` or `dom_rows` table reads what is already on the page, so
             # unlike the click-through kind it mutates nothing -- but it still
             # gets its own group, because `_replay_repeat` and `_replay_scalar`

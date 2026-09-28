@@ -39,6 +39,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from agentpilot.control.identity import identity_for, parts_of
+from crawlpilot.session.admission import Admit
 from crawlpilot.session.registry import Opener
 from crawlpilot.spi.errors import LeaseConflict
 from crawlpilot.spi.identity import IdentityRef
@@ -84,8 +85,14 @@ def _to_context_ref(
 
 
 class RedisRegistry:
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, *, admit: Admit | None = None) -> None:
         self._redis = redis
+        self._admit = admit
+        """Asked before a NEW browser is launched, never before a warm one is
+        reused. This is the registry a worker actually runs on when
+        `AGENTPILOT_REDIS_URL` is set, so without the hook here the gate does
+        not exist for the workload that needs it. See
+        `crawlpilot.session.admission`."""
         self._acquire = redis.register_script(_load("acquire_lease.lua"))
         self._bind = redis.register_script(_load("bind_active_context.lua"))
         self._renew = redis.register_script(_load("renew_lease.lua"))
@@ -124,6 +131,12 @@ class RedisRegistry:
 
         if not reuse:
             try:
+                # Refused BEFORE the browser is launched, and inside the same
+                # try/except as the open itself -- the lease has already been
+                # taken in Redis by `_acquire` above, so declining without
+                # releasing it would strand the identity as permanently ACTIVE.
+                if self._admit is not None:
+                    await self._admit()
                 ctx = await opener()
             except BaseException:
                 await self._release(keys=[key], args=[lease_id, time.time()])

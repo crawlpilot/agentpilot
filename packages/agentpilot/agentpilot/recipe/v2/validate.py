@@ -34,6 +34,12 @@ _STATE_CHANGING_OPS = frozenset({
 })
 
 
+#: How an open key -> value map is bound. Mirrors `rows.MAP_COLUMNS`, and kept
+#: as a literal rather than imported because this module validates a raw
+#: document and must not depend on the binding engine.
+_MAP_COLUMNS = ("name", "value")
+
+
 def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
     """Return `(errors, warnings)` for a v2 document."""
 
@@ -124,6 +130,27 @@ def validate_document(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
                 if not keys:
                     errors.append(f"{where}.{name}: declared as a table but has no columns")
                     continue
+            elif type_spec.get("kind") == "object" and not type_spec.get("properties"):
+                # An open key -> value map -- a specifications block, where the
+                # KEYS come from the page rather than from the caller
+                # (`rows.is_open_map`). It is bound like a table, by the
+                # synthetic `name`/`value` pair in `rows.MAP_COLUMNS`, and its
+                # own name never appears in `bindings`.
+                #
+                # MEASURED (Amazon). `specifications` bound its rows to
+                # `//table[@id='productDetails_techSpec_section_1' ...]` with
+                # both columns, and this function looked for
+                # `bindings['specifications']`, did not find it, and reported
+                # "no candidates bound -- this field can never resolve". That is
+                # an ERROR, so the whole document was refused and the run
+                # finished with "the built recipe did not validate" -- throwing
+                # away twelve other fields, every required one among them,
+                # because of a field that had in fact bound correctly.
+                #
+                # This is the same class of mistake the `table` branch above
+                # exists to prevent, on the one shape that branch does not
+                # cover.
+                keys = list(_MAP_COLUMNS)
             else:
                 keys = [name]
 

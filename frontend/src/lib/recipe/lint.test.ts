@@ -112,3 +112,45 @@ describe('the never-verified lint', () => {
     expect(unverified({ ...approved([0, 0]), status: 'draft' })).toHaveLength(0)
   })
 })
+
+describe('an open key -> value map', () => {
+  const openMap = (bindings: Record<string, unknown[]>): Recipe => ({
+    ...emptyRecipe('specs'),
+    fields: { specifications: { type: { kind: 'object' }, description: '' } },
+    field_groups: [
+      {
+        group_id: 'specs',
+        field_names: ['specifications'],
+        bindings: bindings as never,
+        repeat: {
+          kind: 'dom_rows',
+          row_field: 'specifications',
+          max_iterations: 50,
+          rows_locator: { kind: 'css', selector: 'table#productDetails tr' },
+        },
+      },
+    ],
+  })
+
+  const cell = (selector: string) => [
+    { locator: { kind: 'css' as const, selector, attribute: 'text' }, priority: 60 },
+  ]
+
+  it('is bound by name/value, not by its own field name', () => {
+    // MEASURED (Amazon): the server's twin of this lint called a correctly
+    // bound `specifications` "no candidates bound", which is an error, so the
+    // whole document was refused and twelve other bound fields went with it.
+    const issues = lintRecipe(openMap({ name: cell('th'), value: cell('td') }))
+    expect(issues.filter((i) => i.severity === 'error')).toHaveLength(0)
+  })
+
+  it('still names a missing column', () => {
+    const issues = lintRecipe(openMap({ name: cell('th') }))
+    expect(issues.some((i) => i.message.includes('"value"'))).toBe(true)
+  })
+
+  it('still refuses one with nothing bound', () => {
+    const issues = lintRecipe(openMap({}))
+    expect(issues.some((i) => i.message.includes('No candidates bound'))).toBe(true)
+  })
+})

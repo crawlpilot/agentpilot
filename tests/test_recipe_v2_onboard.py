@@ -1407,7 +1407,7 @@ async def test_a_reveal_is_kept_against_its_opener_not_in_the_shared_route() -> 
     )
     opener = Locator(kind="css", selector=".product-detail-actions__action-button")
 
-    assert await state.reveal_for_binding(opener) is True
+    assert await state.reveal_for_binding("care", opener) is True
     assert [s.op for s in dispatched] == ["click"]
     # Dispatched, but NOT in the shared route.
     assert state._route_for() == []
@@ -1437,12 +1437,62 @@ async def test_a_section_is_opened_once_however_many_fields_are_behind_it() -> N
     )
     opener = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
 
-    assert await state.reveal_for_binding(opener) is True
+    assert await state.reveal_for_binding("care", opener) is True
     # `origin` comes along later and finds it already open. Reported as success
     # because the postcondition -- the content is readable -- holds, and a
     # second click on a toggle would shut it.
-    assert await state.reveal_for_binding(opener) is True
+    assert await state.reveal_for_binding("origin", opener) is True
     assert len(dispatched) == 1
+
+
+async def test_one_field_only_gets_one_section_opened_for_it() -> None:
+    """Past the first, the model is offering a different CONTROL each round
+    rather than a better selector, and every extra click is as likely to shut a
+    section as to open one.
+
+    MEASURED (Zara): three clicks landed on the one
+    "COMPOSITION, CARE & ORIGIN" control in a single build -- proposed as
+    `ax_role "Composition, care & origin"`, a css button, and
+    `ax_role "COMPOSITION, CARE & ORIGIN"` -- leaving the drawer toggling
+    instead of open.
+    """
+
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    assert await state.reveal_for_binding("care", Locator(kind="css", selector=".a")) is True
+    assert await state.reveal_for_binding("care", Locator(kind="css", selector=".b")) is False
+    assert len(dispatched) == 1
+
+
+async def test_one_control_has_one_identity_however_it_is_spelled() -> None:
+    """The accessible name is prose and the model does not spell it
+    consistently. Two spellings of one control are one section."""
+
+    dispatched: list[Any] = []
+
+    async def dispatch(step):
+        dispatched.append(step)
+        return None
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+        dispatch_step=dispatch,
+    )
+    lower = Locator(kind="ax_role", role="button", name_contains="Composition, care & origin")
+    upper = Locator(kind="ax_role", role="button", name_contains="COMPOSITION, CARE & ORIGIN")
+    assert _opener_key(lower) == _opener_key(upper)
+
+    assert await state.reveal_for_binding("care", lower) is True
+    assert await state.reveal_for_binding("origin", upper) is True
+    assert len(dispatched) == 1, "the second spelling must not toggle it shut"
 
 
 async def test_fields_are_grouped_by_the_section_they_came_out_of() -> None:
@@ -1488,7 +1538,7 @@ async def test_a_reveal_that_opens_a_dialog_records_how_to_close_it() -> None:
         dispatch_step=dispatch,
     )
     opener = Locator(kind="css", selector=".product-detail-actions__action-button")
-    assert await state.reveal_for_binding(opener) is True
+    assert await state.reveal_for_binding("care", opener) is True
 
     close = state._reveal_teardown[_opener_key(opener)]
     assert close.label == "close the dialog (Close)"
@@ -1512,7 +1562,7 @@ async def test_an_accordion_reveal_records_no_teardown() -> None:
         dispatch_step=dispatch,
     )
     opener = Locator(kind="css", selector=".acc")
-    assert await state.reveal_for_binding(opener) is True
+    assert await state.reveal_for_binding("care", opener) is True
     assert _opener_key(opener) not in state._reveal_teardown
 
 
@@ -1536,8 +1586,8 @@ async def test_each_section_carries_its_own_close() -> None:
     )
     first = Locator(kind="css", selector=".a")
     second = Locator(kind="css", selector=".b")
-    await state.reveal_for_binding(first)
-    await state.reveal_for_binding(second)
+    await state.reveal_for_binding("care", first)
+    await state.reveal_for_binding("origin", second)
 
     assert set(state._reveal_teardown) == {_opener_key(first), _opener_key(second)}
 
@@ -1558,7 +1608,7 @@ async def test_an_undispatchable_reveal_is_declined_without_touching_the_route()
         dispatch_step=dispatch,
     )
 
-    assert await state.reveal_for_binding(Locator(kind="xpath", selector="//button")) is False
+    assert await state.reveal_for_binding("care", Locator(kind="xpath", selector="//button")) is False
     assert dispatched == []
     assert state._route_for() == []
     assert state._reveal_steps == {}
@@ -1573,6 +1623,47 @@ async def test_a_reveal_that_raises_leaves_no_trace() -> None:
         dispatch_step=dispatch,
     )
 
-    assert await state.reveal_for_binding(Locator(kind="css", selector=".x")) is False
+    assert await state.reveal_for_binding("care", Locator(kind="css", selector=".x")) is False
     assert state._route_for() == []
     assert state._reveal_steps == {}
+
+
+async def test_a_table_with_rows_but_no_columns_is_a_failure_not_a_group() -> None:
+    """One column-less table used to discard the entire build.
+
+    The group would carry a `rows_locator` and nothing to read out of each row,
+    which `validate_document` refuses with "no candidates bound -- this field
+    can never resolve" -- and it refuses the WHOLE document, so the recipe is
+    never saved.
+
+    MEASURED (Amazon). `specifications` bound its rows to
+    `//table[@id='productDetails_techSpec_section_1' ...]` and its name/value
+    columns came back empty. The run completed with "the built recipe did not
+    validate", throwing away twelve fields that had bound correctly, every
+    required one among them.
+    """
+
+    from agentpilot.recipe.v2.models import RepeatSpec
+    from agentpilot.recipe.v2.rows import RowBinding
+
+    state = ExplorationState(
+        fields=SCALARS, reader=_Reader(), llm_config=None,  # type: ignore[arg-type]
+    )
+    empty = RowBinding(
+        repeat=RepeatSpec(
+            kind="dom_rows", row_field="specifications", max_iterations=50,
+            rows_locator=Locator(kind="css", selector="table#productDetails tr"),
+        ),
+        bindings={},
+        rows=[],
+    )
+
+    frozen = await state._freeze({}, {"specifications": empty},
+                                 snapshot=None, clicked_ref=None)
+
+    assert state.field_groups == [], "a group with no bindings must never be frozen"
+    assert "specifications" not in frozen
+    # And it is REPORTED, so the assist loop can ask about it rather than the
+    # field vanishing.
+    assert "specifications" in state._failures
+    assert "nothing could be read out of them" in state._failures["specifications"]

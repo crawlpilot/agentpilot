@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from crawlpilot.session.admission import Admit
 from crawlpilot.session.lease import new_lease
 from crawlpilot.session.lease import renew as _renew_lease
 from crawlpilot.spi.errors import LeaseConflict
@@ -60,7 +61,11 @@ class _Entry:
 
 
 class Registry:
-    def __init__(self) -> None:
+    def __init__(self, *, admit: Admit | None = None) -> None:
+        self._admit = admit
+        """Asked before a NEW browser is launched, never before a warm one is
+        reused -- reuse costs no memory, so refusing it would be pure loss. See
+        `crawlpilot.session.admission`."""
         self._entries: dict[IdentityRef, _Entry] = {}
         self._lease_owner: dict[LeaseId, IdentityRef] = {}
         self._identity_locks: dict[IdentityRef, asyncio.Lock] = {}
@@ -109,6 +114,11 @@ class Registry:
                 raise LeaseConflict(f"identity {identity.slug()!r} already has an active session")
 
             if entry is None:
+                # Nothing here is warm, so this is a new browser. That is the
+                # one moment worth refusing at: the reaper can only take back
+                # what is IDLE, and under load nothing is.
+                if self._admit is not None:
+                    await self._admit()
                 context_ref = await opener()
                 entry = _Entry(context_ref=context_ref)
                 self._entries[identity] = entry

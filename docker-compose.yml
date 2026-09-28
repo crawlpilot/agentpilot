@@ -122,6 +122,22 @@ services:
       - NET_ADMIN # agentpilot.egress.policy applies real iptables rules in this
       # container's own netns (metadata + RFC1918 baseline).
     shm_size: "2gb"
+    # A browser node is sized by MEMORY, not by CPU, and nothing here was
+    # sized at all: both workers ran on the defaults, which allow 25 contexts
+    # each. A Chrome context is a process TREE of 300 MB-1 GB, so two workers
+    # were entitled to 50 browsers -- call it 15-50 GB -- on a 7.65 GB host.
+    #
+    # MEASURED: 133 Chrome processes across the two workers holding 6.7 of
+    # 7.65 GB, at which point a tab died with `page_crash` mid-build. The
+    # reaper could not help: it evicts IDLE contexts and under sustained load
+    # there are none, and its per-process ceiling was read against Chrome's
+    # ROOT process (~290 MB) rather than the tree, so 4096 MB was unreachable.
+    #
+    # `mem_limit` is the backstop Docker enforces regardless of what the app
+    # believes. Without it the container's `memory.max` is literally "max" and
+    # `/proc/meminfo` reports the whole host, so the app's own watermark is
+    # measuring a number nobody is bounding.
+    mem_limit: ${AGENTPILOT_WORKER_MEM_LIMIT:-3g}
     volumes:
       - profiles:/var/lib/agentpilot/profiles
       - vault:/var/lib/agentpilot/vault
@@ -137,6 +153,26 @@ services:
       # unset here would mean the gateway can never place a session on this
       # node, so wiring.py fails fast at startup instead.
       AGENTPILOT_NODE_ADDR: http://worker:8000
+      # Sized to `mem_limit` above rather than left on the defaults. Four
+      # contexts at ~600 MB of tree apiece fits 3 GB with room for the
+      # interpreter; 25 (the default) does not fit any machine this compose
+      # file would run on.
+      #
+      # This number only started binding the workers when `wiring.py` began
+      # passing it to `session.admission.NodeAdmission`. Before that it was
+      # advertised to the gateway's placer and enforced nowhere else -- and
+      # `recipe_worker_loop` opens its browser in-process, deliberately
+      # bypassing the placer, so the workload that actually filled the host was
+      # the one nothing counted.
+      AGENTPILOT_MAX_CONTEXTS_PER_NODE: ${AGENTPILOT_MAX_CONTEXTS_PER_NODE:-4}
+      # Now that the ceiling is measured across the process tree
+      # (`reaper.read_tree_rss_mb`) it is a number a real browser can reach,
+      # so it has to be a real budget rather than a formality.
+      AGENTPILOT_PER_PROCESS_CEILING_MB: ${AGENTPILOT_PER_PROCESS_CEILING_MB:-1200}
+      # Warm profiles are an anti-detection feature and worth keeping, but not
+      # for five minutes on a node this size -- that is most of a build.
+      AGENTPILOT_IDLE_TTL_SECONDS: ${AGENTPILOT_IDLE_TTL_SECONDS:-120}
+      AGENTPILOT_REAPER_INTERVAL_SECONDS: ${AGENTPILOT_REAPER_INTERVAL_SECONDS:-10}
       # Needed for _connect_jobs_store()/_connect_agent_store()/
       # _connect_recipe_store() to run CrawlWorkerLoop/AgentWorkerLoop/
       # RecipeWorkerLoop on this process -- previously unset here (only
@@ -208,6 +244,15 @@ services:
       AGENTPILOT_VAULT_DIR: /var/lib/agentpilot/vault
       AGENTPILOT_VAULT_KEY: ${AGENTPILOT_VAULT_KEY:-}
       AGENTPILOT_NODE_ADDR: http://worker-2:8000
+      # The memory limits are NOT restated here: `extends` merges the
+      # environment rather than replacing it, so worker-2 inherits every
+      # `AGENTPILOT_*` above. Verified against `docker compose config`, which
+      # resolves this service with MAX_CONTEXTS_PER_NODE=4 and the
+      # DATABASE_URL it never names either.
+      #
+      # `mem_limit` is inherited the same way, and that is the part worth
+      # checking after any edit: two workers at 3g each, plus the host, is
+      # what the 7.65 GB this runs on can actually carry.
       AGENTPILOT_DATABASE_URL: postgresql://agentpilot:agentpilot@postgres:5432/agentpilot
       AGENTPILOT_PROXY_POOL: ${AGENTPILOT_PROXY_POOL:-}
       AGENTPILOT_PROXY_POOLS: ${AGENTPILOT_PROXY_POOLS:-}

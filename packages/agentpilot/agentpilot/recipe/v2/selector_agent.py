@@ -110,7 +110,12 @@ Verifier = Callable[[Locator], Awaitable[Any]]
 # that could not act on it: 29 attempts for one field, then the field was
 # dropped, and with it the reveal. `composition` bound fine from the same drawer
 # only because it is also in JSON-LD.
-Revealer = Callable[[Locator], Awaitable[bool]]
+Revealer = Callable[[str, Locator], Awaitable[bool]]
+
+# Re-read the page snapshot. Needed because opening a section changes what the
+# model should be looking at, and the text it was given describes the page as it
+# was BEFORE the click -- see `propose_and_verify`.
+Resnapshot = Callable[[], Awaitable[str]]
 
 _SYSTEM_PROMPT = """\
 You are building a reusable scraping recipe by locating declared fields on a \
@@ -1780,12 +1785,19 @@ async def _reveal_and_retry(
     ctx: TransformContext,
     trace: BuildTrace | None,
     probe: ScopeProbe | None,
-) -> tuple[list[VerifiedLocator], Locator] | None:
+) -> tuple[list[VerifiedLocator] | None, Locator | None]:
     """Open what the caption guard identified, then verify again.
 
-    Returns the surviving locators and the opener that made them survive, or
-    None when no opener helped -- in which case the caller carries on to its
-    ordinary retry, unchanged.
+    Three outcomes, and the middle one is the one worth naming:
+
+    - `(resolving, opener)` -- the section opened and the existing proposals
+      now read. Done.
+    - `(None, opener)` -- the section OPENED but the proposals still read
+      nothing. They were written against a snapshot of the page with the
+      section shut, so the model has never seen what is inside and is guessing
+      from the field name. The caller re-reads the page and asks again.
+    - `(None, None)` -- nothing opened, so the caller carries on to its
+      ordinary retry, unchanged.
 
     **Only openers are clicked, and only the content candidates are re-verified.**
     The opener itself is never a candidate: it reads the section's own label,
@@ -1801,9 +1813,10 @@ async def _reveal_and_retry(
     help", and the field goes back for the retry it would have had anyway.
     """
 
+    landed_on: Locator | None = None
     for opener in openers:
         try:
-            landed = await reveal(opener)
+            landed = await reveal(name, opener)
         except Exception as exc:  # noqa: BLE001 - a reveal that fails is data
             record(
                 trace, name, "reveal", "rejected",
@@ -1816,6 +1829,7 @@ async def _reveal_and_retry(
                 locator=opener, reason="the reveal did not land",
             )
             continue
+        landed_on = opener
         # Re-verify the CONTENT candidates, not the opener. Staged separately so
         # the trace shows plainly that these were read against an opened page --
         # otherwise the same selector appears twice with opposite outcomes and
@@ -1831,7 +1845,7 @@ async def _reveal_and_retry(
                 field=name, opener=opener.to_dict(),
             )
             return resolving, opener
-    return None
+    return None, landed_on
 
 
 async def propose_and_verify(
@@ -1850,6 +1864,7 @@ async def propose_and_verify(
     probe: ScopeProbe | None = None,
     reveal: Revealer | None = None,
     revealed_by: dict[str, Locator] | None = None,
+    resnapshot: Resnapshot | None = None,
 ) -> dict[str, list[Candidate]]:
     """Propose -> verify -> (reveal and re-verify) -> retry with the failure fed
     back, then top up any JSON-only field with a DOM fallback.
@@ -1913,6 +1928,10 @@ async def propose_and_verify(
     _attempt = -1
     budget = max_retries
     corrections = 0
+    # Fields whose section was opened but whose proposals still read nothing.
+    # They are owed a look at the page as it now is, not another guess at the
+    # page as it was. See the `reopened` branch below.
+    reopened: set[str] = set()
     while True:
         _attempt += 1
         if _attempt > budget or not remaining:
@@ -1953,8 +1972,37 @@ async def propose_and_verify(
                     name, spec, deduped, openers,
                     verify=verify, reveal=reveal, ctx=ctx, trace=trace, probe=probe,
                 )
-                if opened is not None:
-                    resolving, opener = opened
+                bound, opener = opened
+                if bound is not None and opener is not None:
+                    resolving = bound
+                    if revealed_by is not None:
+                        revealed_by[name] = opener
+                elif opener is not None:
+                    # The section opened and the old proposals STILL read
+                    # nothing -- because they were written against a snapshot of
+                    # the page with the section shut. The model has never seen
+                    # what is inside, so it guesses from the field name.
+                    #
+                    # MEASURED (Zara). Every selector it offered for `care` and
+                    # `origin` was in the invented `.product-detail-care*` family;
+                    # the page actually uses `.product-detail-extra-detail__section`
+                    # and `.structured-component-*`. No amount of re-verifying
+                    # those guesses can succeed. Re-READING the page is what
+                    # turns the reveal into a binding.
+                    reopened.add(name)
+                    # Attributed to the opener NOW, not when the field finally
+                    # binds. It binds on a later round -- against the re-read
+                    # page -- and by then nothing connects it back to the click
+                    # that made it findable.
+                    #
+                    # MEASURED (Zara). The reveal fired, the re-read worked, and
+                    # `care` bound to the real
+                    # `.product-detail-extra-detail__section:has(...)` on the
+                    # next round. But `revealed_by` was still empty, so the
+                    # field was grouped as needing no reveal, the recipe froze
+                    # with zero steps, and the cold replay collected nothing:
+                    # verified at build time, broken on every run after. That is
+                    # the worst shape a recipe can have, because it looks fine.
                     if revealed_by is not None:
                         revealed_by[name] = opener
 
@@ -2016,6 +2064,31 @@ async def propose_and_verify(
                     if chain
                 },
             )
+
+        # A reveal changed the page, so the snapshot the next round would be
+        # given is stale in the one way that matters: it describes the section
+        # as shut. Re-read it and buy one more round, which is the round that
+        # can actually succeed -- the model finally sees the real class names
+        # instead of inventing them from the field name.
+        if reopened and resnapshot is not None:
+            try:
+                refreshed = await resnapshot()
+            except Exception:  # noqa: BLE001 - a stale snapshot is not fatal
+                log.debug("propose.resnapshot_failed", exc_info=True)
+            else:
+                if refreshed and refreshed != snapshot_text:
+                    snapshot_text = refreshed
+                    budget += 1
+                    log.info("propose.resnapshot_after_reveal", fields=sorted(reopened))
+                    for name in reopened:
+                        next_failures[name] = (
+                            "the section this lives in is now OPEN, and the page "
+                            "text above has been re-read with it open -- the "
+                            "previous selectors were written against the closed "
+                            "page and matched nothing. Look again at what is "
+                            "actually inside it now."
+                        )
+            reopened = set()
 
         failures = next_failures
         if not failures:

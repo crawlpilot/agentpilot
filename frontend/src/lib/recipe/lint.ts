@@ -103,8 +103,23 @@ export function lintRecipe(recipe: Recipe): LintIssue[] {
       // `type.columns` (contract §8, and the shape both the Zara and Walmart
       // examples use). Looking for `bindings[name]` on a table therefore finds
       // nothing and reports a correctly-bound table as unresolvable.
+      // An open key -> value map -- `kind: 'object'` with no properties, a
+      // specifications block whose KEYS come from the page -- is bound the same
+      // way, by the synthetic `name`/`value` pair, and its own name never
+      // appears in `bindings` either. Missing that case had exactly the
+      // consequence described above, on the server: an Amazon build bound
+      // `specifications` correctly and `validate_document` still called it "no
+      // candidates bound", which is an ERROR, so the whole document was refused
+      // and twelve other bound fields went with it. Mirrors
+      // `recipe/v2/validate.py`; the two must agree.
+      const isOpenMap =
+        spec.type.kind === 'object' && Object.keys(spec.type.properties ?? {}).length === 0
       const bindingKeys =
-        spec.type.kind === 'table' ? Object.keys(spec.type.columns ?? {}) : [name]
+        spec.type.kind === 'table'
+          ? Object.keys(spec.type.columns ?? {})
+          : isOpenMap
+            ? ['name', 'value']
+            : [name]
 
       if (bindingKeys.length === 0) {
         add('error', `${where}.${name}`, 'Declared as a table but has no columns.', 'fields')

@@ -314,3 +314,76 @@ def test_a_document_with_no_status_is_treated_as_a_draft() -> None:
     document = _chain(0, 0)
     del document["status"]
     assert _unverified(document) == []
+
+
+# --- an open key -> value map is bound like a table, not like a scalar -------
+
+
+def _open_map_doc(bindings):
+    return doc(
+        fields={"specifications": {"type": {"kind": "object"}}},
+        field_groups=[{
+            "group_id": "specs",
+            "field_names": ["specifications"],
+            "bindings": bindings,
+            "repeat": {
+                "kind": "dom_rows",
+                "row_field": "specifications",
+                "max_iterations": 50,
+                "rows_locator": {"kind": "css", "selector": "table#productDetails tr"},
+            },
+        }],
+    )
+
+
+def test_an_open_map_bound_by_name_and_value_is_valid() -> None:
+    """MEASURED (Amazon). `specifications` is declared as an open key -> value
+    map -- `kind: object` with no properties -- whose KEYS come from the page.
+    It binds like a table, by the synthetic `name`/`value` pair, and its own
+    name never appears in `bindings`.
+
+    This function only special-cased `kind: "table"`, so it looked for
+    `bindings['specifications']`, did not find it, and reported "no candidates
+    bound -- this field can never resolve". That is an ERROR, so the entire
+    document was refused: a build that had correctly bound twelve other fields,
+    every required one among them, finished with "the built recipe did not
+    validate" and saved nothing.
+    """
+
+    errors, _warnings = validate_document(_open_map_doc({
+        "name": [{"locator": {"kind": "css", "selector": "th"}}],
+        "value": [{"locator": {"kind": "css", "selector": "td"}}],
+    }))
+    assert errors == []
+
+
+def test_an_open_map_missing_a_column_is_still_named() -> None:
+    """The guard is not weakened -- a half-bound map is still a real problem,
+    it is just reported against the column rather than the field."""
+
+    errors, _warnings = validate_document(_open_map_doc({
+        "name": [{"locator": {"kind": "css", "selector": "th"}}],
+    }))
+    assert any("value" in e for e in errors), errors
+
+
+def test_an_open_map_with_no_bindings_at_all_is_still_refused() -> None:
+    errors, _warnings = validate_document(_open_map_doc({}))
+    assert any("no candidates bound" in e for e in errors), errors
+
+
+def test_an_object_with_declared_properties_is_not_an_open_map() -> None:
+    """The caller named the keys, so each is its own field -- `rows.is_open_map`
+    draws the same line."""
+
+    bad = doc(
+        fields={"dims": {"type": {"kind": "object", "properties": {
+            "w": {"kind": "scalar", "value_type": "string"},
+        }}}},
+        field_groups=[{
+            "group_id": "g", "field_names": ["dims"],
+            "bindings": {"name": [{"locator": {"kind": "css", "selector": "th"}}]},
+        }],
+    )
+    errors, _warnings = validate_document(bad)
+    assert any("no candidates bound" in e for e in errors), errors

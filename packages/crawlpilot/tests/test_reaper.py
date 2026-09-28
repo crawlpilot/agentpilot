@@ -128,3 +128,68 @@ async def test_memory_pressure_evicts_oldest_idle_first(monkeypatch: pytest.Monk
         ctx.context_id for _identity, ctx, _lease, _released_at in await registry.snapshot()
     ]
     assert remaining_ids == [newer.context_id]
+
+
+# --- a browser is a process TREE, not a process -----------------------------
+
+
+def test_tree_rss_sums_a_process_and_its_children(tmp_path, monkeypatch) -> None:
+    """MEASURED, inside a worker container: Chrome's root process held 292 MB
+    while each of its children held a few MB. A 4096 MB ceiling read against the
+    root alone was therefore unreachable by any real page -- the node filled to
+    6.7 of 7.65 GB, the reaper had nothing to say, and a tab died with
+    `page_crash`. The tree those children belong to was over a gigabyte.
+    """
+
+    from crawlpilot.session import reaper as reaper_mod
+
+    rss = {1: 290.0, 2: 400.0, 3: 350.0, 4: 60.0}
+    children = {1: [2, 3], 2: [4], 3: [], 4: []}
+
+    monkeypatch.setattr(reaper_mod, "read_pid_rss_mb", lambda pid: rss.get(pid))
+    monkeypatch.setattr(reaper_mod, "_child_pids", lambda pid: children.get(pid, []))
+
+    assert reaper_mod.read_tree_rss_mb(1) == 1100.0
+    # The root alone is what the ceiling used to see, and it is a quarter of the
+    # truth.
+    assert reaper_mod.read_pid_rss_mb(1) == 290.0
+
+
+def test_tree_rss_survives_a_process_exiting_mid_walk(monkeypatch) -> None:
+    """A browser being torn down while this reads it is the ordinary case, not
+    an error: the child is gone, its RSS is unknowable, and the sum is still
+    the best answer available."""
+
+    from crawlpilot.session import reaper as reaper_mod
+
+    monkeypatch.setattr(
+        reaper_mod, "read_pid_rss_mb", lambda pid: 100.0 if pid == 1 else None
+    )
+    monkeypatch.setattr(reaper_mod, "_child_pids", lambda pid: [2, 3] if pid == 1 else [])
+
+    assert reaper_mod.read_tree_rss_mb(1) == 100.0
+
+
+def test_tree_rss_is_none_when_nothing_is_readable(monkeypatch) -> None:
+    """Off Linux, or for a pid that is already gone. `None` means "no answer",
+    which the ceiling check skips -- distinct from 0.0, which would mean "this
+    browser is using nothing" and is never true."""
+
+    from crawlpilot.session import reaper as reaper_mod
+
+    monkeypatch.setattr(reaper_mod, "read_pid_rss_mb", lambda pid: None)
+    monkeypatch.setattr(reaper_mod, "_child_pids", lambda pid: [])
+
+    assert reaper_mod.read_tree_rss_mb(999) is None
+
+
+def test_tree_rss_does_not_loop_on_a_cycle(monkeypatch) -> None:
+    """`/proc` should never report one, but a pid counted twice would inflate
+    the ceiling and evict a healthy browser."""
+
+    from crawlpilot.session import reaper as reaper_mod
+
+    monkeypatch.setattr(reaper_mod, "read_pid_rss_mb", lambda pid: 50.0)
+    monkeypatch.setattr(reaper_mod, "_child_pids", lambda pid: {1: [2], 2: [1]}.get(pid, []))
+
+    assert reaper_mod.read_tree_rss_mb(1) == 100.0

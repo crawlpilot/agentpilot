@@ -377,7 +377,8 @@ class Wiring:
         from crawlpilot.driver.patchright_driver import PatchrightDriver
         from crawlpilot.driver.process_launcher import ProcessLauncher
         from crawlpilot.identity.vault import Vault
-        from crawlpilot.session.reaper import Reaper
+        from crawlpilot.session.admission import NodeAdmission
+        from crawlpilot.session.reaper import Reaper, read_meminfo_used_pct
         from crawlpilot.session.registry import Registry, RegistryProtocol
         from crawlpilot.session.warm_pool import KeepaliveLoop, WarmPool
         from crawlpilot.spi.driver import BrowserDriver
@@ -403,8 +404,34 @@ class Wiring:
             os.environ.get("AGENTPILOT_PROFILES_DIR", "/var/lib/agentpilot/profiles")
         )
 
+        # Admission control: refuse a NEW browser before the node is full,
+        # rather than evicting after it already is.
+        #
+        # `AGENTPILOT_MAX_CONTEXTS_PER_NODE` used to be advertised to the
+        # gateway's placer and enforced nowhere else -- and `recipe_worker_loop`
+        # opens its browser in-process, deliberately bypassing the placer. So
+        # the one workload that filled a host to 6.7 of 7.65 GB and crashed a
+        # tab was the workload nothing counted. See
+        # `crawlpilot.session.admission`.
+        max_contexts = int(os.environ.get("AGENTPILOT_MAX_CONTEXTS_PER_NODE", "25"))
+        watermark = float(os.environ.get("AGENTPILOT_MEM_WATERMARK_PCT", "85"))
+
         self.registry: RegistryProtocol
-        self.registry = RedisRegistry(self.redis) if self.redis is not None else Registry()
+
+        async def _live_contexts() -> int:
+            return len(await self.registry.snapshot())
+
+        admit = NodeAdmission(
+            live_contexts=_live_contexts,
+            max_contexts=max_contexts,
+            used_pct=read_meminfo_used_pct,
+            watermark_pct=watermark,
+        )
+        self.registry = (
+            RedisRegistry(self.redis, admit=admit)
+            if self.redis is not None
+            else Registry(admit=admit)
+        )
 
         self.reaper = Reaper(
             self.registry,
@@ -413,9 +440,9 @@ class Wiring:
             scan_interval_seconds=float(
                 os.environ.get("AGENTPILOT_REAPER_INTERVAL_SECONDS", "15")
             ),
-            mem_pressure_watermark_pct=float(
-                os.environ.get("AGENTPILOT_MEM_WATERMARK_PCT", "85")
-            ),
+            # The same watermark admission uses, so the two halves of the
+            # policy -- refuse new, evict idle -- cannot drift apart.
+            mem_pressure_watermark_pct=watermark,
             per_process_ceiling_mb=float(
                 os.environ.get("AGENTPILOT_PER_PROCESS_CEILING_MB", "4096")
             ),
@@ -437,7 +464,7 @@ class Wiring:
                 self.registry,
                 node_id=self.node_id,
                 addr=node_addr,
-                max_contexts=int(os.environ.get("AGENTPILOT_MAX_CONTEXTS_PER_NODE", "25")),
+                max_contexts=max_contexts,
             )
 
         self.vault: Vault | None = None

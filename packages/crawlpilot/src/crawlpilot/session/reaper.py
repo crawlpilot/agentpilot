@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 
 import structlog
@@ -88,6 +89,65 @@ def read_pid_rss_mb(pid: int) -> float | None:
     except OSError:
         return None
     return None
+
+
+def read_tree_rss_mb(pid: int) -> float | None:
+    """Resident set size of a process AND everything it spawned, in MB.
+
+    A browser is not a process, it is a process tree, and measuring only the
+    root is why the per-context ceiling never fired. Chrome puts each tab, the
+    GPU process, the network service and every utility in its own child; the
+    root holds comparatively little.
+
+    MEASURED, inside a worker: the Chrome root was 292 MB while its children
+    were a few MB each, so a 4096 MB ceiling read against the root alone could
+    not be reached by any real page. The tree it belongs to was comfortably over
+    a gigabyte. The node filled up, the reaper found nothing to say, and a tab
+    died with `page_crash`.
+
+    Walks `/proc/<pid>/task/*/children`, which is the kernel's own parent->child
+    index -- no `ps`, no `psutil`, same discipline as `read_meminfo_used_pct`.
+    Missing entries are skipped rather than failing the sum: a browser being
+    torn down while this reads it is the ordinary case, not an error.
+    """
+
+    seen: set[int] = set()
+    total = 0.0
+    found_any = False
+    stack = [pid]
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        rss = read_pid_rss_mb(current)
+        if rss is not None:
+            total += rss
+            found_any = True
+        stack.extend(_child_pids(current))
+    return total if found_any else None
+
+
+def _child_pids(pid: int) -> list[int]:
+    """Direct children of `pid`, from the kernel rather than from `ps`.
+
+    Every thread of a process has its own `children` file and they do not
+    overlap, so all of them are read. A thread that exits mid-walk simply
+    contributes nothing.
+    """
+
+    out: list[int] = []
+    try:
+        tasks = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return out
+    for task in tasks:
+        try:
+            with open(f"/proc/{pid}/task/{task}/children") as f:
+                out.extend(int(part) for part in f.read().split())
+        except (OSError, ValueError):
+            continue
+    return out
 
 
 class Reaper:
@@ -148,7 +208,9 @@ class Reaper:
         for identity, ctx, _lease, _released_at in await self._registry.snapshot():
             if ctx.pid is None:
                 continue
-            rss = read_pid_rss_mb(ctx.pid)
+            # The whole browser, not just its root process. See
+            # `read_tree_rss_mb` for why the root alone made this unreachable.
+            rss = read_tree_rss_mb(ctx.pid)
             if rss is not None and rss > self.per_process_ceiling_mb:
                 log.warning(
                     "reaper.per_process_ceiling_exceeded",
