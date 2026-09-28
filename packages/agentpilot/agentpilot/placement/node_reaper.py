@@ -119,9 +119,10 @@ class NodeReaper:
         MEASURED, on a two-worker host:
 
             $ redis-cli SCARD live_nodes                            -> 2
-            $ redis-cli --scan --pattern 'node_sessions:*' | wc -l  -> 18
+            $ redis-cli --scan --pattern 'node_sessions:*' | wc -l  -> 17
 
-        Sixteen belonged to containers that no longer existed, every one at
+        Checked one by one against `live_nodes`, *none* of the seventeen belonged
+        to a node that still existed -- all of them were remains, every one at
         `TTL = -1`, and each rebuild added another. That mattered beyond
         untidiness while admission counted by scanning the keyspace: a node
         could be reported full by the remains of nodes that were gone.

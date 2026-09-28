@@ -129,9 +129,9 @@ async def test_lock_election_only_one_of_two_reapers_acts_per_cycle(redis, regis
 
 
 async def test_keys_of_forgotten_nodes_are_swept() -> None:
-    """The measured leak: eighteen `node_sessions:*` keys against two live
-    nodes, sixteen of them belonging to containers that no longer existed, every
-    one at `TTL = -1`.
+    """The measured leak: seventeen `node_sessions:*` keys against two live
+    nodes, not one of them belonging to a node that still existed, every one at
+    `TTL = -1`.
 
     `scan_once` iterates `live_nodes` and `_reap_node` ends by removing the node
     from it, so anything that leaves that set by another path -- an unclean
@@ -152,8 +152,7 @@ async def test_keys_of_forgotten_nodes_are_swept() -> None:
         await redis.zadd(f"node_slots:{dead}", {"t/example.com/z": 9e9})
         await redis.set(f"node:{dead}", "{}")
 
-    reaper = NodeReaper(redis, _StubRegistry())
-    await reaper.scan_once()
+    await NodeReaper(redis, RedisRegistry(redis)).scan_once()
 
     assert await redis.exists("node_sessions:alive") == 1
     assert await redis.exists("node_slots:alive") == 1

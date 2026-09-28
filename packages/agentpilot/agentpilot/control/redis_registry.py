@@ -40,6 +40,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from agentpilot.control.identity import identity_for, parts_of
+from agentpilot.observability.metrics import admission_refused_total
 from crawlpilot.session.admission import Admit
 from crawlpilot.session.registry import Opener
 from crawlpilot.spi.errors import LeaseConflict, NodeAtCapacity
@@ -140,8 +141,8 @@ class RedisRegistry:
         """Expiry for the bookkeeping keys themselves.
 
         Every write in these scripts used to be unbounded, and the leak was
-        measured: eighteen `node_sessions:*` keys against two live nodes, all
-        `TTL = -1`, sixteen belonging to containers that no longer existed. A
+        measured: seventeen `node_sessions:*` keys against two live nodes, all
+        `TTL = -1`, and not one of them belonging to a node that still existed. A
         registry whose keys outlive its processes reports a node as full forever
         after one unclean restart."""
         self._acquire = redis.register_script(_load("acquire_lease.lua"))
@@ -194,6 +195,7 @@ class RedisRegistry:
                     node_id=self._node_id,
                     max_contexts=self._max_contexts,
                 )
+                admission_refused_total.labels(budget="contexts").inc()
                 raise NodeAtCapacity(
                     f"this node already holds {self._max_contexts} browser contexts "
                     f"(max {self._max_contexts}); retry shortly"
@@ -368,6 +370,15 @@ class RedisRegistry:
         return _to_context_ref(
             identity, context_id, _decode(pid_raw), _decode(node_id), ContextState.IDLE
         )
+
+    async def live_slots(self) -> int:
+        """Counted the way `acquire_lease.lua` counts: swept of expiries first.
+
+        `ZCOUNT key now +inf` rather than `ZCARD`, so this reports what the next
+        acquire would see without needing a write to get there. A dead holder is
+        already gone from this number before anything has noticed it died."""
+
+        return int(await self._redis.zcount(slots_key(self._node_id), time.time(), "+inf"))
 
     async def force_release(self, identity: IdentityRef) -> None:
         await self._force_release(

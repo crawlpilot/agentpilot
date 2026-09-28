@@ -50,6 +50,16 @@ class RegistryProtocol(Protocol):
 
     async def force_release(self, identity: IdentityRef) -> None: ...
 
+    async def live_slots(self) -> int: ...
+    """How many browsers this node is counted as holding, by the same rule
+    admission uses to refuse one.
+
+    On the Protocol rather than only on the concrete classes because a gauge
+    derived from a different source than the decision will eventually disagree
+    with it -- and a metric that quietly disagrees with the thing it claims to
+    describe is worse than no metric. `snapshot()` is the different source: it
+    lists entries, which is not the same question once a slot can expire."""
+
 
 @dataclass
 class _Entry:
@@ -243,6 +253,9 @@ class Registry:
         if self._slots is not None:
             await self._slots.release(identity.slug())
         return entry.context_ref
+
+    async def live_slots(self) -> int:
+        return await self._slots.live() if self._slots is not None else len(self._entries)
 
     async def force_release(self, identity: IdentityRef) -> None:
         """Reaper-only: reclaims an ACTIVE lease whose owner let it expire

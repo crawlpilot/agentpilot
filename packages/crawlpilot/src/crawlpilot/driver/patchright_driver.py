@@ -23,7 +23,7 @@ import random
 import socket
 import tempfile
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, assert_never, cast
@@ -180,6 +180,52 @@ _REF_CONSUMING = (
 """Actions carrying a mandatory `ref`, so the batch loop knows to abort them once
 an earlier action has invalidated the refs it would use. `WaitAction`/
 `ScrollAction` are checked separately -- their `ref` is optional."""
+
+#: How long any single read of a page may take before the page is presumed dead.
+#:
+#: Playwright gives `page.content()` and `page.title()` no timeout of their own,
+#: and the aliveness guard in `_page_session` runs BEFORE the call -- so a
+#: renderer that dies *during* one leaves the await pending with nothing above it
+#: to give up. Generous, because this is a crash detector and not a performance
+#: budget: a slow page should finish, and only a gone one should trip it.
+_PAGE_READ_TIMEOUT_S = 30.0
+
+
+async def _page_read[T](awaitable: Awaitable[T], what: str, where: str) -> T:
+    """A read of the live page, bounded, so a dead renderer cannot hang a run.
+
+    MEASURED. A Walgreens replay crashed its renderer ten seconds after launch:
+
+        13:38:39  driver.browser_launched
+        13:38:49  driver.page_crashed  context_id=572133bf-... page_id=7e37f15b-...
+                  (nothing further, for as long as anyone watched)
+
+    The run was still `running` eight minutes later with no error and no step
+    trace, because `classify_current_page` calls `page.content()` before any step
+    runs and nothing -- not the extract, not `execute_on_session`, not `replay.py`
+    -- had a timeout. The `alive` check had already passed a moment earlier; it
+    catches a page that was dead on arrival, never one that dies mid-call.
+
+    `ContextCrashed` rather than a timeout error, because that is what this
+    actually is. It is classified PERMANENT in `agentpilot.agent.reliability`,
+    which is right: re-reading a page whose renderer is gone cannot succeed, and
+    the caller needs to rebuild the context rather than wait.
+    """
+
+    try:
+        return await asyncio.wait_for(awaitable, timeout=_PAGE_READ_TIMEOUT_S)
+    except TimeoutError as exc:
+        log.warning(
+            "driver.page_read_timed_out",
+            what=what,
+            url=where,
+            timeout_s=_PAGE_READ_TIMEOUT_S,
+        )
+        raise ContextCrashed(
+            f"{what} did not return within {_PAGE_READ_TIMEOUT_S:.0f}s -- the "
+            "renderer is presumed gone"
+        ) from exc
+
 
 def _collect_backend_ids(node: dict[str, Any], into: set[int]) -> None:
     """Every `backendNodeId` in a `DOM.describeNode(depth=-1)` payload.
@@ -1343,8 +1389,12 @@ class PatchrightDriver:
             # non-extract batches (interactive click/fill/etc. sequences),
             # and isn't refetched if a batch requests multiple formats.
             if result.page_title is None:
-                result.page_title = await live.dialogs.guard(live.page.title())
-            html = await live.dialogs.guard(live.page.content())
+                result.page_title = await _page_read(
+                    live.dialogs.guard(live.page.title()), "page.title()", live.page.url
+                )
+            html = await _page_read(
+                live.dialogs.guard(live.page.content()), "page.content()", live.page.url
+            )
             base_url = action.base_url or live.page.url
             live_hydration: dict[str, Any] | None = None
             if action.format == "structured_data":
@@ -2017,7 +2067,9 @@ class PatchrightDriver:
         if cctx.detect_blocks:
             html: str | None = None
             with contextlib.suppress(Exception):
-                html = await live.page.content()
+                html = await _page_read(
+                    live.page.content(), "page.content()", live.page.url
+                )
             # `live.page.url` is the browser's *final* location, so a silent
             # 200-redirect to a block page is already visible to the site
             # checkers (what Pulsar reads `activeDOMUrls.location` for).

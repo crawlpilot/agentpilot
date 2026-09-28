@@ -21,9 +21,9 @@
 -- uses (`zadd(key, now + timeout, id)`): a holder that dies stops being counted
 -- the moment its score passes `now`, with no reaper in the path and no cleanup
 -- to forget. The previous count came from scanning `active:*`, and no script
--- here set an expiry on anything -- so eighteen `node_sessions:*` keys survived
--- across two live nodes, sixteen belonging to containers that no longer
--- existed. A count taken over keys that nothing removes only ever grows.
+-- here set an expiry on anything -- so seventeen `node_sessions:*` keys survived
+-- against two live nodes, and not one of the seventeen belonged to a node that
+-- still existed. A count taken over keys that nothing removes only ever grows.
 --
 -- KEYS[1] = active:{identity-slug} hash
 -- KEYS[2] = node_slots:{node_id} sorted set, member = slug, score = deadline

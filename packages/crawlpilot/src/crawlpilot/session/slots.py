@@ -14,12 +14,13 @@ measured:
     $ grep -n "EXPIRE\\|PEXPIRE\\|SETEX" agentpilot/control/lua/*.lua
     (no matches)
     $ redis-cli SCARD live_nodes                            -> 2
-    $ redis-cli --scan --pattern 'node_sessions:*' | wc -l  -> 18
+    $ redis-cli --scan --pattern 'node_sessions:*' | wc -l  -> 17
 
 Not one Lua script set an expiry, so every key those scripts wrote outlived the
-process that wrote it -- sixteen of those eighteen belonged to containers that no
-longer existed, and every rebuild leaked another. A count taken by scanning keys
-that nothing removes only ever grows.
+process that wrote it. Cross-checking each key against `live_nodes` showed *none*
+of the seventeen belonged to a node that still existed -- they were entirely the
+remains of dead containers, and every rebuild added another. A count taken by
+scanning keys that nothing removes only ever grows.
 
 And it was not atomic. The count was read in Python, the browser opened after,
 and the registry's lock is per-*identity* -- so two different identities

@@ -29,6 +29,7 @@ import structlog
 
 from agentpilot.jobs.recipe_store import ClaimedRecipeRun, PostgresRecipeStore
 from agentpilot.llm.client import LLMConfig
+from agentpilot.observability.metrics import runs_deferred_total
 from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.v2.onboard import DEFAULT_ONBOARD_MAX_STEPS
 from crawlpilot.config import DEFAULTS, BrowserConfig
@@ -233,6 +234,7 @@ class RecipeWorkerLoop:
                 "recipe_worker_loop.run_deferred",
                 run_id=run.run_id, retry_after_s=delay, reason=str(exc),
             )
+            runs_deferred_total.inc()
             await self._store.defer_run(run.run_id, run.lock, str(exc), delay)
         except Exception as exc:
             log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
@@ -710,6 +712,7 @@ class RecipeWorkerLoop:
             recipe, unsettled = await self._await_assist(
                 run, recipe, asks, session=session, url=url,
                 llm_config=llm_config, timeout_s=cfg.assist_timeout_s,
+                unattended_s=cfg.assist_unattended_s,
             )
             outcome.unresolved = {**outcome.unresolved, **unsettled}
             review.unrepaired = {
@@ -810,6 +813,7 @@ class RecipeWorkerLoop:
         url: str,
         llm_config: LLMConfig,
         timeout_s: float,
+        unattended_s: float | None = None,
     ) -> tuple[Any, dict[str, str]]:
         """Park, wait for a person, apply what they said.
 
@@ -828,7 +832,21 @@ class RecipeWorkerLoop:
 
         from agentpilot.recipe.v2.assist import apply_resolutions, parse_resolutions
 
-        deadline = datetime.now(UTC) + timedelta(seconds=timeout_s)
+        # Two clocks. The park STARTS on the unattended budget and only reaches
+        # `timeout_s` if somebody actually turns up -- the studio calls
+        # `touch_park` on a timer while the assist panel is open, and that
+        # extends it to the full ceiling.
+        #
+        # It used to start at the ceiling, which made the two the same number
+        # and contradicted `assist_timeout_s`'s own docstring ("the ceiling for a
+        # tab nobody is looking at rather than the budget for doing the work").
+        # A question nobody ever saw held a warm identity, a browser and a proxy
+        # pin for 1800s on a node that fits four browsers -- and the heartbeat
+        # dutifully renewed the lease the whole time, because the worker was
+        # alive and waiting, which is exactly what it looks like when nobody is
+        # coming.
+        initial_s = timeout_s if unattended_s is None else min(unattended_s, timeout_s)
+        deadline = datetime.now(UTC) + timedelta(seconds=initial_s)
         parked = await self._store.park_run(
             run.run_id,
             run.lock,
@@ -843,7 +861,8 @@ class RecipeWorkerLoop:
 
         log.info(
             "recipe_worker_loop.parked",
-            run_id=run.run_id, fields=[a.field for a in asks], timeout_s=timeout_s,
+            run_id=run.run_id, fields=[a.field for a in asks],
+            unattended_s=initial_s, ceiling_s=timeout_s,
         )
 
         raw: list[dict[str, Any]] | None = None

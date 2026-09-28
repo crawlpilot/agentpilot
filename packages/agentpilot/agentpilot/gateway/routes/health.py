@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from agentpilot.gateway.wiring import Wiring, get_wiring
-from agentpilot.observability.metrics import contexts_active, contexts_idle
+from agentpilot.observability.metrics import (
+    contexts_active,
+    contexts_idle,
+    node_slots_live,
+)
 from crawlpilot.spi.lease import ContextState
 
 router = APIRouter(tags=["health"])
@@ -39,4 +43,5 @@ async def metrics(wiring: Wiring = Depends(get_wiring)) -> Response:
                 idle += 1
         contexts_active.set(active)
         contexts_idle.set(idle)
+        node_slots_live.set(await wiring.registry.live_slots())
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

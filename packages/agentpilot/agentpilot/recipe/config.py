@@ -37,6 +37,29 @@ class RecipeConfig:
     deadline out while the panel is open, so this is the ceiling for a tab
     nobody is looking at rather than the budget for doing the work."""
 
+    assist_unattended_s: float
+    """How long a parked run waits before anyone has shown up at all.
+
+    The second of two clocks, and the one that was missing. `assist_timeout_s`
+    describes itself as "the ceiling for a tab nobody is looking at rather than
+    the budget for doing the work" -- but `park_run` set `parked_until` to
+    `now + assist_timeout_s` the moment it parked, so the ceiling and the
+    unattended budget were the same 1800 seconds. A build that asked a question
+    nobody ever saw held a warm identity, a browser and a proxy pin for half an
+    hour, on a node that fits four browsers.
+
+    So the park now *starts* here, and `touch_park` raises it to
+    `assist_timeout_s` on every poll from an open panel. A person who turns up
+    gets the full, generous budget; a tab that was closed costs minutes instead
+    of half an hour. Nothing about answering an ask gets tighter -- the
+    difference is only in how long an unanswered one is carried.
+
+    This is the split firecrawl draws between `ttl_total` and
+    `ttl_without_activity`, arrived at from the same failure: the liveness signal
+    tracked the worker, which is alive and waiting either way, and nothing
+    tracked whether anyone was still on the other end.
+    """
+
     trace_prompts: bool
     """Whether to also persist what the model was SHOWN, not just what it
     proposed and why each proposal was rejected.
@@ -67,6 +90,9 @@ class RecipeConfig:
             ),
             assist_timeout_s=float(
                 os.environ.get("AGENTPILOT_RECIPE_ASSIST_TIMEOUT_S", "1800")
+            ),
+            assist_unattended_s=float(
+                os.environ.get("AGENTPILOT_RECIPE_ASSIST_UNATTENDED_S", "180")
             ),
             trace_prompts=os.environ.get(
                 "AGENTPILOT_RECIPE_TRACE_PROMPTS", "0"

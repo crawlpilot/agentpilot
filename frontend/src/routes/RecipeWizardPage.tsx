@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, SlidersHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -94,7 +94,34 @@ export function RecipeWizardPage() {
 
   const [step, setStep] = useState(0)
   const [furthest, setFurthest] = useState(0)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  // The browser session lives in the URL, not in component state.
+  //
+  // It used to be `useState(null)`: not in the URL, not in storage, not derived
+  // from anything the server knew. Reloading the tab lost the id while the
+  // browser kept running, so the page came back with no way to reach a session
+  // that was still open -- and that orphan went on holding one of the node's
+  // few context slots until something else reclaimed it. Losing your place in
+  // the UI should not cost a browser.
+  //
+  // `replace: true` because this is where you already are, not somewhere you
+  // navigated to; without it every session change adds a history entry and Back
+  // walks through them one at a time.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const sessionId = searchParams.get('session')
+  const setSessionId = useCallback(
+    (next: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const params = new URLSearchParams(prev)
+          if (next) params.set('session', next)
+          else params.delete('session')
+          return params
+        },
+        { replace: true },
+      )
+    },
+    [setSearchParams],
+  )
   const [pickMode, setPickMode] = useState<Exclude<PickerMode, 'single'>>('list')
   const [items, setItems] = useState<WorkItem[]>([])
   // The field just added, so it opens on its refinement controls. Choosing the

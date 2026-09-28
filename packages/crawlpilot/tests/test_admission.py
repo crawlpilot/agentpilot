@@ -208,3 +208,31 @@ async def test_a_failed_open_gives_its_slot_back() -> None:
     other = IdentityRef(key="t/example.com/b")
     await registry.acquire(other, "owner", 60.0, _opener(other, opened))
     assert opened[0] == 1
+
+
+async def test_live_slots_reports_what_admission_would_count() -> None:
+    """The gauge and the decision must read the same number.
+
+    Derived from the slot table, not from `snapshot()`. Those answer different
+    questions once a slot can expire -- `snapshot()` lists registry entries,
+    which outlive a deadline -- and a gauge that quietly disagrees with the rule
+    it claims to describe is worse than no gauge, because the disagreement is
+    what nobody would notice.
+    """
+
+    from crawlpilot.session.registry import Registry
+    from crawlpilot.session.slots import InMemorySlotTable
+    from crawlpilot.spi.identity import IdentityRef
+
+    registry = Registry(slots=InMemorySlotTable(), max_contexts=4, slot_ttl_seconds=60)
+    assert await registry.live_slots() == 0
+
+    opened = [0]
+    for i in range(3):
+        identity = IdentityRef(key=f"t/example.com/s{i}")
+        await registry.acquire(identity, "owner", 60.0, _opener(identity, opened))
+    assert await registry.live_slots() == 3
+
+    # Destroying one gives the budget back; releasing would not.
+    await registry.evict(IdentityRef(key="t/example.com/s0"))
+    assert await registry.live_slots() == 2

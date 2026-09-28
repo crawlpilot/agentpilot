@@ -293,8 +293,8 @@ async def test_a_warm_reuse_is_never_refused_even_at_the_limit() -> None:
 
 
 async def test_every_bookkeeping_key_carries_an_expiry() -> None:
-    """MEASURED: eighteen `node_sessions:*` keys against two live nodes, all
-    `TTL = -1`, sixteen belonging to containers that no longer existed. Not one
+    """MEASURED: seventeen `node_sessions:*` keys against two live nodes, all
+    `TTL = -1`, and not one of them belonging to a node still alive. Not one
     of the six Lua scripts set an expiry on anything it wrote, so a registry
     whose keys outlive its processes reported a node as full forever after a
     single unclean restart."""
@@ -328,3 +328,18 @@ async def test_destroying_a_context_is_what_frees_its_slot() -> None:
     assert await reg._redis.zcard("node_slots:node-a") == 0
     await reg.acquire(second, "owner", 60.0, lambda: _opener_for(second, opened))
     assert len(opened) == 2
+
+
+async def test_live_slots_excludes_a_holder_whose_deadline_passed() -> None:
+    """`ZCOUNT key now +inf`, so a dead holder is already out of the number
+    before anything has noticed it died -- no sweep, no reaper, no write."""
+
+    reg = _bounded(max_contexts=4, slot_ttl=0.05)
+    opened: list[int] = []
+    ident = identity_for("t", "example.com", "a")
+    await reg.acquire(ident, "owner", 60.0, lambda: _opener_for(ident, opened))
+    assert await reg.live_slots() == 1
+
+    await asyncio.sleep(0.06)
+
+    assert await reg.live_slots() == 0

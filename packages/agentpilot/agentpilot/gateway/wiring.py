@@ -428,8 +428,8 @@ class Wiring:
 
         # The count is NOT computed here any more. It used to be
         # `len(await registry.snapshot())`, which on Redis is a keyspace scan
-        # over keys that no script ever expired -- eighteen `node_sessions:*`
-        # against two live nodes, sixteen of them orphaned -- and it was read one
+        # over keys that no script ever expired -- seventeen `node_sessions:*`
+        # against two live nodes, every one orphaned -- and it was read one
         # step before the browser opened, so two identities could pass the same
         # check (`live=5 max_contexts=4`, in the log). Counting and claiming now
         # happen in one atomic step inside the registry backend.

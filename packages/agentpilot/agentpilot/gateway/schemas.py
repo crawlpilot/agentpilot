@@ -965,6 +965,24 @@ class RecipeRunOut(BaseModel):
     progress: dict[str, Any] | None = None
     """What a long-running build is doing right now. Written as it goes, so a
     caller polling a run that takes minutes has something to show."""
+    live_session_id: str | None = None
+    """The browser session this run is driving, for a client that wants to watch
+    it or pick on it.
+
+    Derived, not stored: the worker names it `recipe-run-{run_id}`, so it is
+    recoverable from the run alone and cannot go stale. It was already
+    deterministic and simply never left the worker, which is why a UI that lost
+    its own copy had no way back to a browser that was still running -- and the
+    session kept its slot for as long as the run lived.
+
+    `None` once the run has finished, because the browser is gone with it."""
+    live_view_ready: bool = False
+    """Whether that session's route currently resolves.
+
+    Distinct from `live_session_id` being set, and the distinction is the useful
+    part: the id is derivable at any time, while the route is a TTL'd key that a
+    lapsed heartbeat lets expire. A client told only the id would offer a
+    "watch" button that 404s. This says whether it would work right now."""
 
 
 class RecipeRunResponse(BaseModel):

@@ -15,10 +15,12 @@ independently on every `worker` process.
 
 from __future__ import annotations
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from agentpilot.auth.models import AuthedTenant
 from agentpilot.gateway.auth_deps import require_tenant_auth
+from agentpilot.gateway.routing import session_route_key
 from agentpilot.gateway.schemas import (
     RecipeAssistRequest,
     RecipeAssistResponse,
@@ -58,6 +60,8 @@ from agentpilot.recipe.config import RecipeConfig
 from agentpilot.recipe.v2.assist import PendingAsk, parse_resolutions
 from agentpilot.recipe.v2.validate import validate_document
 
+log = structlog.get_logger(__name__)
+
 router = APIRouter(tags=["recipes"])
 
 
@@ -90,8 +94,44 @@ def _recipe_out(recipe: RecipeRow) -> RecipeOut:
     )
 
 
-def _run_out(run: RecipeRunRow) -> RecipeRunOut:
+#: Statuses in which a browser may still be attached to the run. A finished run
+#: has released its session, so offering a live view would point at nothing.
+_LIVE_STATUSES = frozenset({"running", "needs_input"})
+
+
+def live_session_id_for(run: RecipeRunRow) -> str | None:
+    """The session id the worker gave this run, or None once it cannot have one.
+
+    Must match `recipe_worker_loop._process_run`'s `f"recipe-run-{run.run_id}"`
+    exactly. Derived on both sides from the run id rather than written down
+    anywhere, which is what makes it survive a client losing its state -- there
+    is nothing to lose.
+    """
+
+    return f"recipe-run-{run.run_id}" if run.status in _LIVE_STATUSES else None
+
+
+async def _live_view_ready(wiring: Wiring, session_id: str | None) -> bool:
+    """Whether the live-view route for this session resolves right now.
+
+    Best-effort: a Redis hiccup means "cannot confirm", which is reported as not
+    ready rather than raised. Polling a run must not fail because the optional
+    half of the answer was unavailable.
+    """
+
+    if session_id is None or wiring.redis is None:
+        return False
+    try:
+        return bool(await wiring.redis.exists(session_route_key(session_id)))
+    except Exception:  # noqa: BLE001 - an unavailable extra is not a failed poll
+        log.debug("recipes.live_view_probe_failed", session_id=session_id, exc_info=True)
+        return False
+
+
+def _run_out(run: RecipeRunRow, *, live_view_ready: bool = False) -> RecipeRunOut:
     return RecipeRunOut(
+        live_session_id=live_session_id_for(run),
+        live_view_ready=live_view_ready,
         run_id=run.run_id,
         recipe_id=run.recipe_id,
         tenant=run.tenant,
@@ -432,7 +472,12 @@ async def get_recipe_run(
     run = await store.get_run(run_id, authed.tenant)
     if run is None or run.recipe_id != recipe_id:
         raise HTTPException(status_code=404, detail=f"no run {run_id!r} for recipe {recipe_id!r}")
-    return RecipeRunResponse(success=True, data=_run_out(run))
+    return RecipeRunResponse(
+        success=True,
+        data=_run_out(
+            run, live_view_ready=await _live_view_ready(wiring, live_session_id_for(run))
+        ),
+    )
 
 
 @router.post("/{recipe_id}/runs/{run_id}/assist/request", response_model=RecipeAssistResponse)

@@ -49,6 +49,39 @@ reaper_lease_reclaimed_total = Counter(
     "agentpilot_reaper_lease_reclaimed_total", "ACTIVE leases force-released for expiring unrenewed"
 )
 
+admission_refused_total = Counter(
+    "agentpilot_admission_refused_total",
+    "New browsers refused because the node was already at its budget",
+    ["budget"],  # contexts | memory
+)
+"""How often the node said no.
+
+Worth watching in both directions. Zero forever means the ceiling is above what
+the hardware ever reaches, and the node will find its real limit by crashing
+instead -- which is what happened at 133 Chrome processes on a 7.65 GB host.
+Climbing steadily means the ceiling is below what the workload needs, and the
+runs being refused are now being deferred rather than failed, so the symptom is
+a slow queue rather than a visible error."""
+
+runs_deferred_total = Counter(
+    "agentpilot_runs_deferred_total",
+    "Recipe runs put back on the queue because a node was full, rather than failed",
+)
+"""The counter that distinguishes "busy" from "broken".
+
+These used to be `fail_run`s, indistinguishable from a genuine build failure in
+every dashboard -- three Walgreens onboards died inside 0.1s of being claimed and
+looked exactly like recipes that could not be built."""
+
+node_slots_live = Gauge(
+    "agentpilot_node_slots_live",
+    "Browsers this node is currently counted as holding",
+)
+"""Read from the slot set, so it counts what admission counts -- including the
+expiry rule. A slot whose deadline passed is gone from both, which is the point:
+a gauge derived from a different source than the decision would eventually
+disagree with it, and the disagreement is exactly what nobody would notice."""
+
 placement_decisions_total = Counter(
     "agentpilot_placement_decisions_total",
     "Gateway session-placement decisions by outcome",
