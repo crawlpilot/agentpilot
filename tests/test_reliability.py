@@ -78,3 +78,46 @@ def test_circuit_breaker_reset_clears_all() -> None:
     cb.reset()
     # After reset the consecutive count restarts, so we don't trip at 3rd - 2.
     assert cb.record_failure(FailureKind.LLM) == 1
+
+
+def test_node_capacity_is_transient_while_the_base_stays_permanent() -> None:
+    """A refusal that says "retry shortly" must not be classified never-retry.
+
+    `CapacityExhausted` is PERMANENT for its two original raisers, and rightly:
+    `placer.py`'s "no worker node has capacity" and the driver's "session
+    already has N tabs open" are not fixed by making the same call again. Node
+    admission is the opposite -- it refuses because N browsers are open at this
+    instant, and the ordinary reason the last one exists is a build that is about
+    to finish and hand the slot back.
+
+    Reusing the base class inverted that, and the cost was measured: three
+    Walgreens onboards failed inside 0.1s of being claimed, `this node already
+    holds 4 browser contexts (max 4); retry shortly` recorded as the terminal
+    error on runs that never opened a browser.
+
+    `NodeAtCapacity` is a subclass, so `isinstance` order decides this -- the
+    transient check has to come first or it inherits exactly what it exists to
+    escape.
+    """
+
+    from crawlpilot.spi.errors import CapacityExhausted, NodeAtCapacity
+
+    assert classify_error(NodeAtCapacity("full")) is ErrorClass.TRANSIENT
+    assert classify_error(CapacityExhausted("no node")) is ErrorClass.PERMANENT
+
+    strategy = RetryStrategy()
+    assert strategy.should_retry(NodeAtCapacity("full"))
+    assert not strategy.should_retry(CapacityExhausted("no node"))
+
+
+def test_node_capacity_is_indistinguishable_from_its_base_on_the_wire() -> None:
+    """The split is for in-process routing only. Every client-visible thing --
+    status, code, Retry-After -- stays identical, which is what makes
+    subclassing the right tool rather than a new sibling error."""
+
+    from crawlpilot.spi.errors import CapacityExhausted, NodeAtCapacity
+
+    assert issubclass(NodeAtCapacity, CapacityExhausted)
+    assert NodeAtCapacity.code == CapacityExhausted.code
+    assert NodeAtCapacity.http_status == CapacityExhausted.http_status == 503
+    assert NodeAtCapacity.retry_after_seconds == CapacityExhausted.retry_after_seconds == 5

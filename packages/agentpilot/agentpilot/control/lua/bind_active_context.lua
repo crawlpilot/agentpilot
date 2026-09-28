@@ -9,6 +9,7 @@
 -- ARGV[2] = context_id
 -- ARGV[3] = pid ("" if unknown)
 -- ARGV[4] = node_id
+-- ARGV[5] = key_ttl_seconds
 
 local current_lease = redis.call('HGET', KEYS[1], 'lease_id')
 if current_lease ~= ARGV[1] then
@@ -16,4 +17,5 @@ if current_lease ~= ARGV[1] then
 end
 
 redis.call('HSET', KEYS[1], 'context_id', ARGV[2], 'pid', ARGV[3], 'node_id', ARGV[4])
+redis.call('PEXPIRE', KEYS[1], math.floor(tonumber(ARGV[5]) * 1000))
 return 'OK'

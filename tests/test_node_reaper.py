@@ -126,3 +126,38 @@ async def test_lock_election_only_one_of_two_reapers_acts_per_cycle(redis, regis
     assert reaper_b._holding_lock is False
     # Only the lock holder (reaper_a) actually reaped.
     assert not await redis.exists("node:dead-node")
+
+
+async def test_keys_of_forgotten_nodes_are_swept() -> None:
+    """The measured leak: eighteen `node_sessions:*` keys against two live
+    nodes, sixteen of them belonging to containers that no longer existed, every
+    one at `TTL = -1`.
+
+    `scan_once` iterates `live_nodes` and `_reap_node` ends by removing the node
+    from it, so anything that leaves that set by another path -- an unclean
+    restart, a reap that died between the delete and the srem -- takes its keys
+    permanently out of reach. Nothing scanned for them, and nothing expired
+    them.
+    """
+
+    redis = fakeredis.aioredis.FakeRedis()
+    await redis.sadd("live_nodes", "alive")
+    await redis.set("capacity:alive", "1")
+    await redis.sadd("node_sessions:alive", "s-1")
+    await redis.zadd("node_slots:alive", {"t/example.com/a": 9e9})
+
+    # Three generations of dead containers, none of them in `live_nodes`.
+    for dead in ("ghost-1", "ghost-2", "ghost-3"):
+        await redis.sadd(f"node_sessions:{dead}", "s-x")
+        await redis.zadd(f"node_slots:{dead}", {"t/example.com/z": 9e9})
+        await redis.set(f"node:{dead}", "{}")
+
+    reaper = NodeReaper(redis, _StubRegistry())
+    await reaper.scan_once()
+
+    assert await redis.exists("node_sessions:alive") == 1
+    assert await redis.exists("node_slots:alive") == 1
+    for dead in ("ghost-1", "ghost-2", "ghost-3"):
+        assert await redis.exists(f"node_sessions:{dead}") == 0
+        assert await redis.exists(f"node_slots:{dead}") == 0
+        assert await redis.exists(f"node:{dead}") == 0

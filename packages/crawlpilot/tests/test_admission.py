@@ -11,47 +11,32 @@ from __future__ import annotations
 import pytest
 
 from crawlpilot.session.admission import NodeAdmission
-from crawlpilot.spi.errors import CapacityExhausted
+from crawlpilot.spi.errors import NodeAtCapacity
+from crawlpilot.spi.lease import ContextRef
 
 
-def admission(*, live: int, max_contexts: int = 4, used: float | None = 10.0,
-              watermark: float = 85.0) -> NodeAdmission:
-    async def _live() -> int:
-        return live
+def admission(*, used: float | None = 10.0, watermark: float = 85.0) -> NodeAdmission:
+    """`NodeAdmission` is the MEMORY half only.
 
-    return NodeAdmission(
-        live_contexts=_live,
-        max_contexts=max_contexts,
-        used_pct=lambda: used,
-        watermark_pct=watermark,
-    )
+    The context count moved into the registry backends -- `acquire_lease.lua`
+    for Redis, `SlotTable` for the in-memory one -- because counting and
+    claiming have to be one atomic step and neither could be, from here. See
+    `test_slots.py` for the budget's own tests.
+    """
+
+    return NodeAdmission(used_pct=lambda: used, watermark_pct=watermark)
 
 
 async def test_room_to_spare_admits() -> None:
-    await admission(live=1)()
-
-
-async def test_the_context_budget_refuses_before_the_node_is_full() -> None:
-    with pytest.raises(CapacityExhausted) as exc:
-        await admission(live=4, max_contexts=4)()
-    assert "4 browser contexts" in str(exc.value)
-
-
-async def test_a_full_node_refuses_rather_than_queueing_forever() -> None:
-    """`CapacityExhausted` already carries 503 + Retry-After 5, so a caller that
-    waits and retries is exactly right: the pressure is transient, and opening
-    anyway is what produced the crash."""
-
-    assert CapacityExhausted.http_status == 503
-    assert CapacityExhausted.retry_after_seconds == 5
+    await admission()("t/example.com/a")
 
 
 async def test_memory_refuses_even_with_contexts_to_spare() -> None:
     """The pathological case a count cannot see: four contexts is a fine number
     right up until one of them opens a page that takes a gigabyte."""
 
-    with pytest.raises(CapacityExhausted) as exc:
-        await admission(live=1, used=91.0)()
+    with pytest.raises(NodeAtCapacity) as exc:
+        await admission(used=91.0)("t/example.com/a")
     assert "91% memory" in str(exc.value)
 
 
@@ -60,15 +45,15 @@ async def test_an_unreadable_meminfo_does_not_refuse() -> None:
     read is not evidence of pressure, and refusing on it would make the whole
     node unusable everywhere but Linux."""
 
-    await admission(live=1, used=None)()
+    await admission(used=None)("t/example.com/a")
 
 
 async def test_exactly_at_the_watermark_refuses() -> None:
     """The watermark is the point at which the node is already in trouble, not
     a target to reach."""
 
-    with pytest.raises(CapacityExhausted):
-        await admission(live=1, used=85.0, watermark=85.0)()
+    with pytest.raises(NodeAtCapacity):
+        await admission(used=85.0, watermark=85.0)("t/example.com/a")
 
 
 # --- the registry only asks when it is about to LAUNCH ----------------------
@@ -107,7 +92,7 @@ async def test_reuse_of_a_warm_context_is_never_refused() -> None:
 
     asked = [0]
 
-    async def admit() -> None:
+    async def admit(slug: str) -> None:
         asked[0] += 1
 
     identity = _identity()
@@ -127,14 +112,14 @@ async def test_reuse_of_a_warm_context_is_never_refused() -> None:
 async def test_a_refusal_does_not_launch_anything() -> None:
     from crawlpilot.session.registry import Registry
 
-    async def admit() -> None:
-        raise CapacityExhausted("full")
+    async def admit(slug: str) -> None:
+        raise NodeAtCapacity("full")
 
     opened = [0]
     identity = _identity()
     registry = Registry(admit=admit)
 
-    with pytest.raises(CapacityExhausted):
+    with pytest.raises(NodeAtCapacity):
         await registry.acquire(identity, "owner", 60.0, _opener(identity, opened))
     assert opened[0] == 0
 
@@ -149,4 +134,77 @@ async def test_no_admit_hook_behaves_exactly_as_before() -> None:
     identity = _identity()
     registry = Registry()
     await registry.acquire(identity, "owner", 60.0, _opener(identity, opened))
+    assert opened[0] == 1
+
+
+# --- the budget, as the registry actually applies it -------------------------
+
+
+async def test_the_registry_refuses_a_fifth_browser_and_a_destroy_makes_room() -> None:
+    """End to end through `Registry`, not just the slot table.
+
+    A `release` must NOT make room -- it moves the context to IDLE and Chrome is
+    still running and still resident. Only `evict`, which is what the reaper
+    calls before `driver.close()`, gives the memory back. Freeing the slot at
+    release would let a node admit a fifth browser while four were live, which
+    is the same over-admission the budget exists to prevent, reached from the
+    other side.
+    """
+
+    from crawlpilot.session.registry import Registry
+    from crawlpilot.session.slots import InMemorySlotTable
+    from crawlpilot.spi.identity import IdentityRef
+
+    registry = Registry(slots=InMemorySlotTable(), max_contexts=2, slot_ttl_seconds=60)
+    opened = [0]
+    leases = {}
+
+    for i in range(2):
+        identity = IdentityRef(key=f"t/example.com/s{i}")
+        _ctx, lease = await registry.acquire(
+            identity, "owner", 60.0, _opener(identity, opened)
+        )
+        leases[identity] = lease
+    assert opened[0] == 2
+
+    third = IdentityRef(key="t/example.com/s2")
+    with pytest.raises(NodeAtCapacity):
+        await registry.acquire(third, "owner", 60.0, _opener(third, opened))
+    assert opened[0] == 2, "a refusal must not launch a browser"
+
+    # IDLE is still resident: the node is carrying it, so the budget still says so.
+    first = IdentityRef(key="t/example.com/s0")
+    await registry.release(leases[first].lease_id)
+    with pytest.raises(NodeAtCapacity):
+        await registry.acquire(third, "owner", 60.0, _opener(third, opened))
+
+    # Destroying it is what frees the slot.
+    await registry.evict(first)
+    await registry.acquire(third, "owner", 60.0, _opener(third, opened))
+    assert opened[0] == 3
+
+
+async def test_a_failed_open_gives_its_slot_back() -> None:
+    """The slot is claimed a line before the browser launches, so a launch that
+    raises would otherwise bill the node for a context that does not exist --
+    right only once the deadline passed, and the deadline is sized as a crash
+    backstop, not a retry interval."""
+
+    from crawlpilot.session.registry import Registry
+    from crawlpilot.session.slots import InMemorySlotTable
+    from crawlpilot.spi.identity import IdentityRef
+
+    slots = InMemorySlotTable()
+    registry = Registry(slots=slots, max_contexts=1, slot_ttl_seconds=60)
+
+    async def _explode() -> ContextRef:
+        raise RuntimeError("chrome would not start")
+
+    with pytest.raises(RuntimeError):
+        await registry.acquire(IdentityRef(key="t/example.com/a"), "owner", 60.0, _explode)
+
+    assert await slots.live() == 0
+    opened = [0]
+    other = IdentityRef(key="t/example.com/b")
+    await registry.acquire(other, "owner", 60.0, _opener(other, opened))
     assert opened[0] == 1

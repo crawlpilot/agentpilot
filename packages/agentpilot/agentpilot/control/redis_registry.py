@@ -35,15 +35,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from agentpilot.control.identity import identity_for, parts_of
 from crawlpilot.session.admission import Admit
 from crawlpilot.session.registry import Opener
-from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.errors import LeaseConflict, NodeAtCapacity
 from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
+
+log = structlog.get_logger(__name__)
 
 _LUA_DIR = Path(__file__).resolve().parent / "lua"
 def _identity_fields(identity: IdentityRef) -> tuple[str, str, str]:
@@ -75,6 +78,29 @@ def active_key(identity: IdentityRef) -> str:
     return f"active:{identity.slug()}"
 
 
+def slots_key(node_id: str) -> str:
+    """The node's browser slots: a sorted set whose SCORE is each slot's expiry.
+
+    Per node, not per tenant, because the budget being spent is this machine's
+    memory. See `acquire_lease.lua` for why the count lives in Redis rather than
+    in the caller, and `crawlpilot.session.slots` for the shape it borrows.
+    """
+
+    return f"node_slots:{node_id}"
+
+
+def _slug_of(key: str) -> str:
+    """The identity slug back out of an `active:` key.
+
+    `release` is handed a lease id and finds its key through `lease_owner:`, so
+    the slug has to come from the key rather than from an `IdentityRef` it was
+    never given. Cheaper and more honest than a second round trip to read the
+    hash fields that spell the same thing.
+    """
+
+    return key[len("active:"):] if key.startswith("active:") else key
+
+
 def _to_context_ref(
     identity: IdentityRef, context_id: str, pid_raw: str, node_id: str, state: ContextState
 ) -> ContextRef:
@@ -85,14 +111,39 @@ def _to_context_ref(
 
 
 class RedisRegistry:
-    def __init__(self, redis: Redis, *, admit: Admit | None = None) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        *,
+        admit: Admit | None = None,
+        node_id: str = "local",
+        max_contexts: int = 25,
+        slot_ttl_seconds: float = 900.0,
+        key_ttl_seconds: float = 3600.0,
+    ) -> None:
         self._redis = redis
         self._admit = admit
-        """Asked before a NEW browser is launched, never before a warm one is
-        reused. This is the registry a worker actually runs on when
-        `AGENTPILOT_REDIS_URL` is set, so without the hook here the gate does
-        not exist for the workload that needs it. See
+        """The memory watermark, asked before a NEW browser is launched. This is
+        the registry a worker actually runs on when `AGENTPILOT_REDIS_URL` is
+        set, so without the hook here the gate does not exist for the workload
+        that needs it. The CONTEXT COUNT is no longer asked here -- it moved into
+        `acquire_lease.lua`, where counting and claiming are one step. See
         `crawlpilot.session.admission`."""
+        self._node_id = node_id
+        self._max_contexts = max_contexts
+        self._slot_ttl_seconds = slot_ttl_seconds
+        """How long a slot survives with nothing refreshing it. A crash backstop
+        rather than a lifetime: the worker heartbeat renews every ~40s, so
+        anything still running refreshes this many times over and only a holder
+        that stopped existing ever reaches the deadline."""
+        self._key_ttl_seconds = key_ttl_seconds
+        """Expiry for the bookkeeping keys themselves.
+
+        Every write in these scripts used to be unbounded, and the leak was
+        measured: eighteen `node_sessions:*` keys against two live nodes, all
+        `TTL = -1`, sixteen belonging to containers that no longer existed. A
+        registry whose keys outlive its processes reports a node as full forever
+        after one unclean restart."""
         self._acquire = redis.register_script(_load("acquire_lease.lua"))
         self._bind = redis.register_script(_load("bind_active_context.lua"))
         self._renew = redis.register_script(_load("renew_lease.lua"))
@@ -107,21 +158,45 @@ class RedisRegistry:
         now = time.time()
         lease_id = LeaseId(str(uuid.uuid4()))
 
+        # The memory watermark first, in Python, because it cannot run inside
+        # Lua and because refusing on it costs nothing -- no slot has been
+        # claimed yet, so there is nothing to unwind.
+        if self._admit is not None:
+            await self._admit(identity.slug())
+
         try:
             reuse, context_id, pid_raw, node_id = await self._acquire(
-                keys=[key],
+                keys=[key, slots_key(self._node_id)],
                 args=[
                     owner,
                     ttl_seconds,
                     lease_id,
                     now,
                     *_identity_fields(identity),
+                    identity.slug(),
+                    self._max_contexts,
+                    self._slot_ttl_seconds,
+                    self._key_ttl_seconds,
                 ],
             )
         except ResponseError as exc:
             if "LEASE_CONFLICT" in str(exc):
                 raise LeaseConflict(
                     f"identity {identity.slug()!r} already has an active session"
+                ) from exc
+            if "CAPACITY_EXHAUSTED" in str(exc):
+                # Refused before the script mutated anything, so there is no
+                # half-taken lease to release here -- which is the difference
+                # between this and the Python check it replaces.
+                log.warning(
+                    "admission.refused_max_contexts",
+                    slug=identity.slug(),
+                    node_id=self._node_id,
+                    max_contexts=self._max_contexts,
+                )
+                raise NodeAtCapacity(
+                    f"this node already holds {self._max_contexts} browser contexts "
+                    f"(max {self._max_contexts}); retry shortly"
                 ) from exc
             raise
 
@@ -131,20 +206,44 @@ class RedisRegistry:
 
         if not reuse:
             try:
-                # Refused BEFORE the browser is launched, and inside the same
-                # try/except as the open itself -- the lease has already been
-                # taken in Redis by `_acquire` above, so declining without
-                # releasing it would strand the identity as permanently ACTIVE.
-                if self._admit is not None:
-                    await self._admit()
+                # Both gates have already run: the memory watermark above, and
+                # the context count inside `acquire_lease.lua` itself. Neither
+                # can refuse from here, which is why this block no longer has to
+                # unwind a lease it took before deciding it did not want one.
                 ctx = await opener()
             except BaseException:
-                await self._release(keys=[key], args=[lease_id, time.time()])
+                # The script claimed a slot and no browser came of it. Releasing
+                # the lease alone would leave the node billed for a context that
+                # does not exist until the deadline passed -- right eventually,
+                # wrong for as long as the TTL, and the TTL is sized as a crash
+                # backstop rather than a retry interval.
+                await self._release(
+                    keys=[key, slots_key(self._node_id)],
+                    args=[
+                        lease_id,
+                        time.time(),
+                        identity.slug(),
+                        self._slot_ttl_seconds,
+                        self._key_ttl_seconds,
+                    ],
+                )
+                # AFTER the release, not before: `release_lease.lua` re-adds the
+                # slot, because an IDLE context is a running browser and the node
+                # is still carrying it. That is right for an ordinary release and
+                # wrong here, where the open is what failed and there is nothing
+                # resident to account for.
+                await self._redis.zrem(slots_key(self._node_id), identity.slug())
                 raise
             try:
                 await self._bind(
                     keys=[key],
-                    args=[lease_id, ctx.context_id, str(ctx.pid) if ctx.pid else "", ctx.node_id],
+                    args=[
+                        lease_id,
+                        ctx.context_id,
+                        str(ctx.pid) if ctx.pid else "",
+                        ctx.node_id,
+                        self._key_ttl_seconds,
+                    ],
                 )
             except ResponseError as exc:
                 # See this module's docstring: the lease was reclaimed out
@@ -177,7 +276,16 @@ class RedisRegistry:
 
         now = time.time()
         try:
-            await self._renew(keys=[key], args=[lease_id, now])
+            await self._renew(
+                keys=[key, slots_key(self._node_id)],
+                args=[
+                    lease_id,
+                    now,
+                    _slug_of(key),
+                    self._slot_ttl_seconds,
+                    self._key_ttl_seconds,
+                ],
+            )
         except ResponseError as exc:
             raise KeyError(f"lease {lease_id!r} was reclaimed") from exc
 
@@ -204,7 +312,17 @@ class RedisRegistry:
         key_raw = await self._redis.get(owner_key)
         if key_raw is None:
             return
-        await self._release(keys=[_decode(key_raw)], args=[lease_id, time.time()])
+        key = _decode(key_raw)
+        await self._release(
+            keys=[key, slots_key(self._node_id)],
+            args=[
+                lease_id,
+                time.time(),
+                _slug_of(key),
+                self._slot_ttl_seconds,
+                self._key_ttl_seconds,
+            ],
+        )
 
     async def snapshot(self) -> list[tuple[IdentityRef, ContextRef, Lease | None, float | None]]:
         results: list[tuple[IdentityRef, ContextRef, Lease | None, float | None]] = []
@@ -241,7 +359,9 @@ class RedisRegistry:
 
     async def evict(self, identity: IdentityRef) -> ContextRef | None:
         key = active_key(identity)
-        context_id, pid_raw, node_id = await self._evict(keys=[key])
+        context_id, pid_raw, node_id = await self._evict(
+            keys=[key, slots_key(self._node_id)], args=[identity.slug()]
+        )
         context_id = _decode(context_id)
         if not context_id:
             return None
@@ -250,7 +370,9 @@ class RedisRegistry:
         )
 
     async def force_release(self, identity: IdentityRef) -> None:
-        await self._force_release(keys=[active_key(identity)], args=[time.time()])
+        await self._force_release(
+            keys=[active_key(identity)], args=[time.time(), self._key_ttl_seconds]
+        )
 
 
 def _decode(value: bytes | str | int | None) -> str:

@@ -545,3 +545,71 @@ async def test_the_v2_document_reaches_the_worker(store: PostgresRecipeStore) ->
     assert fetched is not None
     assert fetched.document is not None
     assert fetched.document["fields"]["price"]["type"]["value_type"] == "price"
+
+
+async def test_defer_run_requeues_later_without_spending_an_attempt(
+    store: PostgresRecipeStore,
+) -> None:
+    """A capacity refusal says nothing about the run, so it must not count.
+
+    `fail_run` is the wrong tool twice: it requeues immediately, so three
+    retries burn in about three seconds against a build that holds its browser
+    for minutes, and it counts each one, so the run is terminally failed before
+    the pressure it hit has had time to ease. Three Walgreens onboards died that
+    way inside 0.1s of being claimed.
+    """
+
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    run_id = await store.queue_run(recipe_id=recipe.recipe_id, tenant=tenant, kind="build")
+
+    (claimed,) = await store.claim_runs_batch(10)
+    await store.defer_run(run_id, claimed.lock, "node full", retry_after_seconds=300)
+
+    fetched = await store.get_run(run_id, tenant)
+    assert fetched is not None
+    assert fetched.status == "queued"
+    assert fetched.parked_until is not None
+
+    # The attempt the claim spent is given back, so a run can be deferred
+    # indefinitely without ever exhausting the budget that exists to stop a run
+    # which keeps *breaking*.
+    async with store._pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute("SELECT attempts FROM recipe_runs WHERE run_id = %s", (run_id,))
+        row = await cur.fetchone()
+    assert row is not None and row[0] == 0
+
+
+async def test_a_deferred_run_is_not_claimable_before_its_time(
+    store: PostgresRecipeStore,
+) -> None:
+    """The delay has to be real, or deferring is just a slower spin.
+
+    `claim_runs_batch` honours `parked_until` for queued rows now. Without that,
+    the worker re-claims the run on its very next poll and meets the same full
+    node, which is the busy-wait the old immediate requeue produced.
+    """
+
+    tenant = _tenant()
+    recipe = await store.create_recipe(
+        tenant=tenant, name="n", url_pattern="https://x.test", field_schema=SCHEMA,
+        schedule_interval_seconds=None,
+    )
+    run_id = await store.queue_run(recipe_id=recipe.recipe_id, tenant=tenant, kind="build")
+
+    (claimed,) = await store.claim_runs_batch(10)
+    await store.defer_run(run_id, claimed.lock, "node full", retry_after_seconds=300)
+
+    assert [r.run_id for r in await store.claim_runs_batch(10) if r.run_id == run_id] == []
+
+    # Once the park elapses it is ordinary queued work again.
+    async with store._pool.connection() as conn, conn.cursor() as cur:
+        await cur.execute(
+            "UPDATE recipe_runs SET parked_until = now() - INTERVAL '1 second' "
+            "WHERE run_id = %s",
+            (run_id,),
+        )
+    assert [r.run_id for r in await store.claim_runs_batch(10) if r.run_id == run_id] == [run_id]

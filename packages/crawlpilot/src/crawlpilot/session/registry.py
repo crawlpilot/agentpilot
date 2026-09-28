@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 from crawlpilot.session.admission import Admit
 from crawlpilot.session.lease import new_lease
 from crawlpilot.session.lease import renew as _renew_lease
+from crawlpilot.session.slots import SlotTable
 from crawlpilot.spi.errors import LeaseConflict
 from crawlpilot.spi.identity import IdentityRef
 from crawlpilot.spi.lease import ContextRef, ContextState, Lease, LeaseId
@@ -61,11 +62,39 @@ class _Entry:
 
 
 class Registry:
-    def __init__(self, *, admit: Admit | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        admit: Admit | None = None,
+        slots: SlotTable | None = None,
+        slot_ttl_seconds: float = 900.0,
+        max_contexts: int = 25,
+    ) -> None:
         self._admit = admit
         """Asked before a NEW browser is launched, never before a warm one is
         reused -- reuse costs no memory, so refusing it would be pure loss. See
         `crawlpilot.session.admission`."""
+        self._slots = slots
+        """The same table `admit` claims into, held here so the slot's deadline
+        tracks the browser rather than the request that opened it. A context
+        outlives the lease that created it -- it stays warm through IDLE -- so
+        the slot is refreshed on renewal and surrendered only at destroy. Making
+        it expire with the lease would free the budget while Chrome was still
+        resident, which is the accounting error in the other direction."""
+        self._slot_ttl_seconds = slot_ttl_seconds
+        """How long a slot survives with nothing refreshing it.
+
+        A backstop, not a lifetime. The heartbeat renews every `stale_after/3`
+        (~40s by default), so anything still running refreshes this many times
+        over; the only thing that reaches the deadline is a holder that stopped
+        existing. Sized well above the reaper's idle TTL so an ordinary warm
+        context is never un-counted while it is still resident."""
+        self._max_contexts = max_contexts
+        """How many browsers this node may hold at once.
+
+        Enforced by the slot table rather than by a caller comparing a count it
+        read a moment ago -- the check and the claim are one critical section,
+        which is the whole correction. See `slots.py`."""
         self._entries: dict[IdentityRef, _Entry] = {}
         self._lease_owner: dict[LeaseId, IdentityRef] = {}
         self._identity_locks: dict[IdentityRef, asyncio.Lock] = {}
@@ -118,8 +147,28 @@ class Registry:
                 # one moment worth refusing at: the reaper can only take back
                 # what is IDLE, and under load nothing is.
                 if self._admit is not None:
-                    await self._admit()
-                context_ref = await opener()
+                    await self._admit(identity.slug())
+                if self._slots is not None:
+                    # Counted and claimed together. The identity lock above
+                    # cannot do this job: it serializes one identity against
+                    # itself, and the callers that race for the last slot are
+                    # by definition *different* identities.
+                    await self._slots.claim(
+                        identity.slug(),
+                        ttl_seconds=self._slot_ttl_seconds,
+                        max_slots=self._max_contexts,
+                    )
+                try:
+                    context_ref = await opener()
+                except BaseException:
+                    # The slot was claimed a line ago and no browser came of it.
+                    # Leaving it claimed would bill the node for a context that
+                    # does not exist until the deadline passed -- correct
+                    # eventually, wrong for as long as the TTL, and the TTL is
+                    # sized as a crash backstop rather than a retry interval.
+                    if self._slots is not None:
+                        await self._slots.release(identity.slug())
+                    raise
                 entry = _Entry(context_ref=context_ref)
                 self._entries[identity] = entry
             else:
@@ -144,7 +193,12 @@ class Registry:
                 self._lease_owner.pop(lease_id, None)
                 raise KeyError(f"lease {lease_id!r} was reclaimed")
             entry.lease = _renew_lease(entry.lease)
-            return entry.lease
+        # Outside the identity lock: the slot table has its own, and nesting two
+        # locks in one order here and the other order anywhere else is how a
+        # deadlock gets built.
+        if self._slots is not None:
+            await self._slots.renew(identity.slug(), ttl_seconds=self._slot_ttl_seconds)
+        return entry.lease
 
     async def release(self, lease_id: LeaseId) -> None:
         identity = self._lease_owner.pop(lease_id, None)
@@ -183,7 +237,12 @@ class Registry:
                 return None
             if entry.lease is not None:
                 self._lease_owner.pop(entry.lease.lease_id, None)
-            return entry.context_ref
+        # Destroy is the only thing that frees a slot. `release` moves ACTIVE ->
+        # IDLE and the browser is still running and still resident, so the node
+        # is still carrying it.
+        if self._slots is not None:
+            await self._slots.release(identity.slug())
+        return entry.context_ref
 
     async def force_release(self, identity: IdentityRef) -> None:
         """Reaper-only: reclaims an ACTIVE lease whose owner let it expire

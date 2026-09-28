@@ -21,6 +21,7 @@ from crawlpilot.spi.errors import (
     CapacityExhausted,
     ContextCrashed,
     NavigationTimeout,
+    NodeAtCapacity,
     StaleRefError,
     TabNotFound,
 )
@@ -36,7 +37,10 @@ class ErrorClass(Enum):
 # Retried on the idempotent paths; VALIDATION/PERMANENT fail fast.
 _RETRYABLE = frozenset({ErrorClass.TRANSIENT, ErrorClass.TIMEOUT})
 
-_TRANSIENT_TYPES = (StaleRefError, NavigationTimeout)
+# `NodeAtCapacity` is a `CapacityExhausted`, so it must be tested FIRST --
+# `isinstance` against the base would otherwise claim it before this line is
+# reached, and it would inherit exactly the classification it exists to escape.
+_TRANSIENT_TYPES = (StaleRefError, NavigationTimeout, NodeAtCapacity)
 _PERMANENT_TYPES = (CapacityExhausted, TabNotFound, ContextCrashed)
 
 
@@ -54,6 +58,13 @@ def classify_error(exc: BaseException) -> ErrorClass:
     if isinstance(exc, _TRANSIENT_TYPES):
         return ErrorClass.TRANSIENT
     if isinstance(exc, _PERMANENT_TYPES):
+        # Both original raisers are genuinely unfixable by retrying the same
+        # call: `placer.py`'s "no worker node has capacity" and the driver's
+        # "session already has N tabs open". Node admission is not -- it refuses
+        # because four browsers are open at this instant, and the ordinary
+        # reason the fourth exists is a build that will finish. That is why it
+        # is a separate class in `_TRANSIENT_TYPES` above rather than an
+        # exception carved out here.
         return ErrorClass.PERMANENT
     # Network-ish errors from the LLM HTTP client (httpx) surface by name.
     name = type(exc).__name__.lower()

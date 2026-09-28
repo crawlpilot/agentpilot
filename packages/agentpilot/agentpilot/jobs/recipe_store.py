@@ -675,6 +675,7 @@ class PostgresRecipeStore:
                     WITH next AS (
                         SELECT run_id FROM recipe_runs
                         WHERE status = 'queued'
+                          AND (parked_until IS NULL OR parked_until <= now())
                         ORDER BY created_at ASC
                         FOR UPDATE SKIP LOCKED
                         LIMIT %s
@@ -1018,6 +1019,55 @@ class PostgresRecipeStore:
                     lock,
                 ),
             )
+
+    async def defer_run(
+        self, run_id: str, lock: str, error: str, retry_after_seconds: float
+    ) -> None:
+        """Put a run back on the queue, not before `retry_after_seconds`, and
+        **without spending an attempt**.
+
+        For a refusal that says nothing about the run: the node was full at the
+        instant it was claimed. `fail_run` is the wrong tool twice over -- it
+        requeues immediately, so three retries burn in about three seconds
+        against a build that holds its browser for minutes, and it counts each
+        one, so the run is terminally failed before the pressure it hit has had
+        time to ease.
+
+        MEASURED. Three Walgreens onboards died inside 0.1s of being claimed
+        with `this node already holds 4 browser contexts (max 4); retry
+        shortly` -- the final error on runs that never opened a browser, next to
+        an Amazon build that was minutes from finishing and about to free the
+        very slot they wanted.
+
+        `attempts - 1` undoes the increment `claim_runs_batch` applied on the
+        way in. Being refused is not a failed attempt, and the budget exists to
+        stop a run that keeps *breaking*, not one that keeps arriving early.
+        Clamped at zero so a row can never go negative if this is somehow
+        reached twice.
+
+        `parked_until` is reused rather than given a sibling column: it already
+        means "not before", `claim_runs_batch` now honours it for queued rows,
+        and `resume_run` already clears it. The status stays `queued` because
+        nobody is being asked anything -- `needs_input` means a person owes the
+        run an answer, and conflating the two would park a capacity wait behind
+        the assist UI.
+        """
+
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE recipe_runs
+                       SET status = 'queued',
+                           lock = NULL,
+                           locked_at = NULL,
+                           attempts = GREATEST(attempts - 1, 0),
+                           parked_until = now() + %s * INTERVAL '1 second',
+                           error = %s
+                     WHERE run_id = %s AND lock = %s AND status = 'running'
+                    """,
+                    (retry_after_seconds, error, run_id, lock),
+                )
 
     async def fail_run(self, run_id: str, lock: str, error: str, max_attempts: int = 3) -> None:
         from psycopg.rows import dict_row

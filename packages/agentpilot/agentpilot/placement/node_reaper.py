@@ -105,6 +105,45 @@ class NodeReaper:
             if await self._redis.exists(f"capacity:{node_id}"):
                 continue
             await self._reap_node(node_id)
+        await self._sweep_orphaned_node_keys()
+
+    async def _sweep_orphaned_node_keys(self) -> None:
+        """Per-node keys belonging to nodes `live_nodes` has already forgotten.
+
+        The loop above can only ever reach a node that is still a member, and
+        `_reap_node` ends by removing it -- so anything that leaves `live_nodes`
+        by any other path takes its keys out of reach permanently. Nothing was
+        watching that gap, and the keys carried no expiry, so they simply
+        accumulated.
+
+        MEASURED, on a two-worker host:
+
+            $ redis-cli SCARD live_nodes                            -> 2
+            $ redis-cli --scan --pattern 'node_sessions:*' | wc -l  -> 18
+
+        Sixteen belonged to containers that no longer existed, every one at
+        `TTL = -1`, and each rebuild added another. That mattered beyond
+        untidiness while admission counted by scanning the keyspace: a node
+        could be reported full by the remains of nodes that were gone.
+
+        Reconciliation rather than an assertion, in the shape
+        `concurrency-queue-reconciler.ts` uses -- the two views are expected to
+        drift, and the loop repairs the difference instead of trusting either.
+        It logs what it removed, because a sweep that silently tidies up hides
+        whatever produced the mess.
+        """
+
+        live = {_decode(n) for n in await self._redis.smembers("live_nodes")}
+        orphaned: list[str] = []
+        for prefix in ("node_sessions:", "node_slots:", "node:", "capacity:"):
+            async for raw_key in self._redis.scan_iter(match=f"{prefix}*"):
+                key = _decode(raw_key)
+                if key[len(prefix):] not in live:
+                    orphaned.append(key)
+        if not orphaned:
+            return
+        await self._redis.delete(*orphaned)
+        log.warning("node_reaper.orphaned_keys_swept", count=len(orphaned), keys=orphaned[:20])
 
     async def _reap_node(self, node_id: str) -> None:
         session_ids = [_decode(s) for s in await self._redis.smembers(f"node_sessions:{node_id}")]

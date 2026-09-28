@@ -380,6 +380,7 @@ class Wiring:
         from crawlpilot.session.admission import NodeAdmission
         from crawlpilot.session.reaper import Reaper, read_meminfo_used_pct
         from crawlpilot.session.registry import Registry, RegistryProtocol
+        from crawlpilot.session.slots import InMemorySlotTable
         from crawlpilot.session.warm_pool import KeepaliveLoop, WarmPool
         from crawlpilot.spi.driver import BrowserDriver
 
@@ -415,28 +416,46 @@ class Wiring:
         # `crawlpilot.session.admission`.
         max_contexts = int(os.environ.get("AGENTPILOT_MAX_CONTEXTS_PER_NODE", "25"))
         watermark = float(os.environ.get("AGENTPILOT_MEM_WATERMARK_PCT", "85"))
+        idle_ttl = float(os.environ.get("AGENTPILOT_IDLE_TTL_SECONDS", "300"))
 
-        self.registry: RegistryProtocol
+        # A slot outlives the lease that opened it, because the browser does:
+        # `release` moves a context to IDLE and Chrome keeps running. So the
+        # deadline has to clear the reaper's idle TTL comfortably, or a warm
+        # context would fall out of the count while still resident. Three times
+        # the idle TTL, floored at 15 minutes -- a crash backstop, not a
+        # lifetime, since the worker heartbeat refreshes it every ~40s.
+        slot_ttl = max(idle_ttl * 3, 900.0)
 
-        async def _live_contexts() -> int:
-            return len(await self.registry.snapshot())
+        # The count is NOT computed here any more. It used to be
+        # `len(await registry.snapshot())`, which on Redis is a keyspace scan
+        # over keys that no script ever expired -- eighteen `node_sessions:*`
+        # against two live nodes, sixteen of them orphaned -- and it was read one
+        # step before the browser opened, so two identities could pass the same
+        # check (`live=5 max_contexts=4`, in the log). Counting and claiming now
+        # happen in one atomic step inside the registry backend.
+        admit = NodeAdmission(used_pct=read_meminfo_used_pct, watermark_pct=watermark)
 
-        admit = NodeAdmission(
-            live_contexts=_live_contexts,
-            max_contexts=max_contexts,
-            used_pct=read_meminfo_used_pct,
-            watermark_pct=watermark,
-        )
-        self.registry = (
-            RedisRegistry(self.redis, admit=admit)
+        self.registry: RegistryProtocol = (
+            RedisRegistry(
+                self.redis,
+                admit=admit,
+                node_id=self.node_id,
+                max_contexts=max_contexts,
+                slot_ttl_seconds=slot_ttl,
+            )
             if self.redis is not None
-            else Registry(admit=admit)
+            else Registry(
+                admit=admit,
+                slots=InMemorySlotTable(),
+                max_contexts=max_contexts,
+                slot_ttl_seconds=slot_ttl,
+            )
         )
 
         self.reaper = Reaper(
             self.registry,
             self.driver,
-            idle_ttl_seconds=float(os.environ.get("AGENTPILOT_IDLE_TTL_SECONDS", "300")),
+            idle_ttl_seconds=idle_ttl,
             scan_interval_seconds=float(
                 os.environ.get("AGENTPILOT_REAPER_INTERVAL_SECONDS", "15")
             ),

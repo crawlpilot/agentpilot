@@ -143,6 +143,32 @@ class CapacityExhausted(DriverError):
     retry_after_seconds: ClassVar[int | None] = 5
 
 
+class NodeAtCapacity(CapacityExhausted):
+    """This *node* is full right now -- a refusal that expects to be retried.
+
+    Subclasses `CapacityExhausted` so every client-visible thing about it is
+    unchanged: same 503, same `Retry-After`, same `code` on the wire. What it
+    buys is a distinction the *caller* needs and could not make before.
+
+    `agentpilot.agent.reliability` lists `CapacityExhausted` in
+    `_PERMANENT_TYPES`, and that was right for the two places that raised it:
+    `placer.py`'s "no worker node has capacity" and the driver's "session
+    already has N tabs open". Neither is fixed by retrying the same call, so
+    failing fast is correct.
+
+    Node admission is the opposite. It refuses because four browsers are open
+    *at this instant*, and the ordinary reason the fourth exists is that a build
+    is halfway through -- it will finish, and the slot will free. Reusing an
+    exception classified PERMANENT inverted its meaning, and the result was
+    measured: three Walgreens onboards failed within 0.1s of being claimed, with
+    `this node already holds 4 browser contexts (max 4); retry shortly` as the
+    terminal error on a run that never opened a browser.
+
+    So the class exists to be classified TRANSIENT without changing what
+    `CapacityExhausted` means anywhere it was already raised.
+    """
+
+
 class EgressBlocked(DriverError):
     code: ClassVar[str] = "EGRESS_BLOCKED"
     http_status: ClassVar[int] = 403

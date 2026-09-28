@@ -41,7 +41,7 @@ from crawlpilot.session.interactive import (
 )
 from crawlpilot.session.registry import RegistryProtocol
 from crawlpilot.spi.driver import BrowserDriver
-from crawlpilot.spi.errors import LeaseConflict
+from crawlpilot.spi.errors import LeaseConflict, NodeAtCapacity
 
 if TYPE_CHECKING:
     from agentpilot.placement.placer import SessionPlacer
@@ -218,6 +218,22 @@ class RecipeWorkerLoop:
         heartbeat = asyncio.create_task(self._heartbeat(run))
         try:
             await self._process_run(run)
+        except NodeAtCapacity as exc:
+            # Nothing is wrong with this run: the node was full at the instant it
+            # was claimed, and the usual reason is a neighbouring build that is
+            # about to finish and hand back the slot. Deferring costs a delay;
+            # failing costs the run.
+            #
+            # Deliberately BEFORE the `Exception` arm, because `NodeAtCapacity`
+            # is an ordinary exception and would otherwise be failed like any
+            # other -- which is exactly what happened to three Walgreens
+            # onboards, each dead within 0.1s of being claimed.
+            delay = float(exc.retry_after_seconds or 5)
+            log.info(
+                "recipe_worker_loop.run_deferred",
+                run_id=run.run_id, retry_after_s=delay, reason=str(exc),
+            )
+            await self._store.defer_run(run.run_id, run.lock, str(exc), delay)
         except Exception as exc:
             log.warning("recipe_worker_loop.run_failed", run_id=run.run_id, error=str(exc))
             await self._store.fail_run(run.run_id, run.lock, str(exc))
@@ -454,7 +470,14 @@ class RecipeWorkerLoop:
                     lease_ttl_seconds=self._lease_ttl_seconds,
                 )
             except LeaseConflict:
+                # This identity is busy; another may be free.
                 continue
+            # `NodeAtCapacity` is deliberately NOT caught here. A lease conflict
+            # is about one identity, so trying the next slot is the right move;
+            # capacity is about the whole node, so the next seven slots would be
+            # refused for the same reason and the cold-identity fallback below
+            # would be refused too. It propagates to `_process`, which defers the
+            # run rather than spending eight refusals to fail it.
 
         # Every slot busy. A cold identity still runs, and is far more likely
         # to be blocked -- but a run that executes and reports being blocked
