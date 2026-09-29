@@ -39,9 +39,10 @@ See `plan.md` for the full design rationale and phased build history.
 ### Prerequisites
 
 - Docker + Docker Compose v2 (`docker compose version`)
-- On Apple Silicon / other arm64 hosts: the `worker` image is pinned to `linux/amd64` (real Chrome
-  is amd64-only), so Docker Desktop will emulate it via Rosetta/QEMU — expect `worker`/`worker-2` to
-  build and boot noticeably slower than `gateway`. This is intentional, not a misconfiguration.
+- The `worker` image builds for your host's own architecture: Google Chrome on `linux/amd64`, and
+  Playwright's Chromium on arm64 (Apple Silicon) — Google ships no arm64 Linux Chrome. It is not
+  emulated: an emulated amd64 Chrome fails Akamai-class bot checks that native Chromium on the same
+  machine passes. To force amd64 anyway, `export DOCKER_DEFAULT_PLATFORM=linux/amd64` before `make base`.
 
 ### 1. Configure environment
 

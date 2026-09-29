@@ -95,15 +95,19 @@ def _compose_css(target: Locator) -> str:
     return f"{target.within.selector} {target.selector or ''}".strip()
 
 
-async def _resolve_ref(locator: Locator, ctx: StepContext) -> str | None:
-    """Turn an `ax_role`/`text` locator into a live ref. Returns None when it
-    matches nothing -- the caller decides whether that is fatal."""
+_OPTIONAL_RESOLVE_WAIT_MS = 5_000
+"""Cap on how long an *optional* step waits for its target to appear.
 
+Optional steps are mostly things that are legitimately absent -- a cookie banner
+already dismissed, a region prompt that did not fire -- so paying the full step
+timeout for each would tax every replay. Twice the delay measured below."""
+
+_RESOLVE_POLL_S = 0.25
+
+
+def _match_ref(snapshot: Any, locator: Locator) -> str | None:
     from agentpilot.recipe.v2.tree import find_nodes, node_ref
 
-    snapshot = await ctx.reader.snapshot()
-    if snapshot is None:
-        return None
     matches = find_nodes(snapshot, locator)
     if not matches:
         return None
@@ -111,6 +115,37 @@ async def _resolve_ref(locator: Locator, ctx: StepContext) -> str | None:
     if not -len(matches) <= index < len(matches):
         return None
     return node_ref(matches[index])
+
+
+async def _resolve_ref(locator: Locator, ctx: StepContext, wait_ms: int = 0) -> str | None:
+    """Turn an `ax_role`/`text` locator into a live ref, waiting up to `wait_ms`
+    for it to appear. Returns None when it never matches -- the caller decides
+    whether that is fatal.
+
+    The wait is what a css target already gets from the driver's own
+    actionability wait, and what this path lacked: it resolved against one
+    snapshot and gave up. MEASURED on cos.com in the Docker worker, recipe
+    96674d4b replay: straight after the "Continue to United States" click the
+    page is still re-rendering, and the snapshot held **0** "Details &
+    Description" buttons; 2.5s later it held 1. The click failed with "target
+    matched no element", so the specs drawer never opened and
+    `product_specifications` came back empty. On a faster machine the same
+    snapshot already had it, which is why onboarding passed and replay did not.
+    """
+
+    deadline = time.monotonic() + wait_ms / 1000
+    while True:
+        snapshot = await ctx.reader.snapshot()
+        if snapshot is not None:
+            ref = _match_ref(snapshot, locator)
+            if ref is not None:
+                return ref
+        if time.monotonic() >= deadline:
+            return None
+        # The cached snapshot is the thing that is stale -- drop it so the next
+        # poll sees the page as it is now.
+        ctx.reader.invalidate()
+        await asyncio.sleep(_RESOLVE_POLL_S)
 
 
 async def build_action(step: Step, ctx: StepContext) -> spi_actions.Action:  # noqa: C901
@@ -152,7 +187,8 @@ async def build_action(step: Step, ctx: StepContext) -> spi_actions.Action:  # n
                 )
             selector = _compose_css(target)
         else:
-            ref = await _resolve_ref(target, ctx)
+            wait_ms = min(timeout, _OPTIONAL_RESOLVE_WAIT_MS) if step.optional else timeout
+            ref = await _resolve_ref(target, ctx, wait_ms=wait_ms)
             if ref is None:
                 raise StepError(f"{op}: target matched no element")
 
@@ -253,6 +289,44 @@ _MUTATING = frozenset({
 })
 
 
+_STALE_REF_RETRIES = 2
+"""Fresh-snapshot re-resolutions allowed when a ref goes stale mid-step."""
+
+
+async def _build_and_execute(step: Step, ctx: StepContext) -> None:
+    """Compile and dispatch one step, re-resolving a ref that went stale.
+
+    A tree-resolved target is a ref into one snapshot, and a page that
+    re-renders between that snapshot and the click leaves it pointing at a node
+    that no longer exists. MEASURED on cos.com in the Docker worker, recipe
+    96674d4b: once the resolver waited for "Details & Description" to render,
+    the click itself failed with `StaleRefError` -- the same post-country-dialog
+    re-render, now landing between resolve and click instead of before resolve.
+
+    That error means exactly one thing (take a fresh snapshot and resolve
+    again), so it is answered here, bounded, rather than spending the step's own
+    `retry` budget -- which a recipe author sets for failures of the *action*,
+    and which is 1 by default.
+    """
+
+    from crawlpilot.spi.errors import StaleRefError
+
+    for stale in range(_STALE_REF_RETRIES + 1):
+        action = await build_action(step, ctx)
+        try:
+            await execute_on_session(
+                ctx.session, [action], registry=ctx.registry, driver=ctx.driver
+            )
+            return
+        except StaleRefError:
+            if stale == _STALE_REF_RETRIES or step.target is None or step.target.kind in (
+                "css",
+                "xpath",
+            ):
+                raise
+            ctx.reader.invalidate()
+
+
 async def dispatch_step(step: Step, ctx: StepContext, index: int = 0) -> StepOutcome:
     """Run one step and report what happened.
 
@@ -280,10 +354,7 @@ async def dispatch_step(step: Step, ctx: StepContext, index: int = 0) -> StepOut
 
     for attempt in range(max(1, attempts)):
         try:
-            action = await build_action(step, ctx)
-            await execute_on_session(
-                ctx.session, [action], registry=ctx.registry, driver=ctx.driver
-            )
+            await _build_and_execute(step, ctx)
             if step.op in _MUTATING:
                 ctx.reader.invalidate()
             return _done("recovered" if attempt else "ok")

@@ -87,14 +87,11 @@ services:
     build:
       context: .
       dockerfile: docker/worker-base.Dockerfile
-      # Explicit build platform: Chrome (channel=chrome) is amd64-only, so the
-      # base MUST build for linux/amd64 even on an arm64 host (emulated via
-      # QEMU). Set here under `build:` -- not just the service-level `platform`
-      # -- so `docker compose build worker-base` targets amd64 regardless.
-      platforms:
-        - linux/amd64
+      # No platform pin: the base builds for the host's own architecture --
+      # Google Chrome on amd64, Playwright's Chromium on arm64 (see the
+      # Dockerfile for the measurement behind that). To force amd64 anyway,
+      # export DOCKER_DEFAULT_PLATFORM=linux/amd64 before building.
     image: crawlpilot/worker-base:latest
-    platform: linux/amd64
     profiles: ["base"]
 
   worker:
@@ -108,14 +105,14 @@ services:
       # code layer on top -- Chrome never rebuilds for a code change.
       additional_contexts:
         base: "docker-image://crawlpilot/worker-base:latest"
-    # Google ships official Chrome (`channel="chrome"`) for linux/amd64 only --
-    # `patchright install chrome` hard-fails on linux/arm64 ("not supported").
-    # The fleet targets amd64 cloud nodes anyway (locked-in decision: real
-    # Chrome, not Chromium, for sandbox fidelity), so this is pinned rather
-    # than silently falling back to Chromium on arm64 dev machines (e.g.
-    # Apple Silicon) -- expect Docker Desktop to emulate via Rosetta/QEMU
-    # locally, which is slower but architecturally correct.
-    platform: linux/amd64
+    # Native architecture, no pin. The fleet's amd64 nodes still get real
+    # Google Chrome (the locked-in sandbox-fidelity decision is unchanged); an
+    # arm64 host -- an Apple Silicon dev machine -- gets Playwright's Chromium,
+    # because Google ships no arm64 Linux Chrome. This used to pin amd64 and
+    # emulate it via Rosetta/QEMU as "slower but architecturally correct", but
+    # the emulated browser is not merely slower: it fails Akamai's sensor on
+    # every run where native Chromium on the same host passes (see
+    # docker/worker-base.Dockerfile).
     cap_add:
       - SYS_ADMIN # real Chrome sandbox (not --no-sandbox) -- untrusted third-party
       # pages on a shared multi-tenant node need process-level isolation.
@@ -206,12 +203,23 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       # Proxy pools for the anti-detection tiers (see README "Anti-detection,
       # tiers & proxies"). Passed through from your shell/.env; empty by default
-      # -> egress uses the container IP and tier=stealth|enhanced fail closed.
+      # -> egress uses the container IP (stealth tiers still run; see
+      # AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH below).
       # Point AGENTPILOT_PROXY_POOL(S) at a RESIDENTIAL/MOBILE pool for hardened
       # targets (Akamai/PerimeterX/DataDome).
       AGENTPILOT_PROXY_POOL: ${AGENTPILOT_PROXY_POOL:-}
       AGENTPILOT_PROXY_POOLS: ${AGENTPILOT_PROXY_POOLS:-}
       AGENTPILOT_PROXY_MAX_SUCCESS: ${AGENTPILOT_PROXY_MAX_SUCCESS:-}
+      # Proxyless stealth runs by default (a residential worker passes Akamai
+      # on its own IP); set to 1 on workers that egress from a cloud ASN.
+      AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH: ${AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH:-}
+      # truthful (default) | spoofed -- see crawlpilot.config.FingerprintConfig.
+      CRAWLPILOT_FINGERPRINT_MODE: ${CRAWLPILOT_FINGERPRINT_MODE:-}
+      # Egress geo for proxyless sessions, so the timezone matches the IP.
+      # Looked up once per worker unless COUNTRY/TIMEZONE pin it; `off` disables.
+      CRAWLPILOT_EGRESS_GEO_URL: ${CRAWLPILOT_EGRESS_GEO_URL:-}
+      CRAWLPILOT_EGRESS_COUNTRY: ${CRAWLPILOT_EGRESS_COUNTRY:-}
+      CRAWLPILOT_EGRESS_TIMEZONE: ${CRAWLPILOT_EGRESS_TIMEZONE:-}
       # Left unset deliberately -- AGENTPILOT_NODE_ID defaults to hostname
       # + a fresh uuid suffix per container start, so a restarted node never
       # advertises a stale node_id whose addr might have changed. Don't pin
@@ -257,6 +265,16 @@ services:
       AGENTPILOT_PROXY_POOL: ${AGENTPILOT_PROXY_POOL:-}
       AGENTPILOT_PROXY_POOLS: ${AGENTPILOT_PROXY_POOLS:-}
       AGENTPILOT_PROXY_MAX_SUCCESS: ${AGENTPILOT_PROXY_MAX_SUCCESS:-}
+      # Proxyless stealth runs by default (a residential worker passes Akamai
+      # on its own IP); set to 1 on workers that egress from a cloud ASN.
+      AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH: ${AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH:-}
+      # truthful (default) | spoofed -- see crawlpilot.config.FingerprintConfig.
+      CRAWLPILOT_FINGERPRINT_MODE: ${CRAWLPILOT_FINGERPRINT_MODE:-}
+      # Egress geo for proxyless sessions, so the timezone matches the IP.
+      # Looked up once per worker unless COUNTRY/TIMEZONE pin it; `off` disables.
+      CRAWLPILOT_EGRESS_GEO_URL: ${CRAWLPILOT_EGRESS_GEO_URL:-}
+      CRAWLPILOT_EGRESS_COUNTRY: ${CRAWLPILOT_EGRESS_COUNTRY:-}
+      CRAWLPILOT_EGRESS_TIMEZONE: ${CRAWLPILOT_EGRESS_TIMEZONE:-}
 
   gateway:
     build:

@@ -1667,3 +1667,60 @@ async def test_a_table_with_rows_but_no_columns_is_a_failure_not_a_group() -> No
     # field vanishing.
     assert "specifications" in state._failures
     assert "nothing could be read out of them" in state._failures["specifications"]
+
+
+# --- a product recipe spans categories, not one shelf -------------------------
+
+
+_COS_COAT = (
+    "https://www.cos.com/en-us/men/menswear/coatsjackets/wool/product/"
+    "tailored-double-faced-wool-blend-coat-brown-1336467002"
+)
+
+
+def test_the_category_trail_before_a_product_marker_is_wildcarded() -> None:
+    """MEASURED: onboarded on the coat, the recipe matched
+    `.../coatsjackets/wool/product/*` and refused the cotton oxford shirt --
+    same template, same fields, same selectors -- before opening a browser."""
+
+    from agentpilot.recipe.v2.onboard import derive_target
+    from agentpilot.recipe.v2.urlmatch import target_accepts
+
+    target = derive_target([_COS_COAT])
+
+    assert target.match[0].pattern == "https://www.cos.com/en-us/*/product/*"
+    assert target_accepts(
+        target,
+        "https://www.cos.com/en-us/men/menswear/shirts/cottonshirts/product/"
+        "cotton-oxford-shirt-light-blue-1307720012",
+    )
+
+
+def test_the_locale_and_the_page_kind_still_narrow_the_match() -> None:
+    from agentpilot.recipe.v2.onboard import derive_target
+    from agentpilot.recipe.v2.urlmatch import target_accepts
+
+    target = derive_target([_COS_COAT])
+
+    # another storefront may be another template
+    assert not target_accepts(target, "https://www.cos.com/en-gb/men/menswear/product/x-1234")
+    # a category listing is not a product page
+    assert not target_accepts(target, "https://www.cos.com/en-us/men/menswear/shirts")
+
+
+@pytest.mark.parametrize(
+    ("url", "pattern"),
+    [
+        # marker first: nothing between the root and it, so nothing changes
+        (
+            "https://www.walmart.com/ip/some-product-slug/5013580",
+            "https://www.walmart.com/ip/*",
+        ),
+        # no marker: the trail stays literal, the safe direction
+        ("https://www.zara.com/in/en/wool-coat-p04387123.html", "https://www.zara.com/in/en/*"),
+    ],
+)
+def test_urls_without_a_category_trail_are_unchanged(url: str, pattern: str) -> None:
+    from agentpilot.recipe.v2.onboard import derive_target
+
+    assert derive_target([url]).match[0].pattern == pattern

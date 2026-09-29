@@ -154,8 +154,71 @@ async def test_ax_role_target_supports_index(ctx) -> None:
 async def test_an_unmatched_target_is_a_step_error(ctx) -> None:
     c, _ = ctx(tree=fnode(children=[]))
     with pytest.raises(StepError, match="matched no element"):
-        await build_action(Step(op="click", target=Locator(
+        await build_action(Step(op="click", timeout_ms=50, target=Locator(
             kind="ax_role", role="button", name_contains="absent")), c)
+
+
+class _LateTree:
+    """Serves an empty page for the first `empty_polls` snapshots, then the
+    button -- the shape of the cos.com replay failure."""
+
+    def __init__(self, empty_polls: int) -> None:
+        self.empty_polls = empty_polls
+        self.snapshots = 0
+
+    def install(self, fake: Fake) -> None:
+        real = fake.execute
+
+        async def execute(session, actions, *, registry, driver):
+            if any(type(a).__name__ == "SnapshotAction" for a in actions):
+                self.snapshots += 1
+                fake.tree = (
+                    fnode(children=[])
+                    if self.snapshots <= self.empty_polls
+                    else fnode(children=[fnode("button", "Details & Description", "e9")])
+                )
+            return await real(session, actions, registry=registry, driver=driver)
+
+        ev.execute_on_session = execute  # type: ignore[assignment]
+        steps_mod.execute_on_session = execute  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_a_target_that_renders_late_is_waited_for(ctx, monkeypatch) -> None:
+    """MEASURED on cos.com in the Docker worker: straight after the country
+    dialog closed, the snapshot held 0 "Details & Description" buttons and 2.5s
+    later it held 1. Resolving once and giving up failed the click, so the
+    specs drawer never opened. The resolver must re-snapshot until it appears."""
+
+    monkeypatch.setattr(steps_mod, "_RESOLVE_POLL_S", 0)
+    c, fake = ctx(tree=fnode(children=[]))
+    late = _LateTree(empty_polls=3)
+    late.install(fake)
+
+    action = await build_action(Step(op="click", target=Locator(
+        kind="ax_role", role="button", name_contains="Details & Description")), c)
+
+    assert action.ref == "e9"
+    assert late.snapshots == 4  # three stale reads, then a fresh one that matched
+
+
+@pytest.mark.asyncio
+async def test_an_optional_step_gives_up_within_its_cap(ctx, monkeypatch) -> None:
+    """Optional steps are mostly legitimately-absent banners; each must not
+    cost the full step timeout."""
+
+    monkeypatch.setattr(steps_mod, "_RESOLVE_POLL_S", 0)
+    monkeypatch.setattr(steps_mod, "_OPTIONAL_RESOLVE_WAIT_MS", 30)
+    c, _ = ctx(tree=fnode(children=[]))
+    step = Step(op="click", optional=True, timeout_ms=60_000, target=Locator(
+        kind="ax_role", role="button", name_contains="ACCEPT ALL"))
+
+    import time as _time
+
+    started = _time.monotonic()
+    with pytest.raises(StepError, match="matched no element"):
+        await build_action(step, c)
+    assert _time.monotonic() - started < 5  # the 30ms cap, not the 60s timeout
 
 
 @pytest.mark.asyncio
@@ -263,3 +326,32 @@ async def test_a_mutating_step_invalidates_the_reader_cache(ctx) -> None:
     assert c.reader._structured is not None
     await dispatch_step(Step(op="click", target=Locator(kind="css", selector="#go")), c)
     assert c.reader._structured is None
+
+
+@pytest.mark.asyncio
+async def test_a_ref_that_goes_stale_before_the_click_is_re_resolved(ctx) -> None:
+    """MEASURED on cos.com in the Docker worker: the button resolved, then the
+    page re-rendered before the click landed and the driver raised
+    `StaleRefError`. A fresh snapshot and a fresh ref is the whole answer."""
+
+    from crawlpilot.spi.errors import StaleRefError
+
+    tree = fnode(children=[fnode("button", "Details & Description", "e9")])
+    c, fake = ctx(tree=tree)
+    real = fake.execute
+    stale_left = [1]
+
+    async def execute(session, actions, *, registry, driver):
+        if any(type(a).__name__ == "ClickAction" for a in actions) and stale_left[0]:
+            stale_left[0] -= 1
+            raise StaleRefError("ref 'e9' is not available -- the page may have changed")
+        return await real(session, actions, registry=registry, driver=driver)
+
+    ev.execute_on_session = execute  # type: ignore[assignment]
+    steps_mod.execute_on_session = execute  # type: ignore[assignment]
+
+    outcome = await dispatch_step(Step(op="click", target=Locator(
+        kind="ax_role", role="button", name_contains="Details & Description")), c)
+
+    assert outcome.status == "ok"
+    assert [type(a).__name__ for a in fake.dispatched] == ["ClickAction"]

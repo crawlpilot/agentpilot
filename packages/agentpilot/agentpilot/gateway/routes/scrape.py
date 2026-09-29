@@ -42,19 +42,34 @@ log = structlog.get_logger(__name__)
 router = APIRouter(tags=["scrape"])
 
 
-def _proxyless_stealth_allowed() -> bool:
-    """Opt out of the proxy fail-closed guard above.
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def _proxy_required_for_stealth() -> bool:
+    """Whether `tier=stealth|enhanced` must refuse to run without a proxy pool.
+
+    **Off by default.** The guard assumed the worker's own IP is a datacenter
+    IP, which is only true of some deployments. MEASURED from a worker on a
+    residential line with no proxy: cos.com (Akamai Bot Manager) served the
+    product page 5/5 on the stealth tier. Failing closed there blocked the one
+    configuration that works, and it was inconsistent besides -- `tier=auto`
+    runs the very same stealth rung with no proxy and was always let through.
+
+    A deployment whose workers egress from a cloud ASN should turn it on with
+    `AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH=1`: there the IP really is the
+    dominant block signal, and a 503 is more honest than a burned identity.
+
+    `AGENTPILOT_ALLOW_PROXYLESS_STEALTH`, the old opt-*out*, is still honoured
+    and wins, so an existing deployment that set it keeps its behaviour.
 
     Read at call time, not import time, so a test (or an operator toggling the
-    env) does not need a process restart -- and so the default stays "off"
-    without a module-level constant that a test would have to monkeypatch.
+    env) does not need a process restart.
     """
 
-    return os.environ.get("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    if _truthy("AGENTPILOT_ALLOW_PROXYLESS_STEALTH"):
+        return False
+    return _truthy("AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH")
 
 
 @router.post("", response_model=ScrapeResponse)
@@ -73,33 +88,21 @@ async def scrape(
             status_code=400, detail=f"cannot determine a domain from url {req.url!r}"
         )
 
-    # Fail closed rather than silently scrape from the raw container IP when
-    # the caller explicitly asked for a stealth-grade run: a datacenter
-    # egress IP is the dominant Akamai-block signal on hardened targets, and
-    # `tier=stealth|enhanced` with no proxy pool configured would otherwise
-    # look like it's doing something it isn't. `basic`/`auto` stay lenient.
-    #
-    # The guard defends against *accidental* raw-IP scraping, not deliberate
-    # raw-IP scraping. Without the opt-out below, a proxy-less deployment
-    # cannot select the tiers that carry the stealth machinery at all, which
-    # makes that machinery untestable and unreachable -- see
-    # `session/stealth_profile.py`.
-    if (
-        req.tier in ("stealth", "enhanced")
-        and wiring.proxy_pinner is None
-        and not _proxyless_stealth_allowed()
-    ):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"tier={req.tier!r} requires a proxy pool, but none is configured "
-                "(set AGENTPILOT_PROXY_POOL to a residential/mobile pool). "
-                "Scraping bot-protected sites from the raw host IP will be blocked; "
-                "use tier='basic' to proceed without a proxy anyway, or set "
-                "AGENTPILOT_ALLOW_PROXYLESS_STEALTH=1 to run this tier from the "
-                "host IP deliberately."
-            ),
-        )
+    # Optionally fail closed rather than scrape from the raw worker IP when the
+    # caller asked for a stealth-grade run -- see `_proxy_required_for_stealth`
+    # for why that is opt-in. `basic`/`auto` are never gated.
+    if req.tier in ("stealth", "enhanced") and wiring.proxy_pinner is None:
+        if _proxy_required_for_stealth():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"tier={req.tier!r} requires a proxy pool on this deployment, but none "
+                    "is configured (set AGENTPILOT_PROXY_POOL to a residential/mobile pool, "
+                    "or unset AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH to run this tier from "
+                    "the worker's own IP)."
+                ),
+            )
+        log.info("scrape.proxyless_stealth", tier=req.tier, domain=domain)
 
     requests_total.labels(tenant=req.tenant, route="scrape").inc()
 

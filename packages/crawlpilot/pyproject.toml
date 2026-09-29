@@ -38,7 +38,12 @@ dependencies = [
 # Real Chrome. Deliberately optional, and genuinely so: a Chrome-free deployment
 # installs crawlpilot without this and the driver is never imported
 # (`api.Browser` builds it lazily, on first use).
-engine = ["patchright>=1.61.2", "re-cdp-patches>=0.9.1"]
+#
+# The floor is a browser floor, not an API one: on arm64 the worker drives the
+# Chromium Patchright bundles, and 1.61.2's (149.0.7827.0, a trunk snapshot four
+# majors behind stable) got an edge 403 from Akamai on its *first document*
+# where 1.63.0's Chromium 153 passed, same host, same IP, same minute.
+engine = ["patchright>=1.63.0", "re-cdp-patches>=0.9.1"]
 # Encryption-at-rest for saved browser profiles.
 vault = ["cryptography>=43.0"]
 # PDF text extraction (`extraction/pdf.py`). Optional and genuinely so: the import
@@ -48,7 +53,7 @@ vault = ["cryptography>=43.0"]
 # document parser is neither.
 pdf = ["pypdf>=5.1"]
 all = [
-    "patchright>=1.61.2",
+    "patchright>=1.63.0",
     "re-cdp-patches>=0.9.1",
     "cryptography>=43.0",
     "pypdf>=5.1",

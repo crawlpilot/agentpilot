@@ -482,7 +482,7 @@ def _launch_target(launch: browser_discovery.Launch) -> dict[str, str]:
     return {"executable_path": launch.executable_path}
 
 
-def _log_launched_browser(context: BrowserContext) -> None:
+def _log_launched_browser(context: BrowserContext, requested: str | None = None) -> None:
     """Log the binary that actually launched, not the one we asked for.
 
     `driver.browser_resolved` can only report what `resolve_browser` decided,
@@ -506,9 +506,14 @@ def _log_launched_browser(context: BrowserContext) -> None:
         browser = context.browser
         if browser is None:
             return
+        # `browser_type.executable_path` is Playwright's *registry default* for
+        # the type, not the binary launched: an `executable_path=` launch of
+        # /usr/bin/google-chrome logged a bundled Chromium path that did not
+        # even exist in the image. So an explicit path wins, and the registry
+        # value is only used for a channel launch, where it is the real answer.
         log.info(
             "driver.browser_launched",
-            executable=browser.browser_type.executable_path,
+            executable=requested or browser.browser_type.executable_path,
             version=browser.version,
         )
     except Exception:  # noqa: BLE001 -- diagnostics never break a launch
@@ -987,7 +992,7 @@ class PatchrightDriver:
                 **_launch_target(launch),
                 **context_kwargs,
             )
-            _log_launched_browser(context)
+            _log_launched_browser(context, launch.executable_path)
         if init_script is not None:
             # Context-level: applies to every page (current + future) before any
             # page script runs -- the pinned per-identity fingerprint's

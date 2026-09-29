@@ -1,8 +1,11 @@
-"""`routes/scrape.py`'s fail-closed proxy guard (anti-detection A2) -- a
-pure logic check that runs before any browser/driver use, so no real
-Patchright context is needed. `tier=stealth|enhanced` with no proxy pool
-configured must 503 with a descriptive error rather than silently scraping
-from the raw host IP; `basic`/`auto` must stay lenient."""
+"""`routes/scrape.py`'s proxy guard -- a pure logic check that runs before any
+browser/driver use, so no real Patchright context is needed.
+
+The guard is opt-in (`AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH`). It used to fail
+closed by default on the assumption that a worker's own IP is a datacenter IP;
+from a residential worker with no proxy, cos.com (Akamai) served the product
+page 5/5 on the stealth tier, so the default blocked the configuration that
+works."""
 
 from __future__ import annotations
 
@@ -31,80 +34,61 @@ class _NoProxyWiring:
 
 
 @pytest.fixture(autouse=True)
-def _no_proxyless_optout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard has an opt-out; the default-behaviour tests must not inherit
-    it from the developer's shell."""
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default-behaviour tests must not inherit either switch from the
+    developer's shell."""
 
     monkeypatch.delenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", raising=False)
+    monkeypatch.delenv("AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH", raising=False)
 
 
-async def test_stealth_tier_without_proxy_pool_fails_closed() -> None:
-    with pytest.raises(HTTPException) as exc_info:
-        await scrape(
-            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),
-            _FakeRequest(),
-            _NoProxyWiring(),  # type: ignore[arg-type]
-        )
-    assert exc_info.value.status_code == 503
+async def _scrape(tier: str) -> None:
+    await scrape(
+        ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier=tier),
+        _FakeRequest(),
+        _NoProxyWiring(),  # type: ignore[arg-type]
+    )
 
 
-@pytest.mark.parametrize("value", ["1", "true", "YES"])
-async def test_proxyless_stealth_opt_out_lifts_the_guard(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
-    """Without this escape hatch a proxy-less deployment cannot select the
-    tiers that carry the stealth machinery at all, so none of it is reachable
-    or testable. The guard stops accidental raw-IP scraping, not deliberate."""
-
-    monkeypatch.setenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", value)
-
+@pytest.mark.parametrize("tier", ["stealth", "enhanced"])
+async def test_proxyless_stealth_runs_by_default(tier: str) -> None:
     # Past the guard, the request proceeds into the driver -- which this fake
     # wiring has none of. An AttributeError here means the 503 did NOT fire,
     # which is exactly what is under test.
     with pytest.raises((AttributeError, TypeError)):
-        await scrape(
-            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),
-            _FakeRequest(),
-            _NoProxyWiring(),  # type: ignore[arg-type]
-        )
+        await _scrape(tier)
 
 
-async def test_opt_out_is_ignored_when_unset_to_a_falsey_value(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("tier", ["stealth", "enhanced"])
+async def test_a_deployment_can_require_a_proxy(
+    monkeypatch: pytest.MonkeyPatch, tier: str
 ) -> None:
-    monkeypatch.setenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", "0")
+    """For workers on a cloud ASN, where the IP really is the block signal."""
 
+    monkeypatch.setenv("AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH", "1")
     with pytest.raises(HTTPException) as exc_info:
-        await scrape(
-            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="stealth"),
-            _FakeRequest(),
-            _NoProxyWiring(),  # type: ignore[arg-type]
-        )
+        await _scrape(tier)
     assert exc_info.value.status_code == 503
     assert "AGENTPILOT_PROXY_POOL" in exc_info.value.detail
 
 
-async def test_enhanced_tier_without_proxy_pool_fails_closed() -> None:
-    with pytest.raises(HTTPException) as exc_info:
-        await scrape(
-            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="enhanced"),
-            _FakeRequest(),
-            _NoProxyWiring(),  # type: ignore[arg-type]
-        )
-    assert exc_info.value.status_code == 503
+async def test_the_old_opt_out_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing deployment that set the old opt-out keeps its behaviour even
+    if the new switch is also set."""
+
+    monkeypatch.setenv("AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH", "1")
+    monkeypatch.setenv("AGENTPILOT_ALLOW_PROXYLESS_STEALTH", "true")
+    with pytest.raises((AttributeError, TypeError)):
+        await _scrape("stealth")
 
 
-async def test_basic_tier_without_proxy_pool_is_not_blocked_by_the_guard() -> None:
-    # The guard must NOT fire for basic/auto -- it would then fall through to
-    # real scraping (which needs a browser), so we only assert that IF it
-    # raises, it is not our 503 guard. A bad URL/domain check or driver
-    # access is out of scope here.
+@pytest.mark.parametrize("tier", ["basic", "auto"])
+async def test_basic_and_auto_are_never_gated(
+    monkeypatch: pytest.MonkeyPatch, tier: str
+) -> None:
+    monkeypatch.setenv("AGENTPILOT_REQUIRE_PROXY_FOR_STEALTH", "1")
     try:
-        await scrape(
-            ScrapeRequest(tenant="acme", url="https://www.zara.com/", tier="basic"),
-            _FakeRequest(),
-            _NoProxyWiring(),  # type: ignore[arg-type]
-        )
+        await _scrape(tier)
     except HTTPException as exc:
         assert not (exc.status_code == 503 and "AGENTPILOT_PROXY_POOL" in str(exc.detail))
     except Exception:

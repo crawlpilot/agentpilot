@@ -375,11 +375,30 @@ def looks_variable(segment: str) -> bool:
     return len(segment) >= 16 and all(c in "0123456789abcdefABCDEF-" for c in segment)
 
 
+_PRODUCT_MARKERS = frozenset({"product", "products", "p", "dp", "ip", "item", "pd"})
+"""Path segments that say "this is a product page" right before the product's
+own slug. Deliberately a short list of unambiguous words: a marker that fires
+wrongly widens a recipe past what was verified."""
+
+_LOCALE_SEGMENT = re.compile(r"^[a-z]{2}([-_][a-z]{2})?$", re.IGNORECASE)
+
+
 def _generalized_prefix(url: str) -> str | None:
     """`https://host/path/up/to/` the first segment that identifies one page.
 
     None when every segment looks structural -- there is nothing to generalise,
     and the caller keeps its old everything-but-the-last-segment behaviour.
+
+    When the segment before the slug is a product marker (`_PRODUCT_MARKERS`),
+    the category trail between the locale and the marker becomes `*` as well.
+    That trail says which shelf the product sits on, not what kind of page it
+    is. MEASURED on cos.com: onboarded on
+    `/en-us/men/menswear/coatsjackets/wool/product/<slug>`, the recipe matched
+    `.../coatsjackets/wool/product/*` and refused
+    `/en-us/men/menswear/shirts/cottonshirts/product/<slug>` -- the same page
+    template, same fields, same selectors -- before opening a browser. A
+    leading locale (`en-us`, `in`, `en_GB`) is kept: a different storefront
+    can legitimately be a different template.
     """
 
     split = urlsplit(url)
@@ -387,7 +406,14 @@ def _generalized_prefix(url: str) -> str | None:
     segments = [s for s in split.path.split("/") if s]
     for index, segment in enumerate(segments):
         if looks_variable(segment):
-            kept = "".join(f"/{s}" for s in segments[:index])
+            head = segments[:index]
+            if head and head[-1].lower() in _PRODUCT_MARKERS:
+                locale = head[:1] if head and _LOCALE_SEGMENT.match(head[0]) else []
+                trail = head[len(locale):-1]
+                if trail:
+                    kept = "".join(f"/{s}" for s in locale)
+                    return f"{authority}{kept}/*/{head[-1]}/"
+            kept = "".join(f"/{s}" for s in head)
             return f"{authority}{kept}/"
     return None
 

@@ -44,12 +44,32 @@ COPY packages/agentpilot/pyproject.toml packages/agentpilot/README.md ./packages
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --no-install-project --extra driver --extra postgres --extra bedrock --package agentpilot
 
-# Chrome + its apt deps depend only on the (already-installed) patchright
+# The browser + its apt deps depend only on the (already-installed) patchright
 # version. `--no-sync` uses the venv from the step above without trying to
 # install the not-yet-existent project.
+#
+# Native to the build architecture, never emulated. Google ships Chrome for
+# linux/amd64 only, so an arm64 build installs Playwright's Chromium instead --
+# `browser_discovery` finds it as the bundled browser when no system Chrome
+# exists. This image used to be pinned to amd64 and emulated on arm64 hosts,
+# which is what got it blocked. MEASURED on cos.com (Akamai), same Apple Silicon
+# host, same residential IP, no proxy:
+#
+#     linux/amd64 Google Chrome under emulation -> Access Denied, every run
+#     linux/arm64 Chromium, native             -> product page, 3/3
+#
+# Emulated Chrome ran the sensor's JavaScript 3-4x slower and crashed renderers
+# on heavy pages; nothing a flag could fix.
+#
+# Fonts: a slim image has almost none, and the installed font set is itself
+# fingerprinted -- these are the common desktop Linux defaults.
+ARG TARGETARCH
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    uv run --no-sync patchright install --with-deps chrome
+    if [ "$TARGETARCH" = "amd64" ]; then BROWSER=chrome; else BROWSER=chromium; fi \
+    && uv run --no-sync patchright install --with-deps "$BROWSER" \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       fonts-liberation fonts-dejavu-core fonts-noto-color-emoji
 
 ENV DISPLAY=:99
 ENV AGENTPILOT_PROFILES_DIR=/var/lib/agentpilot/profiles
