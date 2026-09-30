@@ -30,6 +30,7 @@ from agentpilot.recipe.v2.models import (
     FieldGroup,
     Locator,
     Recipe,
+    RepeatSpec,
     Step,
     TargetSpec,
 )
@@ -944,3 +945,63 @@ async def test_accepting_a_value_changes_nothing_and_settles_the_field(picked) -
     # The binding that produced the value is exactly what it was.
     assert recipe.field_groups[0].bindings["more"][0].locator.selector == ".old"
     assert "more" in recipe.fields
+
+
+async def test_a_refused_pick_does_not_retype_the_field(monkeypatch) -> None:
+    """MEASURED on a Uniqlo build (run 21faca15). `product_specifications` was an
+    open key->value map bound through `name`/`value`. The person picked a text
+    block; the picker reported a scalar; the block cleaned up to nothing and the
+    pick was refused -- but the scalar type had already been written onto the
+    field. Its `name`/`value` bindings then no longer counted, `validate_document`
+    said "no candidates bound", and the whole recipe was discarded.
+
+    A refused pick must leave the field exactly as it was."""
+
+    from agentpilot.recipe.v2 import assist as assist_mod
+    from agentpilot.recipe.v2.assist import apply_resolutions
+
+    class _Reader:
+        def __init__(self, **kwargs): ...
+        async def read(self, locator): return "- Sheer: Not Sheer- Fit: Oversized"
+
+    async def refuse(locators, *, verify, spec, ctx):
+        return [], 'read "- Sheer: Not Sheer- Fit: Oversized" but cleaning it up left nothing'
+
+    monkeypatch.setattr(assist_mod, "PageReader", _Reader)
+    monkeypatch.setattr(assist_mod, "verify_locators", refuse)
+
+    open_map = TypeSpec(kind="object")
+    recipe = Recipe(
+        recipe_id="r", tenant="t", name="n", version=1, target=TargetSpec(),
+        fields={"specs": FieldSpec(name="specs", type=open_map)},
+        field_groups=[
+            FieldGroup(
+                group_id="g-specs", field_names=["specs"],
+                bindings={
+                    "name": [Candidate(locator=Locator(kind="json_ld", path="name"))],
+                    "value": [Candidate(locator=Locator(kind="json_ld", path="value"))],
+                },
+                repeat=RepeatSpec(
+                    kind="json", row_field="specs",
+                    rows_locator=Locator(kind="json_ld", path="[2].additionalProperty"),
+                    max_iterations=20,
+                ),
+            )
+        ],
+    )
+    assert validate_document(recipe.to_dict())[0] == []
+
+    recipe, unsettled = await apply_resolutions(
+        recipe,
+        parse_resolutions(
+            [{"field": "specs", "action": "pick",
+              "locators": [{"kind": "css", "selector": "#product-description"}],
+              "spec": {"type": {"kind": "scalar", "value_type": "string"}}}],
+            [PendingAsk(field="specs", kind="rejected", reason="seller boilerplate")],
+        ),
+        url="https://x.test/p", session=None, registry=None, driver=None, llm_config=None,
+    )
+
+    assert "cleaning it up left nothing" in unsettled["specs"]
+    assert recipe.fields["specs"].type == open_map
+    assert validate_document(recipe.to_dict())[0] == []

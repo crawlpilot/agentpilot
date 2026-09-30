@@ -575,7 +575,6 @@ async def apply_resolutions(
             # and then decides -- applying it after would reject the very value
             # the transform exists to clean up.
             spec = _respec(spec, resolution.spec)
-            recipe.fields = {**recipe.fields, resolution.field: spec}
             # Held to the same rule as anything the model proposes: a person
             # pointing at the right element does not make its text clean up into
             # the type the field wants.
@@ -590,6 +589,17 @@ async def apply_resolutions(
                     reason or "the picked element did not resolve through the driver"
                 )
                 continue
+            # Only now does the picker's type become the field's. Committing it
+            # before verification left a failed pick's retype on the recipe --
+            # MEASURED on a Uniqlo build (run 21faca15): `product_specifications`
+            # was an open key->value map bound to `name`/`value`; the person
+            # picked a text block, the picker reported a scalar, the block
+            # "cleaned up to nothing" and was refused -- but the field stayed a
+            # scalar, so its group's `name`/`value` bindings no longer counted,
+            # `validate_document` reported "no candidates bound", and the WHOLE
+            # recipe was discarded. `_apply_scope` already commits only on
+            # success; this path now does too.
+            recipe.fields = {**recipe.fields, resolution.field: spec}
             recipe = _bind(
                 recipe,
                 resolution.field,
